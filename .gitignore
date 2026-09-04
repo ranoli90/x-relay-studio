@@ -16,6 +16,7 @@ screenshots/
 artifacts/
 coverage/
 .cache/
+.data/
 AGENTS.md
 AGENTS.project.md
 .project_id

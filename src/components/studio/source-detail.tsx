@@ -18,6 +18,8 @@ export function SourceDetail() {
   const selectSource = useStudio((s) => s.selectSource);
   const retry = useStudio((s) => s.retry);
   const [pane, setPane] = useState<"posts" | "media" | "voice">("posts");
+  const oldestFirst = useStudio((s) => s.oldestFirst);
+  const setOldestFirst = useStudio((s) => s.setOldestFirst);
 
   useEffect(() => {
     if (sourceId) void loadPosts(sourceId, 0);
@@ -68,6 +70,12 @@ export function SourceDetail() {
               {" · "}
               {formatCount(source.rewritten)} rewritten for @{publisher?.handle}
             </p>
+            <p className="mt-2 max-w-xl text-xs leading-relaxed text-subtle">
+              Each post is saved as we find it (text + image URLs). We never wipe on
+              a stop or retry — reopen and we keep walking from the oldest stored
+              post toward the first post, then watch for new ones. On the published
+              site that keep-alive runs even if you close this tab.
+            </p>
             {source.error && (
               <p className="mt-2 text-sm text-down">
                 {source.error}{" "}
@@ -93,6 +101,15 @@ export function SourceDetail() {
             </button>
           ))}
           <div className="ml-auto flex gap-2">
+            {pane === "posts" && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setOldestFirst(!oldestFirst)}
+              >
+                {oldestFirst ? "First → latest" : "Latest first"}
+              </Button>
+            )}
             <Button variant="secondary" size="sm" onClick={() => void copyRewrites()}>
               <Copy className="size-4" />
               Copy rewrites
@@ -170,6 +187,11 @@ export function SourceDetail() {
 
         {pane === "posts" && (
           <div className="grid gap-3">
+            <p className="text-sm text-muted">
+              Posting queue for @{publisher?.handle}
+              {oldestFirst ? " — first stored post at the top." : " — newest stored at the top."}{" "}
+              Copy a rewrite or open it as a draft. Nothing auto-posts.
+            </p>
             {postsLoading && posts.length === 0 && (
               <>
                 <Skeleton className="h-32 rounded-xl" />
@@ -182,7 +204,7 @@ export function SourceDetail() {
             {posts.length === 0 && !postsLoading && (
               <p className="text-sm text-muted">
                 {source.status === "pending" || source.status === "syncing"
-                  ? "Pulling the full archive. Posts appear here as they land."
+                  ? "Pulling the archive from the latest posts back toward the first. They land here as they save."
                   : "No posts stored yet."}
               </p>
             )}
@@ -237,7 +259,14 @@ function PostPair({ post, publisher }: { post: StoredPost; publisher: string }) 
         </div>
       </div>
       <div className="p-4">
-        <p className="font-mono text-xs uppercase tracking-widest text-subtle">For @{publisher}</p>
+        <p className="font-mono text-xs uppercase tracking-widest text-subtle">
+          For @{publisher}
+          {post.rewriteStatus === "done"
+            ? " · ready"
+            : post.rewriteStatus === "skipped"
+              ? " · skipped"
+              : " · queued"}
+        </p>
         {post.rewriteText ? (
           <>
             <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-fg">{post.rewriteText}</p>

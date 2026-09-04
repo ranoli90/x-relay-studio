@@ -17,7 +17,6 @@ export function Studio() {
   const refresh = useStudio((s) => s.refresh);
   const pump = useStudio((s) => s.pump);
   const publishers = useStudio((s) => s.publishers);
-  const sources = useStudio((s) => s.sources);
   const tab = useStudio((s) => s.tab);
   const selectedSourceId = useStudio((s) => s.selectedSourceId);
 
@@ -26,10 +25,19 @@ export function Studio() {
   }, [refresh]);
 
   useEffect(() => {
-    if (sources.some((s) => s.status === "pending" || s.status === "syncing" || s.status === "rewriting")) {
+    void pump();
+    const id = window.setInterval(() => {
       void pump();
-    }
-  }, [sources, pump]);
+    }, 20_000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void pump();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.clearInterval(id);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [pump]);
 
   const viewKey = loading
     ? "boot"
@@ -131,7 +139,7 @@ function Header() {
       </nav>
       {running > 0 && (
         <p className="hidden font-mono text-xs tabular-nums text-muted md:block">
-          Syncing {running} · full archive, then rewrite
+          Syncing {running} · saved as we go · never restarts from scratch
         </p>
       )}
       <div className="ml-auto flex items-center gap-2">

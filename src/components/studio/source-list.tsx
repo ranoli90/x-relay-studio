@@ -56,8 +56,10 @@ export function SourceWorkspace() {
             <p className="font-mono text-xs uppercase tracking-widest text-subtle">Sources for</p>
             <h1 className="mt-1 text-2xl font-medium tracking-tight">@{publisher.handle}</h1>
             <p className="mt-1 text-sm text-muted">
-              Paste any number of handles. We take the full archive of each — posts and
-              images — then rewrite the set for this account.
+              Paste any number of handles. We take each full archive — walking
+              from recent posts back to the first — save every post and image URL,
+              rewrite the set, then keep monitoring. Stop or close the tab and we
+              resume; we never start over.
             </p>
           </div>
           <p className="font-mono text-xs tabular-nums text-subtle">
@@ -252,7 +254,7 @@ function StatusChip({ source, onRetry }: { source: SourceRow; onRetry: () => voi
     return (
       <span className="inline-flex items-center gap-1 font-mono text-xs text-up">
         <Check className="size-3.5" />
-        Ready
+        Monitoring
       </span>
     );
   }
@@ -260,7 +262,7 @@ function StatusChip({ source, onRetry }: { source: SourceRow; onRetry: () => voi
     return (
       <button type="button" onClick={onRetry} className="inline-flex items-center gap-1 font-mono text-xs text-down">
         <RotateCcw className="size-3.5" />
-        Retry
+        Resume
       </button>
     );
   }
@@ -268,7 +270,7 @@ function StatusChip({ source, onRetry }: { source: SourceRow; onRetry: () => voi
     source.status === "rewriting"
       ? `Rewrite ${source.rewritten}`
       : source.status === "syncing"
-        ? "Syncing"
+        ? `Stored ${formatCount(source.tweetsSynced)}`
         : "Queued";
   return (
     <span className="inline-flex items-center justify-end gap-1 font-mono text-xs text-muted">

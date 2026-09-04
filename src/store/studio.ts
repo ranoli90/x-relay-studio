@@ -32,6 +32,7 @@ type StudioState = {
   posts: StoredPost[];
   postsTotal: number;
   postsLoading: boolean;
+  oldestFirst: boolean;
   setTab: (tab: StudioTab) => void;
   setFilter: (filter: string) => void;
   selectPublisher: (id: string | null) => void;
@@ -46,6 +47,7 @@ type StudioState = {
   removePublisher: (id: string) => Promise<void>;
   moveSelected: (publisherId: string) => Promise<void>;
   loadPosts: (sourceId: string, offset?: number) => Promise<void>;
+  setOldestFirst: (oldestFirst: boolean) => void;
   pump: () => Promise<void>;
   retry: (id: string) => Promise<void>;
   exportActive: () => Promise<void>;
@@ -53,6 +55,31 @@ type StudioState = {
 
 function isAuthError(err: unknown): boolean {
   return err instanceof Error && err.message === "Unauthorized";
+}
+
+function isAbort(err: unknown): boolean {
+  if (err instanceof DOMException && err.name === "AbortError") return true;
+  return err instanceof Error && /abort/i.test(err.message);
+}
+
+const CATCHUP_MS = 12 * 60 * 1000;
+const ERROR_BACKOFF_MS = 2 * 60 * 1000;
+const PUMP_BATCH = 2;
+
+function isStale(iso: string | null, ms: number): boolean {
+  if (!iso) return true;
+  const t = Date.parse(iso);
+  return Number.isNaN(t) || Date.now() - t > ms;
+}
+
+function pickDue(sources: SourceRow[]): SourceRow | undefined {
+  const hot = sources.find(
+    (s) => s.status === "pending" || s.status === "syncing" || s.status === "rewriting",
+  );
+  if (hot) return hot;
+  const errored = sources.find((s) => s.status === "error" && isStale(s.lastSyncedAt, ERROR_BACKOFF_MS));
+  if (errored) return errored;
+  return sources.find((s) => s.status === "ready" && isStale(s.lastSyncedAt, CATCHUP_MS));
 }
 
 export const useStudio = create<StudioState>()(
@@ -71,6 +98,7 @@ export const useStudio = create<StudioState>()(
       posts: [],
       postsTotal: 0,
       postsLoading: false,
+      oldestFirst: true,
       setTab: (tab) => set({ tab }),
       setFilter: (filter) => set({ filter }),
       selectPublisher: (id) =>
@@ -192,7 +220,9 @@ export const useStudio = create<StudioState>()(
       loadPosts: async (sourceId, offset = 0) => {
         set({ postsLoading: true });
         try {
-          const res = await listPostsFn({ data: { sourceId, offset, limit: 40 } });
+          const res = await listPostsFn({
+            data: { sourceId, offset, limit: 40, oldestFirst: get().oldestFirst },
+          });
           set({
             posts: offset === 0 ? res.posts : [...get().posts, ...res.posts],
             postsTotal: res.total,
@@ -203,15 +233,20 @@ export const useStudio = create<StudioState>()(
           toast.error(err instanceof Error ? err.message : "Could not load posts.");
         }
       },
+      setOldestFirst: (oldestFirst) => {
+        set({ oldestFirst, posts: [], postsTotal: 0 });
+        const sourceId = get().selectedSourceId;
+        if (sourceId) void get().loadPosts(sourceId, 0);
+      },
       pump: async () => {
         if (get().pumping) return;
         set({ pumping: true });
         try {
-          for (;;) {
-            const next = get().sources.find(
-              (s) => s.status === "pending" || s.status === "syncing" || s.status === "rewriting",
-            );
+          let n = 0;
+          while (n < PUMP_BATCH) {
+            const next = pickDue(get().sources);
             if (!next) break;
+            n += 1;
             try {
               const tick = await tickSourceFn({ data: { sourceId: next.id } });
               set({
@@ -221,10 +256,13 @@ export const useStudio = create<StudioState>()(
                 void get().loadPosts(tick.source.id, 0);
               }
             } catch (err) {
+              if (isAbort(err)) break;
               const message = err instanceof Error ? err.message : "Sync failed.";
               set({
                 sources: get().sources.map((s) =>
-                  s.id === next.id ? { ...s, status: "error", error: message } : s,
+                  s.id === next.id
+                    ? { ...s, status: "error", error: message, lastSyncedAt: new Date().toISOString() }
+                    : s,
                 ),
               });
             }

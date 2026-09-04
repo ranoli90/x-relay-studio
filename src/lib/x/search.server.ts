@@ -434,36 +434,38 @@ Rules:
 - Real posts only. Every id must be the numeric status id from an x.com URL.
 - Return as many distinct posts from THIS account as you can, up to 20.
 - Include originals, replies, and quotes. Skip ads and other people's posts.
-- Honor the date window if one is given. Prefer older posts when asked for an older window.`;
+- Honor the date window. When asked for posts older than a date, return the
+  next-oldest posts immediately before that date (do not jump years, do not
+  repeat newer posts).`;
 
 export async function searchAccountWindow(
   handle: string,
   opts: { since?: string; until?: string } = {},
 ): Promise<{ tweets: Tweet[]; note?: string; live: boolean }> {
   const from = handle.replace(/^@/, "");
-  const windowHint = [
-    opts.since ? `since ${opts.since}` : "",
-    opts.until ? `until ${opts.until}` : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  const { data, live } = await grokJson(
-    `Collect posts FROM @${from} only. ${windowHint || "Latest posts first, no date cap."}`,
-    ARCHIVE_SYSTEM,
-    true,
-    {
-      allowed_x_handles: [from],
-      from_date: opts.since,
-      to_date: opts.until,
-    },
-  );
+  const windowHint = opts.until
+    ? `Posts FROM @${from} only, strictly older than ${opts.until}. Return the next-oldest slice (the posts just before that date), newest-first within the slice. Do not include posts from ${opts.until} or later.${opts.since ? ` Stay on or after ${opts.since} if you can.` : ""}`
+    : `Collect the latest posts FROM @${from} only. No date cap.`;
+  const { data, live } = await grokJson(windowHint, ARCHIVE_SYSTEM, true, {
+    allowed_x_handles: [from],
+    from_date: opts.since,
+    to_date: opts.until,
+  });
   const rec = asRecord(data) ?? {};
   const tweets = uniqueTweets(
     asArray(rec.tweets)
       .map(tweetFromModel)
-      .filter((t): t is Tweet => t !== null),
+      .filter((t): t is Tweet => t !== null)
+      .filter((t) => tweetBelongsTo(t, from)),
   );
   const hydrated = await hydrateTweets(tweets, 20);
   return { tweets: sortByNewest(hydrated), note: asString(rec.note), live };
+}
+
+function tweetBelongsTo(tweet: Tweet, handle: string): boolean {
+  const want = handle.replace(/^@/, "").toLowerCase();
+  const got = tweet.author.handle.replace(/^@/, "").toLowerCase();
+  if (got && got !== "unknown") return got === want;
+  return (tweet.url || "").toLowerCase().includes(`/${want}/`);
 }
 

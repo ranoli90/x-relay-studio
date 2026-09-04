@@ -1,6 +1,6 @@
 import { getSql, type Sql } from "@/lib/db";
 import { chatOpenRouter, extractJson } from "@/lib/openrouter.server";
-import { fetchProfile, hydrateTweets } from "@/lib/x/fxtwitter.server";
+import { fetchProfile } from "@/lib/x/fxtwitter.server";
 import { searchAccountWindow } from "@/lib/x/search.server";
 import type { MediaItem, Metrics, Tweet } from "@/lib/x/types";
 import type {
@@ -15,9 +15,11 @@ import type {
   VoiceBrief,
 } from "./types";
 
-const MAX_WINDOWS = 10;
-const EMPTY_WINDOWS_STOP = 2;
+const EMPTY_WINDOWS_STOP = 5;
 const REWRITE_BATCH = 8;
+const CATCHUP_MINUTES = 12;
+const ERROR_BACKOFF_MINUTES = 2;
+const WINDOW_DAYS = 45;
 
 type PublisherRow = {
   id: string;
@@ -53,6 +55,9 @@ type SourceDb = {
   newest_at: string | null;
   empty_windows: number;
   last_synced_at: string | null;
+  backfill_done: boolean;
+  windows_run: number;
+  cursor_until: string | null;
 };
 
 type PostDb = {
@@ -116,6 +121,8 @@ function mapSource(row: SourceDb): SourceRow {
     error: row.error,
     voice: asJson<VoiceBrief | null>(row.voice, null),
     lastSyncedAt: row.last_synced_at,
+    backfillDone: Boolean(row.backfill_done),
+    windowsRun: Number(row.windows_run) || 0,
   };
 }
 
@@ -148,11 +155,22 @@ async function loadSource(sql: Sql, userId: string, sourceId: string): Promise<S
 }
 
 async function refreshCounts(sql: Sql, sourceId: string): Promise<void> {
-  const mediaRows = await sql<{ n: unknown }>`
-    select coalesce(sum(jsonb_array_length(coalesce(media, '[]'::jsonb))), 0) as n
-    from posts where source_id = ${sourceId}
-  `;
-  const mediaSynced = Number(mediaRows[0]?.n ?? 0) || 0;
+  let mediaSynced = 0;
+  try {
+    const mediaRows = await sql<{ n: unknown }>`
+      select coalesce(sum(jsonb_array_length(coalesce(media, '[]'::jsonb))), 0) as n
+      from posts where source_id = ${sourceId}
+    `;
+    mediaSynced = Number(mediaRows[0]?.n ?? 0) || 0;
+  } catch {
+    const rows = await sql<{ media: unknown }>`
+      select media from posts where source_id = ${sourceId}
+    `;
+    for (const row of rows) {
+      const media = asJson<unknown[]>(row.media, []);
+      mediaSynced += Array.isArray(media) ? media.length : 0;
+    }
+  }
   await sql`
     update sources set
       tweets_synced = (select count(*) from posts where source_id = ${sourceId}),
@@ -354,6 +372,7 @@ export async function listPosts(
   sourceId: string,
   offset = 0,
   limit = 40,
+  oldestFirst = false,
 ): Promise<{ posts: StoredPost[]; total: number }> {
   const sql = await getSql();
   const owned = await sql<{ id: string }>`
@@ -363,12 +382,19 @@ export async function listPosts(
   const count = await sql<{ n: number }>`
     select count(*)::int as n from posts where source_id = ${sourceId}
   `;
-  const rows = await sql<PostDb>`
-    select * from posts
-    where source_id = ${sourceId}
-    order by created_at desc nulls last, stored_at desc
-    limit ${limit} offset ${offset}
-  `;
+  const rows = oldestFirst
+    ? await sql<PostDb>`
+        select * from posts
+        where source_id = ${sourceId}
+        order by created_at asc nulls last, stored_at asc
+        limit ${limit} offset ${offset}
+      `
+    : await sql<PostDb>`
+        select * from posts
+        where source_id = ${sourceId}
+        order by created_at desc nulls last, stored_at desc
+        limit ${limit} offset ${offset}
+      `;
   return { posts: rows.map(mapPost), total: count[0]?.n ?? 0 };
 }
 
@@ -437,15 +463,35 @@ async function insertTweets(sql: Sql, userId: string, source: SourceDb, tweets: 
 
 function day(iso: string | null | undefined): string | undefined {
   if (!iso) return undefined;
-  const d = new Date(iso);
+  const d = new Date(iso.includes("T") ? iso : `${iso}T00:00:00.000Z`);
   if (Number.isNaN(d.getTime())) return undefined;
   return d.toISOString().slice(0, 10);
 }
 
-async function shiftOldest(iso: string): Promise<string> {
-  const d = new Date(iso);
-  d.setUTCDate(d.getUTCDate() - 1);
+function shiftDays(iso: string, days: number): string {
+  const d = new Date(iso.includes("T") ? iso : `${iso}T00:00:00.000Z`);
+  d.setUTCDate(d.getUTCDate() + days);
   return d.toISOString().slice(0, 10);
+}
+
+function fetchedOldestIso(tweets: Tweet[]): string | null {
+  let min = Number.POSITIVE_INFINITY;
+  for (const tweet of tweets) {
+    if (!tweet.createdAt) continue;
+    const t = Date.parse(tweet.createdAt);
+    if (Number.isFinite(t) && t < min) min = t;
+  }
+  return Number.isFinite(min) ? new Date(min).toISOString() : null;
+}
+
+function nextCursor(current: string | undefined, tweets: Tweet[]): string | undefined {
+  const oldest = fetchedOldestIso(tweets);
+  if (oldest) {
+    const proposed = shiftDays(oldest, -1);
+    if (!current || proposed < current) return proposed;
+  }
+  // Duplicate or undated slice — still walk back so we never stall on the same window.
+  return current ? shiftDays(current, -7) : oldest ? shiftDays(oldest, -7) : current;
 }
 
 async function generateVoice(
@@ -538,57 +584,89 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
   let rewrittenNow = 0;
 
   try {
-    if (source.status === "pending" || source.status === "error") {
+    if (source.status === "error" || source.status === "pending") {
+      const pendingRewrites = await sql<{ n: number }>`
+        select count(*)::int as n from posts
+        where source_id = ${source.id} and rewrite_status = 'pending'
+      `;
+      const next =
+        source.backfill_done && (pendingRewrites[0]?.n ?? 0) > 0
+          ? "rewriting"
+          : source.backfill_done && (pendingRewrites[0]?.n ?? 0) === 0
+            ? "ready"
+            : "syncing";
       await sql`
-        update sources set status = 'syncing', stage = 'posts', error = null
+        update sources set status = ${next}, stage = ${next === "ready" ? "monitor" : next === "rewriting" ? "rewrite" : "posts"}, error = null
         where id = ${source.id}
       `;
-      source.status = "syncing";
+      source.status = next;
+    }
+
+    if (source.status === "ready") {
+      addedPosts = await catchUpNewer(sql, userId, source);
+      const leftover = await sql<{ n: number }>`
+        select count(*)::int as n from posts
+        where source_id = ${source.id} and rewrite_status = 'pending'
+      `;
+      if ((leftover[0]?.n ?? 0) > 0) {
+        await sql`
+          update sources set status = 'rewriting', stage = 'rewrite', error = null where id = ${source.id}
+        `;
+        source.status = "rewriting";
+      } else {
+        await sql`
+          update sources set status = 'ready', stage = 'monitor', error = null where id = ${source.id}
+        `;
+        await refreshCounts(sql, source.id);
+      }
     }
 
     if (source.status === "syncing") {
-      const windowsUsed = Number(source.empty_windows) || 0;
-      const until = source.oldest_at ? await shiftOldest(source.oldest_at) : undefined;
-      const since = until
-        ? day(new Date(new Date(until).getTime() - 1000 * 60 * 60 * 24 * 120).toISOString())
-        : undefined;
+      const emptyStreak = Number(source.empty_windows) || 0;
+      const until =
+        day(source.cursor_until) ??
+        (source.oldest_at ? shiftDays(source.oldest_at, -1) : undefined);
+      const since = until ? shiftDays(until, -WINDOW_DAYS) : undefined;
 
       const found = await searchAccountWindow(source.handle, { since, until });
-      const hydrated = found.tweets.length
-        ? await hydrateTweets(found.tweets, found.tweets.length)
-        : found.tweets;
-      addedPosts = await insertTweets(sql, userId, source, hydrated);
+      addedPosts = await insertTweets(sql, userId, source, found.tweets);
 
       const bounds = await sql<{ oldest: string | null; newest: string | null }>`
         select min(created_at) as oldest, max(created_at) as newest
         from posts where source_id = ${source.id}
       `;
-      const empty = addedPosts === 0 ? windowsUsed + 1 : 0;
-      const synced = await sql<{ n: number }>`
-        select count(*)::int as n from posts where source_id = ${source.id}
-      `;
-      const finished =
-        empty >= EMPTY_WINDOWS_STOP || windowsUsed + 1 >= MAX_WINDOWS || (synced[0]?.n ?? 0) >= 400;
+
+      const empty = found.tweets.length === 0 ? emptyStreak + 1 : 0;
+      const cursorUntil = found.tweets.length === 0 ? until : nextCursor(until, found.tweets);
+      const backfillDone = empty >= EMPTY_WINDOWS_STOP;
+      const windowsRun = (Number(source.windows_run) || 0) + 1;
+      const storedCount = (Number(source.tweets_synced) || 0) + addedPosts;
+      const stalledEmpty = backfillDone && storedCount === 0;
 
       await sql`
         update sources set
           empty_windows = ${empty},
+          windows_run = ${windowsRun},
           oldest_at = ${bounds[0]?.oldest ?? source.oldest_at},
           newest_at = ${bounds[0]?.newest ?? source.newest_at},
-          status = ${finished ? "rewriting" : "syncing"},
-          stage = ${finished ? "rewrite" : "posts"},
-          error = null
+          cursor_until = ${cursorUntil ?? null},
+          backfill_done = ${stalledEmpty ? false : backfillDone},
+          status = ${stalledEmpty ? "error" : backfillDone ? "rewriting" : "syncing"},
+          stage = ${stalledEmpty ? "posts" : backfillDone ? "rewrite" : "posts"},
+          error = ${stalledEmpty ? "No posts came back. Resume to keep trying — nothing was wiped." : null}
         where id = ${source.id}
       `;
       await refreshCounts(sql, source.id);
-      source.status = finished ? "rewriting" : "syncing";
-    } else if (source.status === "rewriting") {
+      source.status = stalledEmpty ? "error" : backfillDone ? "rewriting" : "syncing";
+    }
+
+    if (source.status === "rewriting") {
       const fresh = await loadSource(sql, userId, sourceId);
       if (fresh && !fresh.voice) {
         const samples = await sql<{ text: string }>`
           select text from posts
           where source_id = ${source.id} and coalesce(text, '') <> ''
-          order by created_at desc nulls last
+          order by created_at asc nulls last
           limit 12
         `;
         const voice = await generateVoice(pub[0].handle, fresh, samples);
@@ -618,13 +696,13 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
       const pending = await sql<PostDb>`
         select * from posts
         where source_id = ${source.id} and rewrite_status = 'pending'
-        order by created_at desc nulls last
+        order by created_at asc nulls last
         limit ${REWRITE_BATCH}
       `;
 
       if (pending.length === 0) {
         await sql`
-          update sources set status = 'ready', stage = 'done', error = null where id = ${source.id}
+          update sources set status = 'ready', stage = 'monitor', error = null where id = ${source.id}
         `;
         await refreshCounts(sql, source.id);
       } else {
@@ -636,11 +714,8 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
               update posts set rewrite_text = ${text}, rewrite_status = 'done' where id = ${post.id}
             `;
             rewrittenNow += 1;
-          } else {
-            await sql`
-              update posts set rewrite_status = 'skipped' where id = ${post.id}
-            `;
           }
+          // Leave unmatched as pending so a stop/retry does not skip them.
         }
         const leftover = await sql<{ n: number }>`
           select count(*)::int as n from posts
@@ -648,7 +723,7 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
         `;
         if ((leftover[0]?.n ?? 0) === 0) {
           await sql`
-            update sources set status = 'ready', stage = 'done', error = null where id = ${source.id}
+            update sources set status = 'ready', stage = 'monitor', error = null where id = ${source.id}
           `;
         }
         await refreshCounts(sql, source.id);
@@ -657,7 +732,8 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
   } catch (err) {
     const message = err instanceof Error ? err.message : "Sync failed.";
     await sql`
-      update sources set status = 'error', error = ${message} where id = ${source.id}
+      update sources set status = 'error', error = ${message}, last_synced_at = now()
+      where id = ${source.id}
     `;
   }
 
@@ -671,13 +747,135 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
   };
 }
 
+async function catchUpNewer(sql: Sql, userId: string, source: SourceDb): Promise<number> {
+  const since = source.newest_at ? day(source.newest_at) : undefined;
+  const found = await searchAccountWindow(source.handle, { since });
+  const added = await insertTweets(sql, userId, source, found.tweets);
+  const bounds = await sql<{ oldest: string | null; newest: string | null }>`
+    select min(created_at) as oldest, max(created_at) as newest
+    from posts where source_id = ${source.id}
+  `;
+  await sql`
+    update sources set
+      oldest_at = ${bounds[0]?.oldest ?? source.oldest_at},
+      newest_at = ${bounds[0]?.newest ?? source.newest_at},
+      error = null
+    where id = ${source.id}
+  `;
+  await refreshCounts(sql, source.id);
+  return added;
+}
+
 export async function retrySource(userId: string, sourceId: string): Promise<SourceRow> {
   const sql = await getSql();
-  await sql`
-    update sources set status = 'pending', stage = 'queued', error = null, empty_windows = 0
-    where id = ${sourceId} and user_id = ${userId}
-  `;
   const row = await loadSource(sql, userId, sourceId);
   if (!row) throw new Error("Source not found.");
-  return mapSource(row);
+  const pending = await sql<{ n: number }>`
+    select count(*)::int as n from posts
+    where source_id = ${sourceId} and rewrite_status = 'pending'
+  `;
+  const pendingN = pending[0]?.n ?? 0;
+  const next =
+    row.backfill_done && pendingN > 0
+      ? "rewriting"
+      : row.backfill_done
+        ? "ready"
+        : "syncing";
+  await sql`
+    update sources set
+      status = ${next},
+      stage = ${next === "ready" ? "monitor" : next === "rewriting" ? "rewrite" : "posts"},
+      error = null
+    where id = ${sourceId} and user_id = ${userId}
+  `;
+  const latest = await loadSource(sql, userId, sourceId);
+  if (!latest) throw new Error("Source not found.");
+  return mapSource(latest);
 }
+
+export function sourceNeedsWork(source: {
+  status: string;
+  lastSyncedAt: string | null;
+}): boolean {
+  if (source.status === "pending" || source.status === "syncing" || source.status === "rewriting") {
+    return true;
+  }
+  if (source.status === "error") {
+    if (!source.lastSyncedAt) return true;
+    const t = Date.parse(source.lastSyncedAt);
+    return Number.isNaN(t) || Date.now() - t > ERROR_BACKOFF_MINUTES * 60 * 1000;
+  }
+  if (source.status !== "ready") return false;
+  if (!source.lastSyncedAt) return true;
+  const t = Date.parse(source.lastSyncedAt);
+  if (Number.isNaN(t)) return true;
+  return Date.now() - t > CATCHUP_MINUTES * 60 * 1000;
+}
+
+export async function tickDueSources(limit = 4): Promise<{ ticked: number }> {
+  const sql = await getSql();
+  const rows = await sql<SourceDb>`
+    select * from sources
+    where status in ('pending', 'syncing', 'rewriting')
+       or (
+         status = 'error'
+         and coalesce(last_synced_at, '1970-01-01'::timestamptz) < now() - interval '2 minutes'
+       )
+       or (
+         status = 'ready'
+         and coalesce(last_synced_at, '1970-01-01'::timestamptz) < now() - interval '12 minutes'
+       )
+    order by
+      case status
+        when 'syncing' then 0
+        when 'rewriting' then 1
+        when 'pending' then 2
+        when 'error' then 3
+        else 4
+      end,
+      last_synced_at asc nulls first
+    limit ${limit}
+  `;
+  let ticked = 0;
+  for (const row of rows) {
+    await tickSource(row.user_id, row.id);
+    ticked += 1;
+  }
+  return { ticked };
+}
+
+export async function tickDueForUser(userId: string, limit = 2): Promise<{ ticked: number }> {
+  const sql = await getSql();
+  const rows = await sql<SourceDb>`
+    select * from sources
+    where user_id = ${userId}
+      and (
+        status in ('pending', 'syncing', 'rewriting')
+        or (
+          status = 'error'
+          and coalesce(last_synced_at, '1970-01-01'::timestamptz) < now() - interval '2 minutes'
+        )
+        or (
+          status = 'ready'
+          and coalesce(last_synced_at, '1970-01-01'::timestamptz) < now() - interval '12 minutes'
+        )
+      )
+    order by
+      case status
+        when 'syncing' then 0
+        when 'rewriting' then 1
+        when 'pending' then 2
+        when 'error' then 3
+        else 4
+      end,
+      last_synced_at asc nulls first
+    limit ${limit}
+  `;
+  let ticked = 0;
+  for (const row of rows) {
+    await tickSource(userId, row.id);
+    ticked += 1;
+  }
+  return { ticked };
+}
+

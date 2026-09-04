@@ -44,6 +44,8 @@ export type SourceRow = {
   error: string | null;
   voice: VoiceBrief | null;
   lastSyncedAt: string | null;
+  backfillDone: boolean;
+  windowsRun: number;
 };
 
 export type StoredPost = {

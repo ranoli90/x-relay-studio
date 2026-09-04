@@ -61,10 +61,10 @@ export const moveSourcesFn = createServerFn({ method: "POST" })
 
 export const listPostsFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { sourceId: string; offset?: number; limit?: number }) => input)
+  .validator((input: { sourceId: string; offset?: number; limit?: number; oldestFirst?: boolean }) => input)
   .handler(async ({ context, data }) => {
     const { listPosts } = await import("./sync.server");
-    return listPosts(context.userId, data.sourceId, data.offset ?? 0, data.limit ?? 40);
+    return listPosts(context.userId, data.sourceId, data.offset ?? 0, data.limit ?? 40, data.oldestFirst);
   });
 
 export const exportPublisherFn = createServerFn({ method: "POST" })
@@ -89,4 +89,11 @@ export const retrySourceFn = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { retrySource } = await import("./sync.server");
     return retrySource(context.userId, data.sourceId);
+  });
+
+export const tickDueFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { tickDueForUser } = await import("./sync.server");
+    return tickDueForUser(context.userId, 2);
   });
