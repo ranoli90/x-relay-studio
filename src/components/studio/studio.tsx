@@ -91,6 +91,7 @@ function Header() {
   const selectedPublisherId = useStudio((s) => s.selectedPublisherId);
   const selectPublisher = useStudio((s) => s.selectPublisher);
   const exportActive = useStudio((s) => s.exportActive);
+  const dueCount = useStudio((s) => s.dueCount);
   const publisher = publishers.find((p) => p.id === selectedPublisherId);
   const queue = useMemo(() => {
     let pulling = 0;
@@ -167,6 +168,9 @@ function Header() {
         >
           <Radio className="size-4" />
           <span className="hidden sm:inline">Live</span>
+          {dueCount > 0 && (
+            <span className="font-mono text-xs tabular-nums text-warn">{formatCount(dueCount)}</span>
+          )}
         </button>
       </nav>
       {sources.length > 0 && (

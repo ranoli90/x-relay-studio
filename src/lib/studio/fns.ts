@@ -147,3 +147,11 @@ export const tickLiveFn = createServerFn({ method: "POST" })
     const { tickLiveForUser } = await import("./drip.server");
     return tickLiveForUser(context.userId);
   });
+
+export const fillQueueFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { publisherId: string }) => input)
+  .handler(async ({ context, data }) => {
+    const { fillQueue } = await import("./drip.server");
+    return fillQueue(context.userId, data.publisherId);
+  });

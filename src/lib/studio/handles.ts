@@ -2,6 +2,9 @@ import { extractHandle } from "@/lib/x/ids";
 
 const HANDLE_RE = /^[A-Za-z0-9_]{1,15}$/;
 
+/** Seeded once per user when the master watch list is empty. Shared by every posting account. */
+export const STARTER_WATCH = ["naval", "paulg", "sama", "karpathy", "levelsio"] as const;
+
 /** Pull unique X handles out of a messy paste: lines, commas, @mentions, profile URLs. */
 export function parseHandles(raw: string): string[] {
   const tokens = raw.split(/[\s,;|]+/g).filter(Boolean);

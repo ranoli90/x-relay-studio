@@ -272,6 +272,9 @@ export async function connectPublisher(
     select id, handle, name, avatar, banner, bio, source, kit, created_at
     from publishers where id = ${id} limit 1
   `;
+  void import("./drip.server")
+    .then((m) => m.seedStarterWatch(userId))
+    .catch(() => {});
   return mapPublisher(rows[0]!);
 }
 
@@ -281,6 +284,7 @@ export async function removePublisher(userId: string, publisherId: string): Prom
     select id from publishers where id = ${publisherId} and user_id = ${userId} limit 1
   `;
   if (!owned[0]) return;
+  await sql`delete from outbox where publisher_id = ${publisherId} and user_id = ${userId}`;
   await sql`delete from posts where user_id = ${userId} and source_id in (select id from sources where publisher_id = ${publisherId} and user_id = ${userId})`;
   await sql`delete from sources where publisher_id = ${publisherId} and user_id = ${userId}`;
   await sql`delete from publishers where id = ${publisherId} and user_id = ${userId}`;

@@ -7,6 +7,7 @@ import {
   addWatchFn,
   connectPublisherFn,
   exportPublisherFn,
+  fillQueueFn,
   listLiveFn,
   listPostsFn,
   listStudioFn,
@@ -42,8 +43,10 @@ type StudioState = {
   watch: WatchHandle[];
   outbox: OutboxItem[];
   dueCount: number;
+  scheduledCount: number;
   sentToday: number;
   liveLoading: boolean;
+  filling: boolean;
   setTab: (tab: StudioTab) => void;
   setFilter: (filter: string) => void;
   selectPublisher: (id: string | null) => void;
@@ -68,6 +71,7 @@ type StudioState = {
   removeWatch: (ids: string[]) => Promise<void>;
   setDrip: (publisherId: string, enabled: boolean) => Promise<void>;
   markOutbox: (ids: string[], status: "sent" | "skipped") => Promise<void>;
+  fillQueue: () => Promise<void>;
 };
 
 function isAuthError(err: unknown): boolean {
@@ -131,8 +135,10 @@ export const useStudio = create<StudioState>()(
       watch: [],
       outbox: [],
       dueCount: 0,
+      scheduledCount: 0,
       sentToday: 0,
       liveLoading: false,
+      filling: false,
       setTab: (tab) => set({ tab }),
       setFilter: (filter) => set({ filter }),
       selectPublisher: (id) => {
@@ -280,7 +286,8 @@ export const useStudio = create<StudioState>()(
         set({ pumping: true });
         try {
           const due = pickDueMany(get().sources, PUMP_BATCH);
-          const liveP = tickLiveFn().catch(() => null);
+          const shouldLive = get().tab === "live" || due.length === 0;
+          const liveP = shouldLive ? tickLiveFn().catch(() => null) : Promise.resolve(null);
           if (due.length) {
             const results = await Promise.all(
               due.map(async (next) => {
@@ -373,6 +380,7 @@ export const useStudio = create<StudioState>()(
             watch: live.watch,
             outbox: live.outbox,
             dueCount: live.dueCount,
+            scheduledCount: live.scheduledCount,
             sentToday: live.sentToday,
             liveLoading: false,
           });
@@ -422,6 +430,23 @@ export const useStudio = create<StudioState>()(
           await get().loadLive();
         } catch (err) {
           toast.error(err instanceof Error ? err.message : "Could not update the queue.");
+        }
+      },
+      fillQueue: async () => {
+        const publisherId = get().selectedPublisherId;
+        if (!publisherId) return;
+        if (get().filling) return;
+        set({ filling: true });
+        try {
+          const res = await fillQueueFn({ data: { publisherId } });
+          await get().loadLive();
+          if (res.seeded) toast.success(`Starter watch list added (${res.seeded}).`);
+          if (res.queued) toast.success(`Queued ${res.queued} draft${res.queued === 1 ? "" : "s"}.`);
+          else if (!res.seeded) toast.message("Nothing new to queue yet — need rewritten posts or a fresh watch post.");
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not fill the queue.");
+        } finally {
+          set({ filling: false });
         }
       },
     }),

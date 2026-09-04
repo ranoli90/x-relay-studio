@@ -36,7 +36,7 @@ export type WatchHandle = {
   lastSeenAt: string | null;
 };
 
-export type OutboxKind = "original" | "reply";
+export type OutboxKind = "original" | "reply" | "quote";
 export type OutboxStatus = "due" | "sent" | "skipped";
 
 export type OutboxItem = {
@@ -49,12 +49,14 @@ export type OutboxItem = {
   replyToUrl: string | null;
   dueAt: string;
   sentAt: string | null;
+  readyNow: boolean;
 };
 
 export type LiveSnapshot = {
   watch: WatchHandle[];
   outbox: OutboxItem[];
   dueCount: number;
+  scheduledCount: number;
   sentToday: number;
 };
 
