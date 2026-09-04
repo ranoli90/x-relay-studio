@@ -23,6 +23,8 @@ export function SourceWorkspace() {
   const clearSelected = useStudio((s) => s.clearSelected);
   const selectAllVisible = useStudio((s) => s.selectAllVisible);
   const [draft, setDraft] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "pulling" | "live" | "error">("all");
+  const retryErrors = useStudio((s) => s.retryErrors);
 
   const publisher = publishers.find((p) => p.id === selectedPublisherId) ?? publishers[0];
   const mine = useMemo(
@@ -31,16 +33,21 @@ export function SourceWorkspace() {
   );
   const visible = useMemo(() => {
     const q = filter.trim().toLowerCase().replace(/^@/, "");
-    if (!q) return mine;
-    return mine.filter(
+    let rows = mine;
+    if (statusFilter === "pulling") rows = rows.filter((s) => s.status === "pending" || s.status === "syncing" || s.status === "rewriting");
+    else if (statusFilter === "live") rows = rows.filter((s) => s.status === "ready");
+    else if (statusFilter === "error") rows = rows.filter((s) => s.status === "error");
+    if (!q) return rows;
+    return rows.filter(
       (s) => s.handle.toLowerCase().includes(q) || s.name.toLowerCase().includes(q),
     );
-  }, [mine, filter]);
+  }, [mine, filter, statusFilter]);
 
   const parsed = parseHandles(draft);
   const pulling = mine.filter((s) => s.status === "pending" || s.status === "syncing").length;
   const rewriting = mine.filter((s) => s.status === "rewriting").length;
   const monitoring = mine.filter((s) => s.status === "ready").length;
+  const errors = mine.filter((s) => s.status === "error").length;
   const stored = mine.reduce((n, s) => n + s.tweetsSynced, 0);
   const rewritten = mine.reduce((n, s) => n + s.rewritten, 0);
 
@@ -100,14 +107,40 @@ export function SourceWorkspace() {
       </div>
 
       {mine.length > 0 && (
-        <div className="flex items-center gap-2 border-b border-border px-4 py-2 sm:px-6">
+        <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-2 sm:px-6">
           <Search className="size-4 text-subtle" />
           <Input
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder={`Filter ${mine.length} accounts`}
-            className="h-10 border-0 bg-transparent px-0 shadow-none focus:ring-0"
+            className="h-10 min-w-0 flex-1 border-0 bg-transparent px-0 shadow-none focus:ring-0"
           />
+          {(
+            [
+              ["all", "All"],
+              ["pulling", "Pulling"],
+              ["live", "Live"],
+              ["error", "Error"],
+            ] as const
+          ).map(([id, label]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setStatusFilter(id)}
+              className={cn(
+                "h-10 rounded-full px-3 text-xs",
+                statusFilter === id ? "bg-surface-2 text-fg" : "text-muted hover:text-fg",
+              )}
+            >
+              {label}
+              {id === "error" && errors > 0 ? ` ${errors}` : ""}
+            </button>
+          ))}
+          {errors > 0 && (
+            <button type="button" className="h-10 text-xs text-down hover:underline" onClick={() => void retryErrors()}>
+              Resume all
+            </button>
+          )}
         </div>
       )}
 

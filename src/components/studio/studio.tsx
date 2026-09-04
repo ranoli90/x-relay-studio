@@ -1,8 +1,9 @@
-import { Download, Plus, Search, Users } from "lucide-react";
+import { Download, Plus, Radio, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { InspectView } from "@/components/inspect-view";
 import { Logo } from "@/components/logo";
 import { ConnectPublisher } from "@/components/studio/connect-publisher";
+import { LiveView } from "@/components/studio/live-view";
 import { SourceDetail } from "@/components/studio/source-detail";
 import { SourceWorkspace } from "@/components/studio/source-list";
 import { Button } from "@/components/ui/button";
@@ -45,6 +46,8 @@ export function Studio() {
       ? "connect"
       : tab === "inspect"
         ? "inspect"
+        : tab === "live"
+          ? "live"
         : (selectedSourceId ?? "sources");
 
   return (
@@ -62,6 +65,8 @@ export function Studio() {
               </div>
             ) : tab === "inspect" ? (
               <InspectView />
+            ) : tab === "live" ? (
+              <LiveView />
             ) : (
               <SourcesPane />
             )}
@@ -151,6 +156,17 @@ function Header() {
         >
           <Search className="size-4" />
           <span className="hidden sm:inline">Inspect</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("live")}
+          className={cn(
+            "inline-flex h-11 items-center gap-2 rounded-md px-3 text-sm transition-[color,background-color] duration-[var(--motion-quick)] ease-[var(--ease-out)]",
+            tab === "live" ? "bg-surface-2 text-fg" : "text-muted hover:text-fg",
+          )}
+        >
+          <Radio className="size-4" />
+          <span className="hidden sm:inline">Live</span>
         </button>
       </nav>
       {sources.length > 0 && (

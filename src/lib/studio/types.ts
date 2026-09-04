@@ -24,6 +24,38 @@ export type Publisher = {
   source: string;
   kit: PublisherKit | null;
   createdAt: string;
+  dripEnabled: boolean;
+};
+
+export type WatchHandle = {
+  id: string;
+  handle: string;
+  name: string;
+  avatar: string | null;
+  enabled: boolean;
+  lastSeenAt: string | null;
+};
+
+export type OutboxKind = "original" | "reply";
+export type OutboxStatus = "due" | "sent" | "skipped";
+
+export type OutboxItem = {
+  id: string;
+  publisherId: string;
+  kind: OutboxKind;
+  status: OutboxStatus;
+  body: string;
+  mediaUrl: string | null;
+  replyToUrl: string | null;
+  dueAt: string;
+  sentAt: string | null;
+};
+
+export type LiveSnapshot = {
+  watch: WatchHandle[];
+  outbox: OutboxItem[];
+  dueCount: number;
+  sentToday: number;
 };
 
 export type SourceRow = {

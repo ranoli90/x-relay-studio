@@ -18,8 +18,10 @@ export const Route = createFileRoute("/api/cron/studio")({
           });
         }
         const { tickDueSources } = await import("@/lib/studio/sync.server");
-        const result = await tickDueSources(4);
-        return new Response(JSON.stringify({ ok: true, ...result }), {
+        const { tickLiveAll } = await import("@/lib/studio/drip.server");
+        const scrape = await tickDueSources(3);
+        const live = await tickLiveAll(2);
+        return new Response(JSON.stringify({ ok: true, ...scrape, ...live }), {
           headers: { "content-type": "application/json" },
         });
       },

@@ -97,3 +97,53 @@ export const tickDueFn = createServerFn({ method: "POST" })
     const { tickDueForUser } = await import("./sync.server");
     return tickDueForUser(context.userId, 2);
   });
+
+export const listLiveFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { publisherId?: string | null }) => input)
+  .handler(async ({ context, data }) => {
+    const { listLive } = await import("./drip.server");
+    return listLive(context.userId, data.publisherId ?? null);
+  });
+
+export const addWatchFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { handles: string[] }) => input)
+  .handler(async ({ context, data }) => {
+    const { addWatchHandles } = await import("./drip.server");
+    return addWatchHandles(context.userId, data.handles);
+  });
+
+export const removeWatchFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { ids: string[] }) => input)
+  .handler(async ({ context, data }) => {
+    const { removeWatchHandles } = await import("./drip.server");
+    await removeWatchHandles(context.userId, data.ids);
+    return { ok: true as const };
+  });
+
+export const setDripFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { publisherId: string; enabled: boolean }) => input)
+  .handler(async ({ context, data }) => {
+    const { setDripEnabled } = await import("./drip.server");
+    await setDripEnabled(context.userId, data.publisherId, data.enabled);
+    return { ok: true as const };
+  });
+
+export const markOutboxFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: { ids: string[]; status: "sent" | "skipped" }) => input)
+  .handler(async ({ context, data }) => {
+    const { markOutbox } = await import("./drip.server");
+    await markOutbox(context.userId, data.ids, data.status);
+    return { ok: true as const };
+  });
+
+export const tickLiveFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const { tickLiveForUser } = await import("./drip.server");
+    return tickLiveForUser(context.userId);
+  });

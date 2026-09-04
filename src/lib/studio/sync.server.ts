@@ -31,6 +31,7 @@ type PublisherRow = {
   source: string;
   kit: unknown;
   created_at: string;
+  drip_enabled?: boolean;
 };
 
 type SourceDb = {
@@ -101,6 +102,7 @@ function mapPublisher(row: PublisherRow): Publisher {
     source: row.source,
     kit: asJson<PublisherKit | null>(row.kit, null),
     createdAt: row.created_at,
+    dripEnabled: row.drip_enabled !== false,
   };
 }
 
@@ -190,7 +192,7 @@ async function refreshCounts(sql: Sql, sourceId: string): Promise<void> {
 export async function listStudio(userId: string) {
   const sql = await getSql();
   const publishers = await sql<PublisherRow>`
-    select id, handle, name, avatar, banner, bio, source, kit, created_at
+    select id, handle, name, avatar, banner, bio, source, kit, created_at, drip_enabled
     from publishers where user_id = ${userId}
     order by created_at asc
   `;

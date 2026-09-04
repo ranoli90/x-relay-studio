@@ -4,19 +4,25 @@ import { toast } from "sonner";
 import { chunk, parseHandles } from "@/lib/studio/handles";
 import {
   addSourcesFn,
+  addWatchFn,
   connectPublisherFn,
   exportPublisherFn,
+  listLiveFn,
   listPostsFn,
   listStudioFn,
+  markOutboxFn,
   moveSourcesFn,
   removePublisherFn,
   removeSourcesFn,
+  removeWatchFn,
   retrySourceFn,
+  setDripFn,
+  tickLiveFn,
   tickSourceFn,
 } from "@/lib/studio/fns";
-import type { Publisher, SourceRow, StoredPost } from "@/lib/studio/types";
+import type { OutboxItem, Publisher, SourceRow, StoredPost, WatchHandle } from "@/lib/studio/types";
 
-export type StudioTab = "sources" | "inspect";
+export type StudioTab = "sources" | "inspect" | "live";
 
 type StudioState = {
   tab: StudioTab;
@@ -33,6 +39,11 @@ type StudioState = {
   postsTotal: number;
   postsLoading: boolean;
   oldestFirst: boolean;
+  watch: WatchHandle[];
+  outbox: OutboxItem[];
+  dueCount: number;
+  sentToday: number;
+  liveLoading: boolean;
   setTab: (tab: StudioTab) => void;
   setFilter: (filter: string) => void;
   selectPublisher: (id: string | null) => void;
@@ -50,7 +61,13 @@ type StudioState = {
   setOldestFirst: (oldestFirst: boolean) => void;
   pump: () => Promise<void>;
   retry: (id: string) => Promise<void>;
+  retryErrors: () => Promise<void>;
   exportActive: () => Promise<void>;
+  loadLive: (publisherId?: string | null) => Promise<void>;
+  addWatch: (handles: string[] | string) => Promise<void>;
+  removeWatch: (ids: string[]) => Promise<void>;
+  setDrip: (publisherId: string, enabled: boolean) => Promise<void>;
+  markOutbox: (ids: string[], status: "sent" | "skipped") => Promise<void>;
 };
 
 function isAuthError(err: unknown): boolean {
@@ -111,16 +128,23 @@ export const useStudio = create<StudioState>()(
       postsTotal: 0,
       postsLoading: false,
       oldestFirst: true,
+      watch: [],
+      outbox: [],
+      dueCount: 0,
+      sentToday: 0,
+      liveLoading: false,
       setTab: (tab) => set({ tab }),
       setFilter: (filter) => set({ filter }),
-      selectPublisher: (id) =>
+      selectPublisher: (id) => {
         set({
           selectedPublisherId: id,
           selectedSourceId: null,
           selectedIds: [],
           posts: [],
           postsTotal: 0,
-        }),
+        });
+        if (id) void get().loadLive(id);
+      },
       selectSource: (id) => set({ selectedSourceId: id, posts: [], postsTotal: 0 }),
       toggleSelected: (id) => {
         const selectedIds = get().selectedIds.includes(id)
@@ -143,6 +167,7 @@ export const useStudio = create<StudioState>()(
             selectedPublisherId,
             loading: false,
           });
+          if (selectedPublisherId) void get().loadLive(selectedPublisherId);
         } catch (err) {
           set({ loading: false });
           if (!isAuthError(err)) {
@@ -255,40 +280,46 @@ export const useStudio = create<StudioState>()(
         set({ pumping: true });
         try {
           const due = pickDueMany(get().sources, PUMP_BATCH);
-          if (!due.length) return;
-          const results = await Promise.all(
-            due.map(async (next) => {
-              try {
-                return { ok: true as const, tick: await tickSourceFn({ data: { sourceId: next.id } }), id: next.id };
-              } catch (err) {
-                if (isAbort(err)) return { ok: false as const, abort: true as const, id: next.id };
-                return {
-                  ok: false as const,
-                  abort: false as const,
-                  id: next.id,
-                  message: err instanceof Error ? err.message : "Sync failed.",
-                };
+          const liveP = tickLiveFn().catch(() => null);
+          if (due.length) {
+            const results = await Promise.all(
+              due.map(async (next) => {
+                try {
+                  return { ok: true as const, tick: await tickSourceFn({ data: { sourceId: next.id } }), id: next.id };
+                } catch (err) {
+                  if (isAbort(err)) return { ok: false as const, abort: true as const, id: next.id };
+                  return {
+                    ok: false as const,
+                    abort: false as const,
+                    id: next.id,
+                    message: err instanceof Error ? err.message : "Sync failed.",
+                  };
+                }
+              }),
+            );
+            let sources = get().sources;
+            for (const res of results) {
+              if (res.ok) {
+                sources = sources.map((s) => (s.id === res.tick.source.id ? res.tick.source : s));
+              } else if (!res.abort) {
+                sources = sources.map((s) =>
+                  s.id === res.id
+                    ? { ...s, status: "error", error: res.message, lastSyncedAt: new Date().toISOString() }
+                    : s,
+                );
               }
-            }),
-          );
-          let sources = get().sources;
-          for (const res of results) {
-            if (res.ok) {
-              sources = sources.map((s) => (s.id === res.tick.source.id ? res.tick.source : s));
-            } else if (!res.abort) {
-              sources = sources.map((s) =>
-                s.id === res.id
-                  ? { ...s, status: "error", error: res.message, lastSyncedAt: new Date().toISOString() }
-                  : s,
-              );
             }
+            set({ sources });
+            const selected = get().selectedSourceId;
+            const changed = results.some(
+              (res) => res.ok && res.tick.source.id === selected && (res.tick.addedPosts > 0 || res.tick.rewrittenNow > 0),
+            );
+            if (selected && changed) void get().loadPosts(selected, 0);
           }
-          set({ sources });
-          const selected = get().selectedSourceId;
-          const changed = results.some(
-            (res) => res.ok && res.tick.source.id === selected && (res.tick.addedPosts > 0 || res.tick.rewrittenNow > 0),
-          );
-          if (selected && changed) void get().loadPosts(selected, 0);
+          const live = await liveP;
+          if (live && (live.queued > 0 || live.watch > 0 || get().tab === "live")) {
+            void get().loadLive();
+          }
         } finally {
           set({ pumping: false });
         }
@@ -301,6 +332,21 @@ export const useStudio = create<StudioState>()(
         } catch (err) {
           toast.error(err instanceof Error ? err.message : "Retry failed.");
         }
+      },
+      retryErrors: async () => {
+        const ids = get()
+          .sources.filter((s) => s.status === "error")
+          .slice(0, 20)
+          .map((s) => s.id);
+        for (const id of ids) {
+          try {
+            const source = await retrySourceFn({ data: { sourceId: id } });
+            set({ sources: get().sources.map((s) => (s.id === id ? source : s)) });
+          } catch {
+            /* next */
+          }
+        }
+        if (ids.length) void get().pump();
       },
       exportActive: async () => {
         const publisherId = get().selectedPublisherId;
@@ -316,6 +362,66 @@ export const useStudio = create<StudioState>()(
           URL.revokeObjectURL(url);
         } catch (err) {
           toast.error(err instanceof Error ? err.message : "Export failed.");
+        }
+      },
+      loadLive: async (publisherId) => {
+        const id = publisherId ?? get().selectedPublisherId;
+        set({ liveLoading: true });
+        try {
+          const live = await listLiveFn({ data: { publisherId: id } });
+          set({
+            watch: live.watch,
+            outbox: live.outbox,
+            dueCount: live.dueCount,
+            sentToday: live.sentToday,
+            liveLoading: false,
+          });
+        } catch {
+          set({ liveLoading: false });
+        }
+      },
+      addWatch: async (input) => {
+        const handles = Array.isArray(input) ? input : parseHandles(input);
+        if (!handles.length) {
+          toast.error("Paste big-creator handles.");
+          return;
+        }
+        try {
+          const res = await addWatchFn({ data: { handles } });
+          await get().loadLive();
+          if (res.added) toast.success(`Watching ${res.added} creator${res.added === 1 ? "" : "s"}.`);
+          if (res.missing.length) toast.error(`Not found: ${res.missing.slice(0, 6).map((h) => `@${h}`).join(", ")}`);
+          void get().pump();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not add to the watch list.");
+        }
+      },
+      removeWatch: async (ids) => {
+        if (!ids.length) return;
+        try {
+          await removeWatchFn({ data: { ids } });
+          await get().loadLive();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not remove.");
+        }
+      },
+      setDrip: async (publisherId, enabled) => {
+        try {
+          await setDripFn({ data: { publisherId, enabled } });
+          set({
+            publishers: get().publishers.map((p) => (p.id === publisherId ? { ...p, dripEnabled: enabled } : p)),
+          });
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not update live posting.");
+        }
+      },
+      markOutbox: async (ids, status) => {
+        if (!ids.length) return;
+        try {
+          await markOutboxFn({ data: { ids, status } });
+          await get().loadLive();
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : "Could not update the queue.");
         }
       },
     }),
