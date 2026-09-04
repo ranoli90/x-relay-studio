@@ -58,6 +58,8 @@ type SourceDb = {
   backfill_done: boolean;
   windows_run: number;
   cursor_until: string | null;
+  rewrite_pending: number;
+  rewrite_skipped: number;
 };
 
 type PostDb = {
@@ -116,6 +118,8 @@ function mapSource(row: SourceDb): SourceRow {
     tweetsSynced: Number(row.tweets_synced) || 0,
     mediaSynced: Number(row.media_synced) || 0,
     rewritten: Number(row.rewritten) || 0,
+    rewritePending: Number(row.rewrite_pending) || 0,
+    rewriteSkipped: Number(row.rewrite_skipped) || 0,
     status: (row.status as SourceStatus) || "pending",
     stage: row.stage,
     error: row.error,
@@ -134,8 +138,8 @@ function mapPost(row: PostDb): StoredPost {
     url: row.url,
     text: row.text,
     createdAt: row.created_at,
-    metrics: asJson<Metrics>(row.metrics, {}),
-    media: asJson<MediaItem[]>(row.media, []),
+    metrics: slimMetrics(asJson<Metrics>(row.metrics, {})),
+    media: slimMedia(asJson<MediaItem[]>(row.media, [])),
     isReply: Boolean(row.is_reply),
     isRetweet: Boolean(row.is_retweet),
     isQuote: Boolean(row.is_quote),
@@ -176,6 +180,8 @@ async function refreshCounts(sql: Sql, sourceId: string): Promise<void> {
       tweets_synced = (select count(*) from posts where source_id = ${sourceId}),
       media_synced = ${mediaSynced},
       rewritten = (select count(*) from posts where source_id = ${sourceId} and rewrite_status = 'done'),
+      rewrite_pending = (select count(*) from posts where source_id = ${sourceId} and rewrite_status = 'pending'),
+      rewrite_skipped = (select count(*) from posts where source_id = ${sourceId} and rewrite_status = 'skipped'),
       last_synced_at = now()
     where id = ${sourceId}
   `;
@@ -504,10 +510,18 @@ async function insertTweets(sql: Sql, userId: string, source: SourceDb, tweets: 
   const fresh = tweets.filter((t) => t.id && !existing.has(t.id));
   if (!fresh.length) return 0;
 
-  const hydrated = await hydrateTweets(fresh, fresh.length);
+  const needHydrate = fresh.filter((t) => !(t.mediaItems && t.mediaItems.length) || !t.text);
+  const hydratedById = new Map<string, Tweet>();
+  if (needHydrate.length) {
+    const hydrated = await hydrateTweets(needHydrate, needHydrate.length);
+    for (const tweet of hydrated) hydratedById.set(tweet.id, tweet);
+  }
+
   let added = 0;
-  for (const tweet of hydrated) {
+  for (const raw of fresh) {
+    const tweet = hydratedById.get(raw.id) ?? raw;
     const skipRewrite = tweet.isRetweet || !tweet.text.trim();
+    const text = tweet.text.trim().slice(0, 4000);
     const media = JSON.stringify(slimMedia(tweet.mediaItems));
     const metrics = JSON.stringify(slimMetrics(tweet.metrics));
     try {
@@ -521,7 +535,7 @@ async function insertTweets(sql: Sql, userId: string, source: SourceDb, tweets: 
           ${source.id},
           ${tweet.id},
           ${tweet.url},
-          ${tweet.text},
+          ${text},
           ${tweet.createdAt ?? null},
           ${metrics}::jsonb,
           ${media}::jsonb,
@@ -549,7 +563,7 @@ async function insertTweets(sql: Sql, userId: string, source: SourceDb, tweets: 
           ${source.id},
           ${tweet.id},
           ${tweet.url},
-          ${tweet.text},
+          ${text},
           ${tweet.createdAt ?? null},
           ${metrics}::jsonb,
           ${media}::jsonb,
@@ -686,6 +700,7 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
 
   let addedPosts = 0;
   let rewrittenNow = 0;
+  const startedAs = source.status;
 
   try {
     if (source.status === "error" || source.status === "pending") {
@@ -762,6 +777,17 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
       `;
       await refreshCounts(sql, source.id);
       source.status = stalledEmpty ? "error" : backfillDone ? "rewriting" : "syncing";
+      // Scrape ticks stay scrape-only so the queue lands fast; rewrite is the next tick.
+      if (startedAs === "syncing" || startedAs === "pending" || startedAs === "error") {
+        const latest = await loadSource(sql, userId, sourceId);
+        if (!latest) throw new Error("Source disappeared.");
+        return {
+          source: mapSource(latest),
+          addedPosts,
+          rewrittenNow,
+          done: latest.status === "ready" || latest.status === "error",
+        };
+      }
     }
 
     if (source.status === "rewriting") {

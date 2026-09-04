@@ -28,7 +28,7 @@ export function Studio() {
     void pump();
     const id = window.setInterval(() => {
       void pump();
-    }, 20_000);
+    }, 12_000);
     const onVis = () => {
       if (document.visibilityState === "visible") void pump();
     };

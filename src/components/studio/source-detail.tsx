@@ -68,7 +68,9 @@ export function SourceDetail() {
               {" · "}
               {formatCount(source.mediaSynced)} images
               {" · "}
-              {formatCount(source.rewritten)} rewritten for @{publisher?.handle}
+              {formatCount(source.rewritten)} ready
+              {source.rewritePending > 0 && ` · ${formatCount(source.rewritePending)} queued`}
+              {source.rewriteSkipped > 0 && ` · ${formatCount(source.rewriteSkipped)} skipped`}
             </p>
             <p className="mt-2 max-w-xl text-xs leading-relaxed text-subtle">
               Each post is saved as we find it (text + image URLs). We never wipe on
@@ -188,9 +190,11 @@ export function SourceDetail() {
         {pane === "posts" && (
           <div className="grid gap-3">
             <p className="text-sm text-muted">
-              Posting queue for @{publisher?.handle}
-              {oldestFirst ? " — first stored post at the top." : " — newest stored at the top."}{" "}
-              Copy a rewrite or open it as a draft. Nothing auto-posts.
+              Posting queue for @{publisher?.handle}: {formatCount(source.rewritten)} ready
+              {source.rewritePending > 0 ? `, ${formatCount(source.rewritePending)} still rewriting` : ""}
+              {source.rewriteSkipped > 0 ? `, ${formatCount(source.rewriteSkipped)} skipped` : ""}.
+              {oldestFirst ? " First stored post at the top." : " Newest stored at the top."}{" "}
+              Copy a rewrite or open it as a draft. Nothing auto-posts. Image files stay as URLs — we never download the binaries.
             </p>
             {postsLoading && posts.length === 0 && (
               <>

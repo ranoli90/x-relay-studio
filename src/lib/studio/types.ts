@@ -39,6 +39,8 @@ export type SourceRow = {
   tweetsSynced: number;
   mediaSynced: number;
   rewritten: number;
+  rewritePending: number;
+  rewriteSkipped: number;
   status: SourceStatus;
   stage: string | null;
   error: string | null;

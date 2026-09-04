@@ -44,6 +44,7 @@ function tweetFromModel(raw: unknown): Tweet | null {
     extractHandle(asString(rec.url) ?? "") ??
     "unknown";
   if (!id) return null;
+  const mediaItems = mediaFromModel(rec.media ?? rec.mediaItems ?? rec.images);
   return {
     id,
     url: asString(rec.url) ?? `https://x.com/${handle}/status/${id}`,
@@ -63,8 +64,30 @@ function tweetFromModel(raw: unknown): Tweet | null {
       views: asNumber(rec.views),
       quotes: asNumber(rec.quotes),
     },
+    mediaItems: mediaItems.length ? mediaItems : undefined,
     hydrated: false,
   };
+}
+
+function mediaFromModel(raw: unknown): NonNullable<Tweet["mediaItems"]> {
+  const items: NonNullable<Tweet["mediaItems"]> = [];
+  const list = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  for (const entry of list) {
+    if (typeof entry === "string" && /^https?:\/\//i.test(entry)) {
+      items.push({ type: "photo", url: entry });
+      continue;
+    }
+    const rec = asRecord(entry);
+    const url = asString(rec?.url ?? rec?.media_url);
+    if (!url || !/^https?:\/\//i.test(url)) continue;
+    const typeRaw = String(rec?.type ?? "photo");
+    items.push({
+      type: typeRaw === "video" ? "video" : typeRaw === "gif" ? "gif" : "photo",
+      url,
+      thumbnail: asString(rec?.thumbnail),
+    });
+  }
+  return items;
 }
 
 function trendFromModel(raw: unknown, index: number): Trend | null {
@@ -87,7 +110,13 @@ type ChatOptionsXFilter = {
   to_date?: string;
 };
 
-async function grokJson(prompt: string, system: string, web: boolean, xFilter?: ChatOptionsXFilter) {
+async function grokJson(
+  prompt: string,
+  system: string,
+  web: boolean,
+  xFilter?: ChatOptionsXFilter,
+  maxTokens?: number,
+) {
   const result = await chatOpenRouter({
     messages: [
       { role: "system", content: system },
@@ -95,7 +124,7 @@ async function grokJson(prompt: string, system: string, web: boolean, xFilter?: 
     ],
     json: true,
     web,
-    maxTokens: web ? 1400 : 900,
+    maxTokens: maxTokens ?? (web ? 1400 : 900),
     timeoutMs: web ? 55_000 : 40_000,
     xFilter,
   });
@@ -429,11 +458,12 @@ export async function runDraft(input: {
 
 const ARCHIVE_SYSTEM = `You collect a full X/Twitter archive for one account.
 Use live X search. Return JSON only:
-{"tweets":[{"id":"snowflake id","url":"https://x.com/handle/status/id","handle":"handle","name":"Name","text":"post text","likes":0,"retweets":0,"replies":0,"createdAt":"ISO date"}],"note":"short"}
+{"tweets":[{"id":"snowflake id","url":"https://x.com/handle/status/id","handle":"handle","name":"Name","text":"post text","likes":0,"createdAt":"ISO date","media":["https://image-or-video-url"]}],"note":"short"}
 Rules:
 - Real posts only. Every id must be the numeric status id from an x.com URL.
-- Return as many distinct posts from THIS account as you can, up to 20.
+- Return as many distinct posts from THIS account as you can, up to 40.
 - Include originals, replies, and quotes. Skip ads and other people's posts.
+- media is optional URL list only (no base64, no binary). Omit if there is none.
 - Honor the date window. When asked for posts older than a date, return the
   next-oldest posts immediately before that date (do not jump years, do not
   repeat newer posts).`;
@@ -446,11 +476,17 @@ export async function searchAccountWindow(
   const windowHint = opts.until
     ? `Posts FROM @${from} only, strictly older than ${opts.until}. Return the next-oldest slice (the posts just before that date), newest-first within the slice. Do not include posts from ${opts.until} or later.${opts.since ? ` Stay on or after ${opts.since} if you can.` : ""}`
     : `Collect the latest posts FROM @${from} only. No date cap.`;
-  const { data, live } = await grokJson(windowHint, ARCHIVE_SYSTEM, true, {
-    allowed_x_handles: [from],
-    from_date: opts.since,
-    to_date: opts.until,
-  });
+  const { data, live } = await grokJson(
+    windowHint,
+    ARCHIVE_SYSTEM,
+    true,
+    {
+      allowed_x_handles: [from],
+      from_date: opts.since,
+      to_date: opts.until,
+    },
+    3500,
+  );
   const rec = asRecord(data) ?? {};
   const tweets = uniqueTweets(
     asArray(rec.tweets)

@@ -64,7 +64,7 @@ function isAbort(err: unknown): boolean {
 
 const CATCHUP_MS = 12 * 60 * 1000;
 const ERROR_BACKOFF_MS = 2 * 60 * 1000;
-const PUMP_BATCH = 2;
+const PUMP_BATCH = 3;
 
 function isStale(iso: string | null, ms: number): boolean {
   if (!iso) return true;
@@ -80,6 +80,18 @@ function pickDue(sources: SourceRow[]): SourceRow | undefined {
   const errored = sources.find((s) => s.status === "error" && isStale(s.lastSyncedAt, ERROR_BACKOFF_MS));
   if (errored) return errored;
   return sources.find((s) => s.status === "ready" && isStale(s.lastSyncedAt, CATCHUP_MS));
+}
+
+function pickDueMany(sources: SourceRow[], n: number): SourceRow[] {
+  const out: SourceRow[] = [];
+  const taken = new Set<string>();
+  for (let i = 0; i < n; i += 1) {
+    const next = pickDue(sources.filter((s) => !taken.has(s.id)));
+    if (!next) break;
+    taken.add(next.id);
+    out.push(next);
+  }
+  return out;
 }
 
 export const useStudio = create<StudioState>()(
@@ -242,31 +254,41 @@ export const useStudio = create<StudioState>()(
         if (get().pumping) return;
         set({ pumping: true });
         try {
-          let n = 0;
-          while (n < PUMP_BATCH) {
-            const next = pickDue(get().sources);
-            if (!next) break;
-            n += 1;
-            try {
-              const tick = await tickSourceFn({ data: { sourceId: next.id } });
-              set({
-                sources: get().sources.map((s) => (s.id === tick.source.id ? tick.source : s)),
-              });
-              if (get().selectedSourceId === tick.source.id && (tick.addedPosts > 0 || tick.rewrittenNow > 0)) {
-                void get().loadPosts(tick.source.id, 0);
+          const due = pickDueMany(get().sources, PUMP_BATCH);
+          if (!due.length) return;
+          const results = await Promise.all(
+            due.map(async (next) => {
+              try {
+                return { ok: true as const, tick: await tickSourceFn({ data: { sourceId: next.id } }), id: next.id };
+              } catch (err) {
+                if (isAbort(err)) return { ok: false as const, abort: true as const, id: next.id };
+                return {
+                  ok: false as const,
+                  abort: false as const,
+                  id: next.id,
+                  message: err instanceof Error ? err.message : "Sync failed.",
+                };
               }
-            } catch (err) {
-              if (isAbort(err)) break;
-              const message = err instanceof Error ? err.message : "Sync failed.";
-              set({
-                sources: get().sources.map((s) =>
-                  s.id === next.id
-                    ? { ...s, status: "error", error: message, lastSyncedAt: new Date().toISOString() }
-                    : s,
-                ),
-              });
+            }),
+          );
+          let sources = get().sources;
+          for (const res of results) {
+            if (res.ok) {
+              sources = sources.map((s) => (s.id === res.tick.source.id ? res.tick.source : s));
+            } else if (!res.abort) {
+              sources = sources.map((s) =>
+                s.id === res.id
+                  ? { ...s, status: "error", error: res.message, lastSyncedAt: new Date().toISOString() }
+                  : s,
+              );
             }
           }
+          set({ sources });
+          const selected = get().selectedSourceId;
+          const changed = results.some(
+            (res) => res.ok && res.tick.source.id === selected && (res.tick.addedPosts > 0 || res.tick.rewrittenNow > 0),
+          );
+          if (selected && changed) void get().loadPosts(selected, 0);
         } finally {
           set({ pumping: false });
         }

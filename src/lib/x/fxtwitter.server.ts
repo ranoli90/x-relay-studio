@@ -18,7 +18,7 @@ function fromCache<T>(map: Map<string, CacheEntry<T>>, key: string): T | null {
   return hit.value;
 }
 
-async function getJson(url: string, timeoutMs = 10_000): Promise<unknown> {
+async function getJson(url: string, timeoutMs = 5_000): Promise<unknown> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -200,19 +200,32 @@ export async function fetchProfile(handle: string): Promise<UserProfile | null> 
 
 export async function hydrateTweets(partial: Tweet[], limit = 12): Promise<Tweet[]> {
   const slice = partial.slice(0, limit);
-  const results = await Promise.all(
-    slice.map(async (t) => {
-      if (t.hydrated && t.author.avatar) return t;
-      const live = await fetchTweet(t.id);
-      if (!live) return t;
-      return {
+  const out = slice.slice();
+  const pending: number[] = [];
+  for (let i = 0; i < slice.length; i += 1) {
+    const t = slice[i];
+    if (t.hydrated && (t.mediaItems?.length || t.author.avatar)) continue;
+    if (t.mediaItems && t.mediaItems.length > 0 && t.text) continue;
+    pending.push(i);
+  }
+  const CONCURRENCY = 8;
+  let cursor = 0;
+  async function worker() {
+    while (cursor < pending.length) {
+      const i = pending[cursor];
+      cursor += 1;
+      const live = await fetchTweet(slice[i].id);
+      if (!live) continue;
+      out[i] = {
         ...live,
-        text: live.text || t.text,
-        metrics: { ...t.metrics, ...live.metrics },
+        text: live.text || slice[i].text,
+        metrics: { ...slice[i].metrics, ...live.metrics },
+        mediaItems: live.mediaItems?.length ? live.mediaItems : slice[i].mediaItems,
       };
-    }),
-  );
-  return results;
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, pending.length) }, () => worker()));
+  return out;
 }
 
 export async function hydrateProfiles(handles: string[], limit = 12): Promise<UserProfile[]> {

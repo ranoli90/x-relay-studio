@@ -276,7 +276,7 @@ function StatusChip({ source, onRetry }: { source: SourceRow; onRetry: () => voi
   }
   const label =
     source.status === "rewriting"
-      ? `Rewrite ${source.rewritten}`
+      ? `${formatCount(source.rewritten)}/${formatCount(source.tweetsSynced)}`
       : source.status === "syncing"
         ? `Stored ${formatCount(source.tweetsSynced)}`
         : "Queued";
