@@ -87,7 +87,26 @@ export const useRelay = create<RelayState>()(
     {
       name: "x-relay-v1",
       partialize: (s) => ({
-        archive: s.archive,
+        archive: s.archive.slice(0, 80).map((t) => ({
+          id: t.id,
+          url: t.url,
+          text: t.text,
+          createdAt: t.createdAt,
+          author: {
+            id: t.author.id,
+            handle: t.author.handle,
+            name: t.author.name,
+            verified: t.author.verified,
+            avatar: t.author.avatar,
+          },
+          metrics: t.metrics,
+          mediaItems: t.mediaItems?.map((m) => ({
+            type: m.type,
+            url: m.url,
+            thumbnail: m.thumbnail,
+          })),
+          hydrated: true as const,
+        })),
         recent: s.recent,
         product: s.product,
         sort: s.sort,

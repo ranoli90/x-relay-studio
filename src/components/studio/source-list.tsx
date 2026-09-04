@@ -38,7 +38,11 @@ export function SourceWorkspace() {
   }, [mine, filter]);
 
   const parsed = parseHandles(draft);
-  const active = mine.filter((s) => s.status === "syncing" || s.status === "rewriting" || s.status === "pending").length;
+  const pulling = mine.filter((s) => s.status === "pending" || s.status === "syncing").length;
+  const rewriting = mine.filter((s) => s.status === "rewriting").length;
+  const monitoring = mine.filter((s) => s.status === "ready").length;
+  const stored = mine.reduce((n, s) => n + s.tweetsSynced, 0);
+  const rewritten = mine.reduce((n, s) => n + s.rewritten, 0);
 
   function onAdd(e: FormEvent) {
     e.preventDefault();
@@ -64,7 +68,11 @@ export function SourceWorkspace() {
           </div>
           <p className="font-mono text-xs tabular-nums text-subtle">
             {mine.length} assigned
-            {active > 0 && ` · ${active} running`}
+            {pulling > 0 && ` · ${pulling} pulling`}
+            {rewriting > 0 && ` · ${rewriting} rewrite`}
+            {monitoring > 0 && ` · ${monitoring} live`}
+            {stored > 0 && ` · ${formatCount(stored)} stored`}
+            {rewritten > 0 && ` · ${formatCount(rewritten)} ready`}
           </p>
         </div>
 

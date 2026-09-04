@@ -458,8 +458,9 @@ export async function searchAccountWindow(
       .filter((t): t is Tweet => t !== null)
       .filter((t) => tweetBelongsTo(t, from)),
   );
-  const hydrated = await hydrateTweets(tweets, 20);
-  return { tweets: sortByNewest(hydrated), note: asString(rec.note), live };
+  // Hydrate later, and only for tweets we have not stored — catch-up must not
+  // re-fetch 20 fxtwitter payloads we already have.
+  return { tweets: sortByNewest(tweets), note: asString(rec.note), live };
 }
 
 function tweetBelongsTo(tweet: Tweet, handle: string): boolean {

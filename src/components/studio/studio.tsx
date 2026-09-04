@@ -1,5 +1,5 @@
 import { Download, Plus, Search, Users } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { InspectView } from "@/components/inspect-view";
 import { Logo } from "@/components/logo";
 import { ConnectPublisher } from "@/components/studio/connect-publisher";
@@ -85,9 +85,25 @@ function Header() {
   const publishers = useStudio((s) => s.publishers);
   const selectedPublisherId = useStudio((s) => s.selectedPublisherId);
   const selectPublisher = useStudio((s) => s.selectPublisher);
-  const running = sources.filter((s) => s.status === "syncing" || s.status === "rewriting" || s.status === "pending").length;
   const exportActive = useStudio((s) => s.exportActive);
   const publisher = publishers.find((p) => p.id === selectedPublisherId);
+  const queue = useMemo(() => {
+    let pulling = 0;
+    let rewriting = 0;
+    let monitoring = 0;
+    let errors = 0;
+    let stored = 0;
+    let rewritten = 0;
+    for (const s of sources) {
+      stored += s.tweetsSynced;
+      rewritten += s.rewritten;
+      if (s.status === "pending" || s.status === "syncing") pulling += 1;
+      else if (s.status === "rewriting") rewriting += 1;
+      else if (s.status === "ready") monitoring += 1;
+      else if (s.status === "error") errors += 1;
+    }
+    return { pulling, rewriting, monitoring, errors, stored, rewritten };
+  }, [sources]);
 
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6">
@@ -137,9 +153,14 @@ function Header() {
           <span className="hidden sm:inline">Inspect</span>
         </button>
       </nav>
-      {running > 0 && (
-        <p className="hidden font-mono text-xs tabular-nums text-muted md:block">
-          Syncing {running} · saved as we go · never restarts from scratch
+      {sources.length > 0 && (
+        <p className="hidden min-w-0 truncate font-mono text-xs tabular-nums text-muted md:block">
+          {queue.pulling > 0 && `${queue.pulling} pulling · `}
+          {queue.rewriting > 0 && `${queue.rewriting} rewrite · `}
+          {queue.monitoring > 0 && `${queue.monitoring} live · `}
+          {queue.errors > 0 && `${queue.errors} retry · `}
+          {formatCount(queue.stored)} stored
+          {queue.rewritten > 0 && ` · ${formatCount(queue.rewritten)} ready`}
         </p>
       )}
       <div className="ml-auto flex items-center gap-2">

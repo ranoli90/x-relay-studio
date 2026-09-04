@@ -1,6 +1,6 @@
 import { getSql, type Sql } from "@/lib/db";
 import { chatOpenRouter, extractJson } from "@/lib/openrouter.server";
-import { fetchProfile } from "@/lib/x/fxtwitter.server";
+import { fetchProfile, hydrateTweets } from "@/lib/x/fxtwitter.server";
 import { searchAccountWindow } from "@/lib/x/search.server";
 import type { MediaItem, Metrics, Tweet } from "@/lib/x/types";
 import type {
@@ -384,13 +384,17 @@ export async function listPosts(
   `;
   const rows = oldestFirst
     ? await sql<PostDb>`
-        select * from posts
+        select id, source_id, tweet_id, url, text, created_at, metrics, media,
+               is_reply, is_retweet, is_quote, rewrite_text, rewrite_status
+        from posts
         where source_id = ${sourceId}
         order by created_at asc nulls last, stored_at asc
         limit ${limit} offset ${offset}
       `
     : await sql<PostDb>`
-        select * from posts
+        select id, source_id, tweet_id, url, text, created_at, metrics, media,
+               is_reply, is_retweet, is_quote, rewrite_text, rewrite_status
+        from posts
         where source_id = ${sourceId}
         order by created_at desc nulls last, stored_at desc
         limit ${limit} offset ${offset}
@@ -412,51 +416,151 @@ export async function exportPublisher(userId: string, publisherId: string) {
   const packs = [];
   for (const source of sources) {
     const posts = await sql<PostDb>`
-      select * from posts where source_id = ${source.id}
-      order by created_at desc nulls last
+      select id, source_id, tweet_id, url, text, created_at, metrics, media,
+             is_reply, is_retweet, is_quote, rewrite_text, rewrite_status
+      from posts where source_id = ${source.id}
+      order by created_at asc nulls last
     `;
     packs.push({
-      source: mapSource(source),
-      posts: posts.map(mapPost),
+      handle: source.handle,
+      name: source.name,
+      stored: Number(source.tweets_synced) || 0,
+      rewritten: Number(source.rewritten) || 0,
+      posts: posts.map((row) => compactPost(mapPost(row))),
     });
   }
   return {
     schema: "x-relay/studio@1",
     generatedAt: new Date().toISOString(),
-    publisher: mapPublisher(pub[0]),
+    publisher: { handle: pub[0].handle, name: pub[0].name },
     sources: packs,
   };
 }
 
+function compactPost(post: StoredPost) {
+  return {
+    id: post.tweetId,
+    at: post.createdAt,
+    text: post.text,
+    url: post.url,
+    rewrite: post.rewriteText || undefined,
+    media: post.media.map((m) => m.url),
+    skip: post.rewriteStatus === "skipped" ? true : undefined,
+  };
+}
+
+async function existingTweetIds(sql: Sql, sourceId: string, ids: string[]): Promise<Set<string>> {
+  if (!ids.length) return new Set();
+  try {
+    const rows = await sql.query<{ tweet_id: string }>(
+      "select tweet_id from posts where source_id = $1 and tweet_id = any($2::text[])",
+      [sourceId, ids],
+    );
+    return new Set(rows.map((r) => r.tweet_id));
+  } catch {
+    const found = new Set<string>();
+    for (const id of ids) {
+      const rows = await sql<{ tweet_id: string }>`
+        select tweet_id from posts where source_id = ${sourceId} and tweet_id = ${id} limit 1
+      `;
+      if (rows[0]) found.add(rows[0].tweet_id);
+    }
+    return found;
+  }
+}
+
+function slimMedia(items: MediaItem[] | undefined): MediaItem[] {
+  const out: MediaItem[] = [];
+  for (const item of items ?? []) {
+    if (!item?.url) continue;
+    out.push(
+      item.thumbnail
+        ? { type: item.type, url: item.url, thumbnail: item.thumbnail }
+        : { type: item.type, url: item.url },
+    );
+  }
+  return out;
+}
+
+function slimMetrics(metrics: Metrics | undefined): Metrics {
+  if (!metrics) return {};
+  const out: Metrics = {};
+  if (metrics.likes) out.likes = metrics.likes;
+  if (metrics.retweets) out.retweets = metrics.retweets;
+  if (metrics.replies) out.replies = metrics.replies;
+  if (metrics.quotes) out.quotes = metrics.quotes;
+  if (metrics.bookmarks) out.bookmarks = metrics.bookmarks;
+  if (metrics.views) out.views = metrics.views;
+  return out;
+}
+
 async function insertTweets(sql: Sql, userId: string, source: SourceDb, tweets: Tweet[]): Promise<number> {
+  if (!tweets.length) return 0;
+  const existing = await existingTweetIds(
+    sql,
+    source.id,
+    tweets.map((t) => t.id),
+  );
+  const fresh = tweets.filter((t) => t.id && !existing.has(t.id));
+  if (!fresh.length) return 0;
+
+  const hydrated = await hydrateTweets(fresh, fresh.length);
   let added = 0;
-  for (const tweet of tweets) {
-    const exists = await sql<{ id: string }>`
-      select id from posts where source_id = ${source.id} and tweet_id = ${tweet.id} limit 1
-    `;
-    if (exists[0]) continue;
+  for (const tweet of hydrated) {
     const skipRewrite = tweet.isRetweet || !tweet.text.trim();
-    await sql`
-      insert into posts (
-        id, user_id, source_id, tweet_id, url, text, created_at, metrics, media,
-        is_reply, is_retweet, is_quote, rewrite_status
-      ) values (
-        ${crypto.randomUUID()},
-        ${userId},
-        ${source.id},
-        ${tweet.id},
-        ${tweet.url},
-        ${tweet.text},
-        ${tweet.createdAt ?? null},
-        ${JSON.stringify(tweet.metrics)}::jsonb,
-        ${JSON.stringify(tweet.mediaItems ?? [])}::jsonb,
-        ${Boolean(tweet.isReply)},
-        ${Boolean(tweet.isRetweet)},
-        ${Boolean(tweet.isQuote)},
-        ${skipRewrite ? "skipped" : "pending"}
-      )
-    `;
-    added += 1;
+    const media = JSON.stringify(slimMedia(tweet.mediaItems));
+    const metrics = JSON.stringify(slimMetrics(tweet.metrics));
+    try {
+      const rows = await sql<{ id: string }>`
+        insert into posts (
+          id, user_id, source_id, tweet_id, url, text, created_at, metrics, media,
+          is_reply, is_retweet, is_quote, rewrite_status
+        ) values (
+          ${crypto.randomUUID()},
+          ${userId},
+          ${source.id},
+          ${tweet.id},
+          ${tweet.url},
+          ${tweet.text},
+          ${tweet.createdAt ?? null},
+          ${metrics}::jsonb,
+          ${media}::jsonb,
+          ${Boolean(tweet.isReply)},
+          ${Boolean(tweet.isRetweet)},
+          ${Boolean(tweet.isQuote)},
+          ${skipRewrite ? "skipped" : "pending"}
+        )
+        on conflict (source_id, tweet_id) do nothing
+        returning id
+      `;
+      if (rows[0]) added += 1;
+    } catch {
+      const exists = await sql<{ id: string }>`
+        select id from posts where source_id = ${source.id} and tweet_id = ${tweet.id} limit 1
+      `;
+      if (exists[0]) continue;
+      await sql`
+        insert into posts (
+          id, user_id, source_id, tweet_id, url, text, created_at, metrics, media,
+          is_reply, is_retweet, is_quote, rewrite_status
+        ) values (
+          ${crypto.randomUUID()},
+          ${userId},
+          ${source.id},
+          ${tweet.id},
+          ${tweet.url},
+          ${tweet.text},
+          ${tweet.createdAt ?? null},
+          ${metrics}::jsonb,
+          ${media}::jsonb,
+          ${Boolean(tweet.isReply)},
+          ${Boolean(tweet.isRetweet)},
+          ${Boolean(tweet.isQuote)},
+          ${skipRewrite ? "skipped" : "pending"}
+        )
+      `;
+      added += 1;
+    }
   }
   return added;
 }
