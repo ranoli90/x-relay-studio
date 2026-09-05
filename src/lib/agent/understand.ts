@@ -14,7 +14,7 @@ const BURNED = /\b(got burned|last girl|she took (the )?money|scammed (before|la
 const ANGER = /\b(wtf| rip ?off|this is bs|you('re| are) a scam)\b/i;
 const CUSTOM = /\b(custom (vid|clip|photo|video)|specific request)\b/i;
 const GREET =
-  /^(hey|hi|hello|yo|sup|wyd|what('?s| is) up|how are (you|u)|hru)(\s+[\w']+){0,6}[\s!.?]*$/i;
+  /^(hey|hi|hello|yo|sup|wyd|what('?s| is) up|how are (you|u)|hru|you up|hmu|good (morning|night))(\s+[\w']+){0,6}[\s!.?]*$/i;
 
 export function understandLocal(
   text: string,
@@ -27,8 +27,7 @@ export function understandLocal(
   const gfeNamed = GFE.test(body);
   let mediaKind: UnderstandResult["mediaKind"] = "none";
 
-  if (GREET.test(body)) intent = "greeting";
-  else if (REAL.test(body)) intent = "are_you_real";
+  if (REAL.test(body)) intent = "are_you_real";
   else if (GFE.test(body)) intent = "gfe_ask";
   else if (BURNED.test(body)) {
     intent = "objection_burned";
@@ -49,7 +48,8 @@ export function understandLocal(
     else wantsSku = "custom_clip";
   } else if (CONTENT.test(body)) {
     intent = "content_ask";
-  } else if (ctx.lifetimeCents === 0 && ctx.turns >= 8) intent = "time_waste";
+  } else if (GREET.test(body)) intent = "greeting";
+  else if (ctx.lifetimeCents === 0 && ctx.turns >= 8) intent = "time_waste";
 
   if (intent === "greeting" && ctx.lifetimeCents === 0 && ctx.turns >= 8) {
     intent = "time_waste";
