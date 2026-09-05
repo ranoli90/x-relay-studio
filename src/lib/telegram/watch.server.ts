@@ -7,11 +7,14 @@ import {
   type TelegramCheckResult,
 } from "./checks";
 import { TelegramError } from "./errors";
+import { withMtprotoLease } from "./lease.server";
 import {
+  assertSessionLive,
   decryptSessionMaterial,
   finishUserOnboarding,
   getUserSession,
   markOpenRouterReady,
+  persistMappedError,
   recordSync,
   saveChecks,
   saveSignedIn,
@@ -25,84 +28,125 @@ function scopedChatId(userId: string, dialogChatId: string): string {
   return `u_${uid}_${dialogChatId}`.slice(0, 160);
 }
 
-export async function syncWatch(userId: string, opts?: { chatId?: string | null; historyLimit?: number }) {
+const FRESH_MS = 45_000;
+
+export async function syncWatch(userId: string, opts?: { chatId?: string | null; historyLimit?: number; forceOnce?: boolean }) {
   const row = await getUserSession(userId);
   if (!row?.session_enc) {
     const chats = await (await import("./snapshot.server")).listChats(userId);
     return { chats, messages: [] as Awaited<ReturnType<typeof import("./snapshot.server").listMessages>> };
   }
-  if (!row.watching) {
+  if (row.auth_dead) {
     const { listChats, listMessages } = await import("./snapshot.server");
     const chats = await listChats(userId);
     const messages = opts?.chatId ? await listMessages(userId, opts.chatId) : [];
     return { chats, messages };
   }
+  if (!row.watching && !opts?.forceOnce) {
+    const { listChats, listMessages } = await import("./snapshot.server");
+    const chats = await listChats(userId);
+    const messages = opts?.chatId ? await listMessages(userId, opts.chatId) : [];
+    return { chats, messages };
+  }
+  try {
+    assertSessionLive(row);
+  } catch (err) {
+    const { listChats, listMessages } = await import("./snapshot.server");
+    const chats = await listChats(userId);
+    const messages = opts?.chatId ? await listMessages(userId, opts.chatId) : [];
+    if (err instanceof TelegramError && err.code === "flood") return { chats, messages };
+    throw err;
+  }
+
+  const lastSync = row.last_sync_at ? new Date(row.last_sync_at).getTime() : 0;
+  const fresh = lastSync > 0 && Date.now() - lastSync < FRESH_MS;
+  if (fresh && !opts?.forceOnce && !opts?.chatId) {
+    const { listChats } = await import("./snapshot.server");
+    const chats = await listChats(userId);
+    return { chats, messages: [] as Awaited<ReturnType<typeof import("./snapshot.server").listMessages>> };
+  }
+  const skipDialogs = Boolean(fresh && opts?.chatId);
 
   const material = await decryptSessionMaterial(row);
   let ingested = 0;
   try {
-    const account = await getAccount(userId);
-    const selfId = account?.telegramUserId ?? 0;
-    const { dialogs, histories, session } = await pullInbox({
-      apiId: material.apiId,
-      apiHash: material.apiHash,
-      session: material.session,
-      selfId,
-      dialogLimit: 40,
-      historyLimit: opts?.historyLimit ?? 40,
-      historyChats: 0,
-      skipPhotoPeers: [],
-      photoLimit: 0,
-      focusChatId: opts?.chatId ?? null,
-    });
-    if (session !== material.session) await saveSignedIn({ userId, session });
-
-    const openId = opts?.chatId ?? null;
-    for (const dialog of dialogs) {
-      const chatId = scopedChatId(userId, dialog.chatId);
-      const open = Boolean(
-        openId &&
-          (openId === chatId || openId.endsWith(dialog.chatId) || openId.includes(dialog.peerId)),
-      );
-      await upsertUserChat({
-        id: chatId,
-        userId,
-        title: dialog.title,
-        peerId: dialog.peerId,
-        unread: open ? 0 : dialog.unread,
-        pinned: dialog.pinned,
-        muted: dialog.muted,
-        lastPreview: redactPreview(dialog.lastPreview),
-        lastAt: dialog.lastAt,
-        photoUrl: null,
+    await withMtprotoLease(userId, async () => {
+      const account = await getAccount(userId);
+      const selfId = account?.telegramUserId ?? 0;
+      const { dialogs, histories, session } = await pullInbox({
+        apiId: material.apiId,
+        apiHash: material.apiHash,
+        session: material.session,
+        selfId,
+        dialogLimit: 40,
+        historyLimit: opts?.historyLimit ?? 40,
+        historyChats: skipDialogs ? 0 : 1,
+        skipPhotoPeers: [],
+        photoLimit: 0,
+        focusChatId: opts?.chatId ?? null,
+        skipDialogs,
       });
-    }
+      if (session !== material.session) await saveSignedIn({ userId, session });
 
-    const byChat = new Map(histories.map((h) => [h.chatId, h.messages]));
-    for (const [dialogChatId, pulled] of byChat) {
-      const chatId = scopedChatId(userId, dialogChatId);
-      for (const msg of pulled) {
-        const saved = await appendMessage({
+      const openId = opts?.chatId ?? null;
+      for (const dialog of dialogs) {
+        const chatId = scopedChatId(userId, dialog.chatId);
+        const open = Boolean(
+          openId &&
+            (openId === chatId || openId.endsWith(dialog.chatId) || openId.includes(dialog.peerId)),
+        );
+        await upsertUserChat({
+          id: chatId,
           userId,
-          chatId,
-          fromSelf: msg.fromSelf,
-          authorName: msg.authorName,
-          body: msg.body,
-          telegramMessageId: msg.telegramMessageId,
-          createdAt: msg.createdAt,
-          bumpUnread: false,
-          aiStatus: msg.fromSelf ? "outbound" : "queued",
+          title: dialog.title,
+          peerId: dialog.peerId,
+          unread: open ? 0 : dialog.unread,
+          pinned: dialog.pinned,
+          muted: dialog.muted,
+          lastPreview: redactPreview(dialog.lastPreview),
+          lastAt: dialog.lastAt,
+          photoUrl: null,
         });
-        if (saved) ingested += 1;
+        if (dialog.accessHash) {
+          try {
+            const sql = await getSql();
+            await sql.query(
+              `update telegram_chats set access_hash = $3 where user_id = $1 and id = $2`,
+              [userId, chatId, dialog.accessHash],
+            );
+          } catch {
+            /* column may not exist yet */
+          }
+        }
       }
-    }
 
-    await recordSync({
-      userId,
-      chatsWatched: dialogs.length,
-      messagesIngested: (row.messages_ingested || 0) + ingested,
+      const byChat = new Map(histories.map((h) => [h.chatId, h.messages]));
+      for (const [dialogChatId, pulled] of byChat) {
+        const chatId = scopedChatId(userId, dialogChatId);
+        for (const msg of pulled) {
+          const saved = await appendMessage({
+            userId,
+            chatId,
+            fromSelf: msg.fromSelf,
+            authorName: msg.authorName,
+            body: msg.body,
+            telegramMessageId: msg.telegramMessageId,
+            createdAt: msg.createdAt,
+            bumpUnread: false,
+            aiStatus: msg.fromSelf ? "outbound" : "queued",
+          });
+          if (saved) ingested += 1;
+        }
+      }
+
+      await recordSync({
+        userId,
+        chatsWatched: dialogs.length || row.chats_watched || 0,
+        messagesIngested: (row.messages_ingested || 0) + ingested,
+      });
     });
   } catch (err) {
+    await persistMappedError(userId, err);
     const message = err instanceof TelegramError ? err.message : "Could not refresh Telegram.";
     const hadChats = (row.chats_watched || 0) > 0;
     await recordSync({
@@ -138,8 +182,9 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
     set("signed_in", true, account.username ? `@${account.username}` : account.firstName);
   } else {
     try {
+      assertSessionLive(row);
       const material = await decryptSessionMaterial(row);
-      const { me, session } = await fetchMe(material);
+      const { me, session } = await withMtprotoLease(userId, () => fetchMe(material));
       if (session !== material.session) await saveSignedIn({ userId, session });
       await upsertLinkedAccount({
         userId,
@@ -154,6 +199,7 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
       });
       set("signed_in", true, me.username ? `@${me.username}` : me.firstName);
     } catch (err) {
+      await persistMappedError(userId, err);
       set("signed_in", false, err instanceof Error ? err.message : "Could not reach Telegram.");
       await saveChecks(userId, mergeCheckResults(results));
       return mergeCheckResults(results);
@@ -163,7 +209,7 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
   await saveChecks(userId, mergeCheckResults(results));
 
   try {
-    const { chats } = await syncWatch(userId, { historyLimit: 8 });
+    const { chats } = await syncWatch(userId, { historyLimit: 8, forceOnce: true });
     const real = chats.filter((c) => c.kind === "user");
     const withPreview = real.filter((c) => c.lastPreview);
     set(
@@ -232,6 +278,7 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
 export async function finishWatchOnboarding(userId: string): Promise<void> {
   const row = await getUserSession(userId);
   if (!row?.session_enc) throw new TelegramError("invalid", "Connect Telegram first.", 400);
+  assertSessionLive(row);
   const checks = mergeCheckResults(JSON.parse(row.checks_json || "[]") as TelegramCheckResult[]);
   if (!requiredChecksPassed(checks)) {
     throw new TelegramError("invalid", "Finish the required checks first.", 400);

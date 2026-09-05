@@ -29,6 +29,19 @@ import {
 
 const CHECK_ID_SET = new Set<string>(TELEGRAM_CHECK_IDS);
 
+type SignedMe = {
+  telegramUserId: number;
+  firstName: string;
+  lastName: string | null;
+  username: string | null;
+};
+
+function signedMeOf(signed: object): SignedMe | null {
+  if (!signed || typeof signed !== "object" || !("me" in signed)) return null;
+  const me = (signed as { me?: SignedMe | null }).me;
+  return me ?? null;
+}
+
 async function buildStatus(userId: string): Promise<TelegramStatus> {
   const { telegramConfigured, telegramMtprotoEnabled, telegramUserApp } = await import(
     "./config.server"
@@ -111,13 +124,19 @@ export const telegramStartLoginFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(StartLoginSchema, input))
   .handler(async ({ context, data }): Promise<TelegramStatus> => {
-    const { takeRate } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
     const { telegramUserApp } = await import("./config.server");
     const { sendLoginCode } = await import("./mtproto.server");
-    const { upsertLoginStart } = await import("./session.server");
+    const { upsertLoginStart, persistMappedError } = await import("./session.server");
     await takeRate(context.userId, "tg_login", 8, 15 * 60 * 1000);
     const parsed = parsedStartLogin(data, telegramUserApp());
-    const sent = await sendLoginCode(parsed);
+    let sent;
+    try {
+      sent = await sendLoginCode(parsed);
+    } catch (err) {
+      await persistMappedError(context.userId, err);
+      throw err;
+    }
     await upsertLoginStart({
       userId: context.userId,
       apiId: parsed.apiId,
@@ -133,11 +152,12 @@ export const telegramSubmitCodeFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(SubmitCodeSchema, input))
   .handler(async ({ context, data }): Promise<TelegramStatus> => {
-    const { takeRate, upsertLinkedAccount } = await import("./snapshot.server");
-    const { getUserSession, decryptSessionMaterial, saveSignedIn, markNeedsPassword } = await import(
+    const { upsertLinkedAccount } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
+    const { getUserSession, decryptSessionMaterial, saveSignedIn, markNeedsPassword, persistMappedError } = await import(
       "./session.server"
     );
-    const { signInWithCode, fetchMe } = await import("./mtproto.server");
+    const { signInWithCode } = await import("./mtproto.server");
     await takeRate(context.userId, "tg_code", 12, 15 * 60 * 1000);
     const row = await getUserSession(context.userId);
     if (!row) throw new TelegramError("invalid", "Start with your phone number first.", 400);
@@ -145,35 +165,39 @@ export const telegramSubmitCodeFn = createServerFn({ method: "POST" })
     if (!material.phoneCodeHash) {
       throw new TelegramError("telegram_login_expired", "That login code expired. Send a new one.", 401);
     }
-    const signed = await signInWithCode({
-      apiId: material.apiId,
-      apiHash: material.apiHash,
-      session: material.session,
-      phone: material.phone,
-      phoneCodeHash: material.phoneCodeHash,
-      code: data.code,
-    });
+    let signed;
+    try {
+      signed = await signInWithCode({
+        apiId: material.apiId,
+        apiHash: material.apiHash,
+        session: material.session,
+        phone: material.phone,
+        phoneCodeHash: material.phoneCodeHash,
+        code: data.code,
+      });
+    } catch (err) {
+      await persistMappedError(context.userId, err);
+      throw err;
+    }
     if (signed.needsPassword) {
       await markNeedsPassword(context.userId, signed.session);
       return buildStatus(context.userId);
     }
     await saveSignedIn({ userId: context.userId, session: signed.session });
-    const { me } = await fetchMe({
-      apiId: material.apiId,
-      apiHash: material.apiHash,
-      session: signed.session,
-    });
-    await upsertLinkedAccount({
-      userId: context.userId,
-      telegramUserId: me.telegramUserId,
-      firstName: me.firstName,
-      lastName: me.lastName,
-      username: me.username,
-      photoUrl: null,
-      botCanWrite: false,
-      path: "mtproto",
-      preview: false,
-    });
+    const me = signedMeOf(signed);
+    if (me) {
+      await upsertLinkedAccount({
+        userId: context.userId,
+        telegramUserId: me.telegramUserId,
+        firstName: me.firstName,
+        lastName: me.lastName,
+        username: me.username,
+        photoUrl: null,
+        botCanWrite: false,
+        path: "mtproto",
+        preview: false,
+      });
+    }
     return buildStatus(context.userId);
   });
 
@@ -181,36 +205,41 @@ export const telegramSubmitPasswordFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(SubmitPasswordSchema, input))
   .handler(async ({ context, data }): Promise<TelegramStatus> => {
-    const { takeRate, upsertLinkedAccount } = await import("./snapshot.server");
-    const { getUserSession, decryptSessionMaterial, saveSignedIn } = await import("./session.server");
-    const { signInCloudPassword, fetchMe } = await import("./mtproto.server");
+    const { upsertLinkedAccount } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
+    const { getUserSession, decryptSessionMaterial, saveSignedIn, persistMappedError } = await import("./session.server");
+    const { signInCloudPassword } = await import("./mtproto.server");
     await takeRate(context.userId, "tg_password", 8, 15 * 60 * 1000);
     const row = await getUserSession(context.userId);
     if (!row) throw new TelegramError("invalid", "Start with your phone number first.", 400);
     const material = await decryptSessionMaterial(row);
-    const signed = await signInCloudPassword({
-      apiId: material.apiId,
-      apiHash: material.apiHash,
-      session: material.session,
-      password: data.password,
-    });
+    let signed;
+    try {
+      signed = await signInCloudPassword({
+        apiId: material.apiId,
+        apiHash: material.apiHash,
+        session: material.session,
+        password: data.password,
+      });
+    } catch (err) {
+      await persistMappedError(context.userId, err);
+      throw err;
+    }
     await saveSignedIn({ userId: context.userId, session: signed.session });
-    const { me } = await fetchMe({
-      apiId: material.apiId,
-      apiHash: material.apiHash,
-      session: signed.session,
-    });
-    await upsertLinkedAccount({
-      userId: context.userId,
-      telegramUserId: me.telegramUserId,
-      firstName: me.firstName,
-      lastName: me.lastName,
-      username: me.username,
-      photoUrl: null,
-      botCanWrite: false,
-      path: "mtproto",
-      preview: false,
-    });
+    const me = signedMeOf(signed);
+    if (me) {
+      await upsertLinkedAccount({
+        userId: context.userId,
+        telegramUserId: me.telegramUserId,
+        firstName: me.firstName,
+        lastName: me.lastName,
+        username: me.username,
+        photoUrl: null,
+        botCanWrite: false,
+        path: "mtproto",
+        preview: false,
+      });
+    }
     return buildStatus(context.userId);
   });
 
@@ -219,7 +248,8 @@ export const telegramStartOidcFn = createServerFn({ method: "POST" })
   .handler(async ({ context }): Promise<{ url: string }> => {
     const { getRequest } = await import("@tanstack/react-start/server");
     const { telegramOidcConfig, telegramRedirectUri } = await import("./config.server");
-    const { takeRate, createOidcTicket } = await import("./snapshot.server");
+    const { createOidcTicket } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
     const { newOidcStart } = await import("./oidc");
     const cfg = telegramOidcConfig();
     if (!cfg) throw new TelegramError("not_configured", "Telegram connect isn’t configured.", 503);
@@ -241,7 +271,7 @@ export const telegramSaveKeyFn = createServerFn({ method: "POST" })
   .validator((input: unknown) => parseOrThrow(SaveKeySchema, input))
   .handler(async ({ context, data }): Promise<TelegramCredentialPublic> => {
     const { getRequest } = await import("@tanstack/react-start/server");
-    const { takeRate } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
     const { saveBotToken, toPublic } = await import("./credentials.server");
     await takeRate(context.userId, "save_key", 8, 15 * 60 * 1000);
     const request = getRequest();
@@ -255,7 +285,7 @@ export const telegramSaveKeyFn = createServerFn({ method: "POST" })
 export const telegramAwaitHelloFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<TelegramStatus> => {
-    const { takeRate } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
     const { refreshHelloPayload, pullUpdates } = await import("./credentials.server");
     await takeRate(context.userId, "hello_poll", 40, 60 * 1000);
     await refreshHelloPayload(context.userId);
@@ -271,7 +301,7 @@ export const telegramRunCheckFn = createServerFn({ method: "POST" })
     return { id };
   })
   .handler(async ({ context }): Promise<TelegramStatus> => {
-    const { takeRate } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
     const { runWatchChecks } = await import("./watch.server");
     await takeRate(context.userId, "check", 20, 60 * 1000);
     await runWatchChecks(context.userId);
@@ -281,7 +311,7 @@ export const telegramRunCheckFn = createServerFn({ method: "POST" })
 export const telegramRunAllChecksFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<TelegramStatus> => {
-    const { takeRate } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
     const { runWatchChecks } = await import("./watch.server");
     await takeRate(context.userId, "check_all", 10, 60 * 1000);
     await runWatchChecks(context.userId);
@@ -291,9 +321,8 @@ export const telegramRunAllChecksFn = createServerFn({ method: "POST" })
 export const telegramFinishOnboardingFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<TelegramSnapshot> => {
-    const { finishWatchOnboarding, syncWatch } = await import("./watch.server");
+    const { finishWatchOnboarding } = await import("./watch.server");
     await finishWatchOnboarding(context.userId);
-    await syncWatch(context.userId, { historyLimit: 20 }).catch(() => null);
     return buildSnapshot(context.userId);
   });
 
@@ -322,9 +351,10 @@ export const telegramMessagesFn = createServerFn({ method: "POST" })
       if (existing.length < 25) {
         const { getUserSession } = await import("./session.server");
         const session = await getUserSession(context.userId);
+        if (session?.auth_dead) return existing;
         if (session?.session_enc && session.watching) {
           try {
-            const { takeRate } = await import("./snapshot.server");
+            const { takeRate } = await import("./rate.server");
             await takeRate(context.userId, "tg_history", 12, 15 * 60 * 1000);
             const { syncWatch } = await import("./watch.server");
             await syncWatch(context.userId, { chatId: data.chatId, historyLimit: 50 });
@@ -343,10 +373,11 @@ export const telegramSendFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(SendSchema, input))
   .handler(async ({ context, data }): Promise<TelegramMessage> => {
-    const { takeRate, sendNote, getAccount, getChatKind, getChatPeer, appendMessage } = await import(
+    const { sendNote, getAccount, getChatKind, getChatPeer, appendMessage } = await import(
       "./snapshot.server"
     );
-    await takeRate(context.userId, "send", 60, 60 * 1000);
+    const { takeRate, takeUserSend } = await import("./rate.server");
+    await takeRate(context.userId, "send", 20, 60 * 1000);
     const account = await getAccount(context.userId);
     if (!account) throw new TelegramError("unlinked", "Connect Telegram first.", 404);
     const kind = await getChatKind(context.userId, data.chatId);
@@ -362,32 +393,52 @@ export const telegramSendFn = createServerFn({ method: "POST" })
       if (isServicePeer(peer.peerId)) {
         throw new TelegramError("invalid", "Telegram service chats are read-only here.", 400);
       }
-      const { getUserSession, decryptSessionMaterial, saveSignedIn } = await import("./session.server");
+      const {
+        getUserSession,
+        decryptSessionMaterial,
+        saveSignedIn,
+        assertSessionLive,
+        persistMappedError,
+      } = await import("./session.server");
       const { sendAsUser } = await import("./mtproto.server");
       const row = await getUserSession(context.userId);
-      if (!row?.session_enc || !peer?.peerId) {
+      assertSessionLive(row);
+      if (!row.session_enc || !peer?.peerId) {
         throw new TelegramError("invalid", "Connect your Telegram account first.", 400);
       }
-      const material = await decryptSessionMaterial(row);
-      const sent = await sendAsUser({
-        apiId: material.apiId,
-        apiHash: material.apiHash,
-        session: material.session,
-        peerId: peer.peerId,
-        body: data.body,
-      });
-      if (sent.session !== material.session) {
-        await saveSignedIn({ userId: context.userId, session: sent.session });
+      try {
+        await takeUserSend(context.userId);
+      } catch (err) {
+        if (err && typeof err === "object" && "code" in err) throw err;
       }
-      return appendMessage({
-        userId: context.userId,
-        chatId: data.chatId,
-        fromSelf: true,
-        authorName: account.displayName,
-        body: data.body,
-        telegramMessageId: sent.telegramMessageId,
-        aiStatus: "outbound",
-      });
+      const material = await decryptSessionMaterial(row);
+      const { withMtprotoLease } = await import("./lease.server");
+      try {
+        const sent = await withMtprotoLease(context.userId, () =>
+          sendAsUser({
+            apiId: material.apiId,
+            apiHash: material.apiHash,
+            session: material.session,
+            peerId: peer.peerId,
+            body: data.body,
+          }),
+        );
+        if (sent.session !== material.session) {
+          await saveSignedIn({ userId: context.userId, session: sent.session });
+        }
+        return appendMessage({
+          userId: context.userId,
+          chatId: data.chatId,
+          fromSelf: true,
+          authorName: account.displayName,
+          body: data.body,
+          telegramMessageId: sent.telegramMessageId,
+          aiStatus: "outbound",
+        });
+      } catch (err) {
+        await persistMappedError(context.userId, err);
+        throw err;
+      }
     }
     if (kind === "bot") {
       const { getDecryptedToken, getCredentialRow } = await import("./credentials.server");
@@ -412,7 +463,8 @@ export const telegramUpdateProfileFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(ProfileSchema, input))
   .handler(async ({ context, data }) => {
-    const { takeRate, updateReplicaProfile } = await import("./snapshot.server");
+    const { updateReplicaProfile } = await import("./snapshot.server");
+    const { takeRate } = await import("./rate.server");
     await takeRate(context.userId, "profile", 30, 60 * 1000);
     return updateReplicaProfile(context.userId, data);
   });
@@ -450,7 +502,7 @@ export const telegramSetWatchingFn = createServerFn({ method: "POST" })
     return buildSnapshot(context.userId);
   });
 
-export const telegramChatsFn = createServerFn({ method: "GET" })
+export const telegramChatsFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<TelegramChat[]> => {
     const { listChats } = await import("./snapshot.server");
@@ -460,39 +512,12 @@ export const telegramChatsFn = createServerFn({ method: "GET" })
 export const telegramSyncFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(SyncSchema, input ?? {}))
-  .handler(
-    async ({
-      context,
-      data,
-    }): Promise<{
-      chats: TelegramChat[];
-      messages: TelegramMessage[];
-      watch: TelegramSnapshot["watch"];
-    }> => {
-      const { getUserSession } = await import("./session.server");
-      const session = await getUserSession(context.userId);
-      if (session?.session_enc && session.watching) {
-        const { takeRate, listChats, listMessages } = await import("./snapshot.server");
-        try {
-          await takeRate(context.userId, "tg_sync", 20, 10 * 60 * 1000);
-          const { syncWatch } = await import("./watch.server");
-          const pulled = await syncWatch(context.userId, { chatId: data.chatId ?? null });
-          return { ...pulled, watch: (await buildSnapshot(context.userId)).watch };
-        } catch {
-          const chats = await listChats(context.userId);
-          const messages = data.chatId ? await listMessages(context.userId, data.chatId) : [];
-          return { chats, messages, watch: (await buildSnapshot(context.userId)).watch };
-        }
-      }
-      try {
-        const { pullUpdates } = await import("./credentials.server");
-        await pullUpdates(context.userId);
-      } catch {
-        /* no helper key */
-      }
-      const { listChats, listMessages } = await import("./snapshot.server");
-      const chats = await listChats(context.userId);
-      const messages = data.chatId ? await listMessages(context.userId, data.chatId) : [];
-      return { chats, messages, watch: (await buildSnapshot(context.userId)).watch };
-    },
-  );
+  .handler(async ({ context, data }) => {
+    const { takeRate } = await import("./rate.server");
+    await takeRate(context.userId, "tg_sync", 8, 60 * 1000);
+    const { syncWatch } = await import("./watch.server");
+    return syncWatch(context.userId, {
+      chatId: data.chatId,
+      historyLimit: data.historyLimit,
+    });
+  });

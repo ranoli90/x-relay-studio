@@ -1,15 +1,14 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { auth } from "@/lib/auth/server";
+import { parsePhotoPeer } from "@/lib/telegram/photo-peer";
 
 export const Route = createFileRoute("/api/telegram/photo")({
   server: {
     handlers: {
       GET: async ({ request }) => {
         const url = new URL(request.url);
-        const peer = url.searchParams.get("p")?.trim() ?? "";
-        if (!peer || peer.length > 40 || !/^[0-9-]+$/.test(peer)) {
-          return new Response(null, { status: 404 });
-        }
+        const peer = parsePhotoPeer(url.searchParams.get("p"));
+        if (!peer) return new Response(null, { status: 404 });
         const session = await auth.api.getSession({ headers: request.headers });
         const userId = session?.user?.id ?? null;
         if (!userId) return new Response(null, { status: 401 });

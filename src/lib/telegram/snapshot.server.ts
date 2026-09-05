@@ -75,27 +75,7 @@ export function mapAccount(row: AccountRow): TelegramAccount {
   };
 }
 
-export async function takeRate(
-  userId: string,
-  kind: string,
-  limit: number,
-  windowMs: number,
-): Promise<void> {
-  const sql = await getSql();
-  const since = new Date(Date.now() - windowMs).toISOString();
-  await sql.query(`delete from telegram_rate_events where at < $1`, [
-    new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString(),
-  ]);
-  await sql.query(`insert into telegram_rate_events (user_id, kind) values ($1, $2)`, [userId, kind]);
-  const rows = await sql.query<{ n: number }>(
-    `select count(*)::int as n from telegram_rate_events where user_id = $1 and kind = $2 and at >= $3`,
-    [userId, kind, since],
-  );
-  if ((rows[0]?.n ?? 0) > limit) {
-    const wait = Math.max(1, Math.ceil(windowMs / 1000));
-    throw new TelegramError("flood", `Telegram asked us to wait ${wait} seconds.`, 429, wait);
-  }
-}
+export { takeRate } from "./rate.server";
 
 const ACCOUNT_COLS = `telegram_user_id, username, first_name, last_name, photo_url, auth_date, path,
             bot_can_write, preview, replica_first_name, replica_last_name, replica_about, replica_username`;
