@@ -3,8 +3,11 @@ const APP_VERSION = "v0.2.0";
 
 export function deskParts(deskNumber: string) {
   const d = deskNumber.replace(/\D/g, "");
-  const head = d.slice(0, 4) || "1000";
-  const tail = d.slice(-4) || "0001";
+  if (d.length < 8) {
+    throw new Error("A desk number is required before naming a Reddit app.");
+  }
+  const head = d.slice(0, 4);
+  const tail = d.slice(-4);
   return { head, tail, digits: d };
 }
 
@@ -36,8 +39,14 @@ export function assertSafeAppName(name: string) {
 }
 
 export function userAgentFor(redditUsername: string, appId: string) {
-  const handle = redditUsername.replace(/^u\//, "").trim() || "unknown";
-  const id = appId.replace(/[^a-z0-9._-]/gi, "") || "desk.mail";
+  const handle = redditUsername.replace(/^u\//, "").trim();
+  if (!handle) {
+    throw new Error("A Reddit username is required before calling the Data API.");
+  }
+  const id = appId.replace(/[^a-z0-9._-]/gi, "");
+  if (!id) {
+    throw new Error("A Reddit app id is required before calling the Data API.");
+  }
   assertSafeAppName(id);
   return `web:${id}:${APP_VERSION} (by /u/${handle})`;
 }

@@ -19,3 +19,15 @@ jobs:
       - run: node scripts/check-migration-unique.mjs
       - run: npm test
       - run: npx tsc --noEmit
+
+  smoke:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node scripts/deploy-smoke.mjs https://x-relay-studio-puce.vercel.app
