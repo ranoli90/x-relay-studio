@@ -146,7 +146,12 @@ export async function botSetWebhook(
       drop_pending_updates: false,
     });
     return true;
-  } catch {
+  } catch (err) {
+    if (err instanceof TelegramError && err.code === "flood") throw err;
+    console.info("[telegram]", {
+      event: "set_webhook_failed",
+      message: err instanceof Error ? err.message.slice(0, 160) : "fail",
+    });
     return false;
   }
 }
