@@ -1,47 +1,25 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import type { TelegramAccount, TelegramWatch } from "@/lib/telegram/types";
 
 export function SettingsPane({
   account,
   watch,
   notify,
-  saving,
   onNotify,
   onWatching,
-  onSaveOpenRouter,
   onBack,
   onUnlink,
 }: {
   account: TelegramAccount;
   watch?: TelegramWatch | null;
   notify: boolean;
-  saving: boolean;
   onNotify: (on: boolean) => void;
   onWatching: (on: boolean) => void;
-  onSaveOpenRouter: (key: string) => Promise<void>;
   onBack: () => void;
   onUnlink: () => void;
 }) {
-  const [orKey, setOrKey] = useState("");
-  const [orErr, setOrErr] = useState<string | null>(null);
-  const [orBusy, setOrBusy] = useState(false);
-
-  async function saveKey() {
-    setOrBusy(true);
-    setOrErr(null);
-    try {
-      await onSaveOpenRouter(orKey);
-      setOrKey("");
-    } catch (e: unknown) {
-      setOrErr(e instanceof Error ? e.message : "Could not save that key.");
-    } finally {
-      setOrBusy(false);
-    }
-  }
-
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg-secondary)] text-[var(--tg-text)]">
       <header className="flex h-14 shrink-0 items-center gap-1 px-2">
@@ -102,34 +80,8 @@ export function SettingsPane({
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
           <h3 className="text-sm font-medium">OpenRouter</h3>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
-            {watch?.openRouterReady
-              ? "Key is saved and tested. Nothing is sent until automation starts."
-              : "Paste your key so the decision layer can use it later. We only test it now."}
+            Already set for this product. Nothing is sent until you start automation.
           </p>
-          <form
-            className="mt-3 grid gap-2"
-            onSubmit={(e) => {
-              e.preventDefault();
-              void saveKey();
-            }}
-          >
-            <Input
-              value={orKey}
-              onChange={(e) => setOrKey(e.target.value)}
-              placeholder="sk-or-…"
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="OpenRouter API key"
-            />
-            {orErr ? <p className="text-xs text-down">{orErr}</p> : null}
-            <Button
-              type="submit"
-              size="sm"
-              disabled={orBusy || saving || orKey.trim().length < 8}
-            >
-              {orBusy ? "Testing…" : watch?.openRouterReady ? "Replace key" : "Save and test"}
-            </Button>
-          </form>
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
           <h3 className="text-sm font-medium">Devices</h3>
@@ -221,15 +173,20 @@ export function UnlinkDialog({
           Disconnect Telegram?
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-muted">
-          This desk copy is deleted. Revoke the device in Telegram if you want the session gone
-          there too.
+          Disconnect Telegram. This studio copy is deleted. Also revoke the device in Telegram if
+          you want the session gone there too.
         </p>
-        <div className="mt-5 grid grid-cols-2 gap-2">
-          <Button type="button" variant="secondary" onClick={onCancel} disabled={busy}>
-            Cancel
-          </Button>
-          <Button type="button" onClick={onConfirm} disabled={busy}>
+        <div className="mt-5 grid gap-2">
+          <Button type="button" className="h-12 w-full justify-center" disabled={busy} onClick={onConfirm}>
             {busy ? "Disconnecting…" : "Disconnect"}
+          </Button>
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-12 w-full justify-center"
+            onClick={onCancel}
+          >
+            Cancel
           </Button>
         </div>
       </div>

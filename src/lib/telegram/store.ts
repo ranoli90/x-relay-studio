@@ -3,7 +3,6 @@ import {
   telegramEnterPreviewFn,
   telegramMeFn,
   telegramMessagesFn,
-  telegramSaveOpenRouterFn,
   telegramSendFn,
   telegramSetWatchingFn,
   telegramSyncFn,
@@ -50,7 +49,6 @@ type TelegramState = {
   }) => Promise<void>;
   unlink: () => Promise<void>;
   setWatching: (watching: boolean) => Promise<void>;
-  saveOpenRouter: (key: string) => Promise<void>;
 };
 
 function isAuthError(err: unknown): boolean {
@@ -265,20 +263,6 @@ export const useTelegram = create<TelegramState>((set, get) => ({
       set({ snapshot });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Could not change watching." });
-    }
-  },
-
-  saveOpenRouter: async (key) => {
-    set({ saving: true, error: null });
-    try {
-      const snapshot = await telegramSaveOpenRouterFn({ data: { key } });
-      set({ snapshot, saving: false });
-    } catch (err) {
-      set({
-        saving: false,
-        error: err instanceof Error ? err.message : "Could not save that OpenRouter key.",
-      });
-      throw err;
     }
   },
 }));

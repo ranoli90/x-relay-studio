@@ -14,7 +14,6 @@ import type {
 } from "./types";
 import {
   MessagesSchema,
-  OpenRouterKeySchema,
   PreviewNameSchema,
   ProfileSchema,
   SaveKeySchema,
@@ -407,21 +406,6 @@ export const telegramSetWatchingFn = createServerFn({ method: "POST" })
   .handler(async ({ context, data }): Promise<TelegramSnapshot> => {
     const { setWatching } = await import("./session.server");
     await setWatching(context.userId, data.watching);
-    return buildSnapshot(context.userId);
-  });
-
-export const telegramSaveOpenRouterFn = createServerFn({ method: "POST" })
-  .middleware([authMiddleware])
-  .validator((input: unknown) => parseOrThrow(OpenRouterKeySchema, input))
-  .handler(async ({ context, data }): Promise<TelegramSnapshot> => {
-    const { takeRate } = await import("./snapshot.server");
-    const { getUserSession, saveOpenRouterKey } = await import("./session.server");
-    const { testOpenRouterKey } = await import("./openrouter-user.server");
-    await takeRate(context.userId, "or_key", 8, 15 * 60 * 1000);
-    const row = await getUserSession(context.userId);
-    if (!row) throw new TelegramError("invalid", "Connect Telegram first.", 400);
-    await testOpenRouterKey(data.key);
-    await saveOpenRouterKey(context.userId, data.key);
     return buildSnapshot(context.userId);
   });
 

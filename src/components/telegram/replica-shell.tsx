@@ -31,7 +31,6 @@ export function ReplicaShell() {
   const setNotify = useTelegram((s) => s.setNotify);
   const saveProfile = useTelegram((s) => s.saveProfile);
   const setWatching = useTelegram((s) => s.setWatching);
-  const saveOpenRouter = useTelegram((s) => s.saveOpenRouter);
   const unlink = useTelegram((s) => s.unlink);
   const { query, setQuery } = useChatQuery();
   const [confirmUnlink, setConfirmUnlink] = useState(false);
@@ -91,10 +90,8 @@ export function ReplicaShell() {
       account={account}
       watch={watch}
       notify={notify}
-      saving={saving}
       onNotify={setNotify}
       onWatching={(on) => void setWatching(on)}
-      onSaveOpenRouter={(key) => saveOpenRouter(key)}
       onBack={() => setView("profile")}
       onUnlink={requestUnlink}
     />
