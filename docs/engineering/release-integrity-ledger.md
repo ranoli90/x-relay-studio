@@ -3,7 +3,8 @@
 **Repository:** `ranoli90/x-relay-studio`  
 **Baseline SHA:** `ffa219de7a7916e295b07a1e3d3086eb17b30d24` (main at start of this work)  
 **Branch:** `fix/containment-f01-f03`  
-**This commit:** (tip of `fix/containment-f01-f03`; recorded in the PR)  
+**This commit:** `6f710cd40dd066d296b6cae6686a562c79577fd8`  
+**PR:** [ranoli90/x-relay-studio#14](https://github.com/ranoli90/x-relay-studio/pull/14)  
 **Mode:** Implementation. No production deploy, live Telegram/X send, or customer charge.
 
 ## Outcome labels
