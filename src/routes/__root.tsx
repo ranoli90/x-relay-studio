@@ -2,6 +2,7 @@ import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-r
 import { createServerFn } from "@tanstack/react-start";
 import { Toaster } from "sonner";
 import { PreviewHostBridge } from "@/components/preview-host-bridge";
+import { NavVeil } from "@/components/screen-stack";
 import { AuthProvider } from "@/lib/auth/provider";
 import appCss from "../styles.css?url";
 
@@ -15,6 +16,7 @@ const fetchSessionUser = createServerFn({ method: "GET" }).handler(async () => {
 
 export const Route = createRootRoute({
   beforeLoad: async () => ({ sessionUser: await fetchSessionUser() }),
+  staleTime: 60_000,
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -50,6 +52,7 @@ export const Route = createRootRoute({
         <AuthProvider>
           <Outlet />
         </AuthProvider>
+        <NavVeil />
         <Toaster
           theme="dark"
           position="bottom-right"

@@ -14,8 +14,10 @@ import {
 
 export function AnonymousDesk({
   onReady,
+  onBegin,
 }: {
   onReady: (deskNumber: string) => void;
+  onBegin?: () => void;
 }) {
   const [mode, setMode] = useState<"home" | "created" | "return">("home");
   const [number, setNumber] = useState("");
@@ -23,25 +25,33 @@ export function AnonymousDesk({
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   async function create() {
+    onBegin?.();
     setBusy(true);
     setError(null);
+    const deskNumber = generateDeskNumber();
+    let minted = false;
     try {
-      const deskNumber = generateDeskNumber();
       const email = deskEmail(deskNumber);
       const { error: signError } = await authClient.signUp.email({
         email,
         password: deskNumber,
         name: "Desk",
-        rememberMe: true,
       });
       if (signError) throw new Error(signError.message ?? "Could not open a desk.");
+      minted = true;
+      setNumber(deskNumber);
       await authClient.getSession();
       const desk = await openDesk({ data: { deskNumber } });
       setNumber(desk.deskNumber);
       setMode("created");
     } catch (e) {
+      if (minted) {
+        setNumber(deskNumber);
+        setMode("created");
+      }
       setError(e instanceof Error ? e.message : "Could not open a desk.");
     } finally {
       setBusy(false);
@@ -56,10 +66,10 @@ export function AnonymousDesk({
       if (!isDeskNumber(deskNumber)) {
         throw new Error("A desk number is 16 digits.");
       }
+      onBegin?.();
       const { error: signError } = await authClient.signIn.email({
         email: deskEmail(deskNumber),
         password: deskNumber,
-        rememberMe: true,
       });
       if (signError) throw new Error("No desk with that number.");
       await authClient.getSession();
@@ -70,6 +80,12 @@ export function AnonymousDesk({
     } finally {
       setBusy(false);
     }
+  }
+
+  async function copyNumber(value: string) {
+    await navigator.clipboard.writeText(formatDeskNumber(value));
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1600);
   }
 
   return (
@@ -140,9 +156,9 @@ export function AnonymousDesk({
                 size="sm"
                 className="mt-4"
                 type="button"
-                onClick={() => void navigator.clipboard.writeText(formatDeskNumber(number))}
+                onClick={() => void copyNumber(number)}
               >
-                Copy
+                {copied ? "Copied" : "Copy"}
               </Button>
             </div>
             <label className="mt-6 flex cursor-pointer items-start gap-3 text-sm text-muted">
@@ -216,11 +232,12 @@ export function BindDesk({
   const [error, setError] = useState<string | null>(null);
   const [number, setNumber] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [copied, setCopied] = useState(false);
 
   if (number) {
     return (
       <main className="grid min-h-dvh place-items-center bg-bg px-4 py-10 text-fg">
-        <div className="page-enter w-full max-w-md">
+        <div className="w-full max-w-md">
           <Logo />
           <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">X Relay</p>
           <h1 className="mt-3 text-3xl font-medium tracking-tight">This is your desk. Save it now.</h1>
@@ -235,9 +252,14 @@ export function BindDesk({
               size="sm"
               className="mt-4"
               type="button"
-              onClick={() => void navigator.clipboard.writeText(formatDeskNumber(number))}
+              onClick={() => {
+                void navigator.clipboard.writeText(formatDeskNumber(number)).then(() => {
+                  setCopied(true);
+                  window.setTimeout(() => setCopied(false), 1600);
+                });
+              }}
             >
-              Copy
+              {copied ? "Copied" : "Copy"}
             </Button>
           </div>
           <label className="mt-6 flex cursor-pointer items-start gap-3 text-sm text-muted">
@@ -259,7 +281,7 @@ export function BindDesk({
 
   return (
     <main className="grid min-h-dvh place-items-center bg-bg px-4 py-10 text-fg">
-      <div className="page-enter w-full max-w-md">
+      <div className="w-full max-w-md">
         <Logo />
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">X Relay</p>
         <h1 className="mt-3 text-3xl font-medium tracking-tight">This is your account with us.</h1>

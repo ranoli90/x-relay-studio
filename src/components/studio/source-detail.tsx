@@ -25,7 +25,9 @@ export function SourceDetail() {
     if (sourceId) void loadPosts(sourceId, 0);
   }, [sourceId, loadPosts]);
 
-  if (!source) return null;
+  if (!source) {
+    return <div className="h-full min-h-0 flex-1 bg-bg" />;
+  }
 
   const media = posts.flatMap((p) => p.media.map((m) => ({ ...m, post: p })));
 
@@ -43,7 +45,7 @@ export function SourceDetail() {
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <div className="flex h-full min-h-0 flex-1 flex-col overflow-hidden bg-bg">
       <div className="border-b border-border px-4 py-4 sm:px-6">
         <button
           type="button"
@@ -120,7 +122,7 @@ export function SourceDetail() {
         </div>
       </div>
 
-      <div key={pane} className="page-enter min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+      <div className="min-h-0 flex-1 overflow-y-auto bg-bg px-4 py-4 sm:px-6">
         {pane === "voice" && (
           <div className="max-w-2xl">
             <p className="text-sm text-muted">

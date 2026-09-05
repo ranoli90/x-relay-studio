@@ -25,12 +25,14 @@ export function parseHandles(raw: string): string[] {
 
 export function guessHandle(displayName: string | null, email: string | null): string {
   const name = (displayName ?? "").trim();
-  if (name) {
+  if (name && name.toLowerCase() !== "desk") {
     const fromAt = extractHandle(name.startsWith("@") ? name : `@${name}`);
     if (fromAt && !name.includes(" ")) return fromAt;
   }
   const local = (email ?? "").split("@")[0] ?? "";
-  if (HANDLE_RE.test(local)) return local;
+  if (HANDLE_RE.test(local) && !/^\d+$/.test(local) && !local.toLowerCase().startsWith("desk")) {
+    return local;
+  }
   return "";
 }
 

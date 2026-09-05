@@ -6,6 +6,7 @@ import { UserButton } from "@/lib/auth/gates";
 import type { RedditAccountPublic } from "@/lib/reddit/types";
 import { disconnectAccount, runHealthCheck } from "@/lib/reddit/server";
 import { Button } from "@/components/ui/button";
+import { PushScreen } from "@/components/screen-stack";
 import { AddAccount } from "./add-account";
 import { InboxView } from "./inbox-view";
 import { cn } from "@/lib/utils";
@@ -36,26 +37,6 @@ export function Dashboard({
     }
   }, [account?.createdUtc]);
 
-  if (adding) {
-    return (
-      <div className="min-h-dvh bg-bg">
-        <Topbar />
-        <AddAccount
-          additional
-          onConnected={() => {
-            setAdding(false);
-            onChanged();
-          }}
-        />
-        <div className="mx-auto max-w-xl px-5 pb-12">
-          <Button variant="ghost" type="button" onClick={() => setAdding(false)}>
-            Cancel
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
   if (!account) {
     return (
       <div className="min-h-dvh bg-bg">
@@ -66,7 +47,7 @@ export function Dashboard({
   }
 
   return (
-    <div className="flex min-h-dvh flex-col bg-bg">
+    <div className="relative flex min-h-dvh flex-col bg-bg">
       <Topbar />
       <div className="mx-auto flex w-full max-w-[1400px] flex-1 flex-col md:flex-row">
         <aside className="border-b border-line md:w-64 md:border-r md:border-b-0">
@@ -158,8 +139,7 @@ export function Dashboard({
                 <p className="font-mono text-[11px] uppercase tracking-widest text-subtle">Last health</p>
                 <Button
                   type="button"
-                  variant="ghost"
-                  size="sm"
+                  variant="ghost" size="sm"
                   disabled={healthBusy}
                   onClick={() => {
                     setHealthBusy(true);
@@ -185,6 +165,23 @@ export function Dashboard({
           <InboxView accountId={account.id} onUnread={onUnread} />
         </main>
       </div>
+      <PushScreen open={adding} className="bg-bg" z={20}>
+        <div className="min-h-dvh overflow-y-auto bg-bg">
+          <Topbar />
+          <AddAccount
+            additional
+            onConnected={() => {
+              setAdding(false);
+              onChanged();
+            }}
+          />
+          <div className="mx-auto max-w-xl px-5 pb-12">
+            <Button variant="ghost" type="button" onClick={() => setAdding(false)}>
+              Cancel
+            </Button>
+          </div>
+        </div>
+      </PushScreen>
     </div>
   );
 }

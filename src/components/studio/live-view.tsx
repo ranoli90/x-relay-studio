@@ -64,10 +64,20 @@ export function LiveView() {
     toast.success(`Opened ${batch.length} draft${batch.length === 1 ? "" : "s"} on X.`);
   }
 
-  if (!publisher) return null;
+  if (!publisher) {
+    return (
+      <div className="flex min-h-0 flex-1 flex-col justify-center bg-bg px-4 py-10 sm:px-6">
+        <p className="font-mono text-xs uppercase tracking-widest text-subtle">Live</p>
+        <h1 className="mt-2 text-2xl font-medium tracking-tight">Connect a posting account first.</h1>
+        <p className="mt-2 max-w-md text-sm leading-relaxed text-muted">
+          The watch list, drip, and queue all attach to who we’re posting as. Sources is the door for that.
+        </p>
+      </div>
+    );
+  }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto lg:flex-row">
+    <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-bg lg:flex-row">
       <section className="border-b border-border px-4 py-4 sm:px-6 lg:w-[22rem] lg:shrink-0 lg:border-b-0 lg:border-r">
         <p className="font-mono text-xs uppercase tracking-widest text-subtle">Master watch list</p>
         <h1 className="mt-1 text-2xl font-medium tracking-tight">Creators</h1>

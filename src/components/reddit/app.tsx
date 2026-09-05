@@ -6,22 +6,37 @@ import { AddAccount } from "./add-account";
 import { Dashboard } from "./dashboard";
 import { HealthConfirm } from "./health-confirm";
 import { SetupApp } from "./setup-app";
-import { Logo } from "@/components/logo";
-import { Skeleton } from "@/components/ui/skeleton";
+import { DoorSkeleton } from "@/components/screen-stack";
+
+type BootCache = {
+  app: RedditAppPublic;
+  accounts: RedditAccountPublic[];
+  pendingId: string | null;
+  addingFirst: boolean;
+};
+
+let bootCache: BootCache | null = null;
 
 export function RedditApp() {
-  const [loading, setLoading] = useState(true);
-  const [app, setApp] = useState<RedditAppPublic | null>(null);
-  const [accounts, setAccounts] = useState<RedditAccountPublic[]>([]);
-  const [pendingId, setPendingId] = useState<string | null>(null);
-  const [addingFirst, setAddingFirst] = useState(false);
+  const [loading, setLoading] = useState(!bootCache);
+  const [app, setApp] = useState<RedditAppPublic | null>(bootCache?.app ?? null);
+  const [accounts, setAccounts] = useState<RedditAccountPublic[]>(bootCache?.accounts ?? []);
+  const [pendingId, setPendingId] = useState<string | null>(bootCache?.pendingId ?? null);
+  const [addingFirst, setAddingFirst] = useState(bootCache?.addingFirst ?? false);
 
   const reload = useCallback(async () => {
     const boot = await getBootstrap();
+    const addingFirstNext = boot.app.configured && boot.accounts.length === 0;
+    bootCache = {
+      app: boot.app,
+      accounts: boot.accounts,
+      pendingId: boot.pendingAccountId,
+      addingFirst: addingFirstNext,
+    };
     setApp(boot.app);
     setAccounts(boot.accounts);
     setPendingId(boot.pendingAccountId);
-    setAddingFirst(boot.app.configured && boot.accounts.length === 0);
+    setAddingFirst(addingFirstNext);
     setLoading(false);
   }, []);
 
@@ -30,13 +45,7 @@ export function RedditApp() {
   }, [reload]);
 
   if (loading || !app) {
-    return (
-      <div className="min-h-dvh bg-bg px-5 py-10">
-        <Logo />
-        <Skeleton className="mt-8 h-8 w-48" />
-        <Skeleton className="mt-4 h-28 w-full max-w-xl" />
-      </div>
-    );
+    return <DoorSkeleton />;
   }
 
   if (!app.configured) return <SetupApp onSaved={() => void reload()} />;

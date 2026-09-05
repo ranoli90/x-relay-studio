@@ -3,6 +3,7 @@ import { Download, Plus, Radio, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { InspectView } from "@/components/inspect-view";
 import { Logo } from "@/components/logo";
+import { PushScreen } from "@/components/screen-stack";
 import { ConnectPublisher } from "@/components/studio/connect-publisher";
 import { LiveView } from "@/components/studio/live-view";
 import { SourceDetail } from "@/components/studio/source-detail";
@@ -42,47 +43,53 @@ export function Studio() {
     };
   }, [pump]);
 
-  const viewKey = loading
-    ? "boot"
-    : publishers.length === 0 && tab === "sources"
-      ? "connect"
-      : tab === "inspect"
-        ? "inspect"
-        : tab === "live"
-          ? "live"
-        : (selectedSourceId ?? "sources");
-
   return (
     <div className="flex h-dvh overflow-hidden bg-bg text-fg">
       <Sidebar booting={loading} />
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-bg">
         <Header />
-        <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
-          <div key={viewKey} className="page-enter flex min-h-0 flex-1 flex-col">
-            {loading ? (
-              <MainSkeleton />
-            ) : publishers.length === 0 && tab === "sources" ? (
-              <div className="flex-1 overflow-y-auto px-4">
-                <ConnectPublisher />
+        <main className="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-bg">
+          {loading && publishers.length === 0 ? (
+            <MainSkeleton />
+          ) : publishers.length === 0 && tab === "sources" ? (
+            <div className="flex-1 overflow-y-auto px-4">
+              <ConnectPublisher />
+            </div>
+          ) : (
+            <>
+              <div
+                className={cn(
+                  "min-h-0 flex-1 flex-col overflow-hidden bg-bg",
+                  tab === "inspect" ? "flex" : "hidden",
+                )}
+              >
+                <InspectView />
               </div>
-            ) : tab === "inspect" ? (
-              <InspectView />
-            ) : tab === "live" ? (
-              <LiveView />
-            ) : (
-              <SourcesPane />
-            )}
-          </div>
+              <div
+                className={cn(
+                  "min-h-0 flex-1 flex-col overflow-hidden bg-bg",
+                  tab === "live" ? "flex" : "hidden",
+                )}
+              >
+                <LiveView />
+              </div>
+              <div
+                className={cn(
+                  "relative min-h-0 flex-1 flex-col overflow-hidden bg-bg",
+                  tab === "sources" ? "flex" : "hidden",
+                )}
+              >
+                <SourceWorkspace />
+                <PushScreen open={Boolean(selectedSourceId)} className="bg-bg">
+                  {selectedSourceId ? <SourceDetail /> : null}
+                </PushScreen>
+              </div>
+            </>
+          )}
         </main>
       </div>
     </div>
   );
-}
-
-function SourcesPane() {
-  const selectedSourceId = useStudio((s) => s.selectedSourceId);
-  if (selectedSourceId) return <SourceDetail />;
-  return <SourceWorkspace />;
 }
 
 function Header() {
