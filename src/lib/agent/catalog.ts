@@ -30,8 +30,46 @@ export function formatUsd(cents: number): string {
 }
 
 export const DEFAULT_CATALOG: CatalogRow[] = [
-  { id: "sku_polaroid", sku: "polaroid_set", title: "Polaroid set", priceCents: 2500, rail: "stars", eligibility: "any" },
-  { id: "sku_vn", sku: "voice_note", title: "Voice note", priceCents: 4000, rail: "throne", eligibility: "any" },
-  { id: "sku_clip", sku: "custom_clip", title: "Custom clip", priceCents: 8000, rail: "throne", eligibility: "paid" },
-  { id: "sku_gfe", sku: "gfe_day", title: "GFE day", priceCents: 25000, rail: "throne", eligibility: "gfe" },
+  {
+    id: "sku_dropbox",
+    sku: "premade_dropbox",
+    title: "Premade dropbox",
+    priceCents: 8000,
+    rail: "throne",
+    eligibility: "any",
+  },
+  {
+    id: "sku_sexting",
+    sku: "sexting_session",
+    title: "Sexting",
+    priceCents: 6000,
+    rail: "throne",
+    eligibility: "any",
+  },
+  {
+    id: "sku_call",
+    sku: "video_call",
+    title: "Video call",
+    priceCents: 12000,
+    rail: "throne",
+    eligibility: "any",
+  },
+  {
+    id: "sku_clip",
+    sku: "custom_clip",
+    title: "Custom",
+    priceCents: 8000,
+    rail: "throne",
+    eligibility: "any",
+  },
+  {
+    id: "sku_gfe_week",
+    sku: "gfe_week",
+    title: "Weekly GFE",
+    priceCents: 15000,
+    rail: "throne",
+    eligibility: "gfe",
+  },
 ];
+
+export const RETIRED_SKUS = ["polaroid_set", "voice_note", "gfe_day"];
