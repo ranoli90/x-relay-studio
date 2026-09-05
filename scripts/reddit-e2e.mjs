@@ -107,7 +107,7 @@ async function uiFlow() {
       await browser.close();
       return;
     }
-  } else if (/sign up for reddit|create the app on the developer|allow with the warmed-up/i.test(await page.locator("body").innerText())) {
+  } else if (/flip reddit|sign up for reddit|create the app on the developer|allow with the warmed-up/i.test(await page.locator("body").innerText())) {
     pass("tile", "Already on Reddit setup");
   } else {
     fail("tile", `Unexpected screen: ${(await page.locator("body").innerText()).slice(0, 180)}`);
@@ -115,7 +115,7 @@ async function uiFlow() {
     return;
   }
 
-  await page.getByText(/sign up for reddit|allow with the warmed-up|create the app on the developer/i).waitFor({ timeout: 15000 });
+  await page.getByText(/flip reddit|sign up for reddit|allow with the warmed-up|create the app on the developer/i).waitFor({ timeout: 15000 });
   await page.screenshot({ path: `${DIR}/04-setup.png` });
   const terms = await page.locator("body").innerText();
 
@@ -141,9 +141,16 @@ async function uiFlow() {
     pass("live-reddit-check", "n/a");
     pass("secret-masked", "n/a");
   } else {
-    const form = page.getByRole("link", { name: /data api signup form/i });
-    if (await form.count()) pass("copy-data-api-form", "Data API signup form is linked");
+    const form = page.getByRole("link", { name: /the data api request/i });
+    if (await form.count()) pass("copy-data-api-form", "Data API request is linked");
     else fail("copy-data-api-form", "missing form link");
+    if (/I'm a Developer/.test(terms)) pass("copy-im-a-developer", "first dropdown copy is on screen");
+    else fail("copy-im-a-developer", "missing I'm a Developer");
+    if (/I want to register to use the Reddit API/.test(terms)) {
+      pass("copy-register-slot", "second dropdown copy is on screen");
+    } else fail("copy-register-slot", "missing register slot");
+    if (/flag flipped|prefs\/apps is unlocked/i.test(terms)) pass("copy-flag", "unlock check is on screen");
+    else fail("copy-flag", "missing unlock");
     if (/Reddit Relay/i.test(terms)) fail("no-reddit-relay-name", "old name Reddit Relay still on screen");
     else pass("no-reddit-relay-name", "app name is not Reddit Relay");
     if (/Desk \d{4} \d{4} mail/.test(terms)) pass("copy-desk-name", "unique per-desk app name");
@@ -163,12 +170,14 @@ async function uiFlow() {
     await page.getByRole("button", { name: /continue to create app/i }).click();
     await page.waitForTimeout(400);
     const blocked = await page.locator("body").innerText();
-    if (/read the terms and submit/i.test(blocked)) pass("terms-gated", "cannot skip Data API signup");
-    else fail("terms-gated", blocked.slice(0, 200));
+    if (/read the terms|prefs\/apps is unlocked/i.test(blocked) && !/create the app on the developer/i.test(blocked)) {
+      pass("terms-gated", "cannot skip Data API signup");
+    } else fail("terms-gated", blocked.slice(0, 200));
 
     const boxes = page.locator('input[type="checkbox"]');
     await boxes.nth(0).check();
     await boxes.nth(1).check();
+    await boxes.nth(2).check();
     await page.getByRole("button", { name: /continue to create app/i }).click();
     await page.getByText(/create the app on the developer/i).waitFor({ timeout: 10000 });
     await page.screenshot({ path: `${DIR}/05-create-app.png` });

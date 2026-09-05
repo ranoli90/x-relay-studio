@@ -29,6 +29,10 @@ const TERMS = [
 
 const FORM =
   "https://support.reddithelp.com/hc/en-us/requests/new?ticket_form_id=14868593862164";
+const POLICY =
+  "https://support.reddithelp.com/hc/en-us/articles/42728983564564-Responsible-Builder-Policy";
+const REGISTER_APPS = "https://developers.reddit.com/app-registration";
+const PREFS = "https://www.reddit.com/prefs/apps";
 
 export function SetupApp({ onSaved }: { onSaved: () => void }) {
   const [copy, setCopy] = useState<{
@@ -41,6 +45,7 @@ export function SetupApp({ onSaved }: { onSaved: () => void }) {
   const [stage, setStage] = useState<"terms" | "app">("terms");
   const [read, setRead] = useState(false);
   const [submitted, setSubmitted] = useState(false);
+  const [unlocked, setUnlocked] = useState(false);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [userAgentName, setUserAgentName] = useState("");
@@ -66,7 +71,7 @@ export function SetupApp({ onSaved }: { onSaved: () => void }) {
           clientSecret,
           userAgentName,
           origin: window.location.origin,
-          acceptedTerms: read && submitted,
+          acceptedTerms: read && submitted && unlocked,
         },
       });
       onSaved();
@@ -86,12 +91,14 @@ export function SetupApp({ onSaved }: { onSaved: () => void }) {
             copy={copy}
             read={read}
             submitted={submitted}
+            unlocked={unlocked}
             error={error}
             onRead={setRead}
             onSubmitted={setSubmitted}
+            onUnlocked={setUnlocked}
             onNext={() => {
-              if (!read || !submitted) {
-                setError("Read the terms and submit the Data API form before creating the app.");
+              if (!read || !submitted || !unlocked) {
+                setError("Read the terms, submit the form, and wait until prefs/apps is unlocked.");
                 return;
               }
               setError(null);
@@ -122,9 +129,11 @@ function Terms({
   copy,
   read,
   submitted,
+  unlocked,
   error,
   onRead,
   onSubmitted,
+  onUnlocked,
   onNext,
 }: {
   copy: {
@@ -133,9 +142,11 @@ function Terms({
   } | null;
   read: boolean;
   submitted: boolean;
+  unlocked: boolean;
   error: string | null;
   onRead: (v: boolean) => void;
   onSubmitted: (v: boolean) => void;
+  onUnlocked: (v: boolean) => void;
   onNext: () => void;
 }) {
   return (
@@ -144,13 +155,21 @@ function Terms({
         Step 1 of 4 · Data API
       </p>
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">
-        Sign up for Reddit’s Data API before you create the app.
+        Flip Reddit’s access flag before you create the app.
       </h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        Reddit requires this. Do it while logged into the{" "}
-        <span className="text-fg">developer account</span> — the one that will
-        own prefs/apps. That is not the bot. The warmed-up account comes later,
-        on Allow.
+        There is no Accept button on prefs/apps. Creating the first app is
+        locked until Reddit records this request. The switch is two dropdowns
+        on their form, word for word from{" "}
+        <a
+          className="text-fg underline decoration-line underline-offset-4"
+          href="https://www.reddit.com/r/reddit.com/wiki/api/"
+          target="_blank"
+          rel="noreferrer"
+        >
+          reddit.com/wiki/api
+        </a>
+        .
       </p>
 
       <ol className="mt-8 space-y-6 text-sm leading-relaxed">
@@ -172,41 +191,81 @@ function Terms({
           </ul>
         </li>
         <li className="space-y-3">
-          <p className="font-medium">2. Open the Data API request</p>
+          <p className="font-medium">2. Open this form. These two slots flip the flag.</p>
           <p className="text-muted">
-            Logged in as the developer account, open{" "}
+            Logged in as the <span className="text-fg">developer account</span>,
+            open{" "}
             <a
               className="text-fg underline decoration-line underline-offset-4"
               href={FORM}
               target="_blank"
               rel="noreferrer"
             >
-              Reddit’s Data API signup form
+              the Data API request
             </a>
-            . If it asks commercial vs non-commercial, pick{" "}
-            <span className="font-mono text-fg">non-commercial</span>.
+            . That is ticket form 14868593862164. Not Devvit. Not Ads.
           </p>
+          <CopyRow
+            label="First dropdown — pick exactly"
+            value="I'm a Developer"
+            hint="Not a moderator ticket. Not researcher. Not enterprise."
+          />
+          <CopyRow
+            label="Second dropdown — pick exactly"
+            value="I want to register to use the Reddit API."
+            hint="Including the period. This is the line Reddit’s wiki tells you to select."
+          />
           <CopyRow
             label="App name on the form"
             value={copy?.appLabel || "Loading this desk’s name…"}
-            hint="Do not type Reddit or Snoo in the name. Reddit forbids that."
+            hint="Do not type Reddit or Snoo in the name."
           />
           <CopyRow
-            label="Paste this as the use case"
+            label="Paste this as the use case / description"
             value={copy?.signupBlurb || "Loading…"}
           />
           <div className="rounded-md border border-line bg-lift p-4 text-xs leading-relaxed text-muted">
             <p className="font-mono text-[11px] tracking-[0.14em] text-muted uppercase">
-              Accounts
+              How you know the flag flipped
             </p>
             <p className="mt-2">
-              Developer account (this form + prefs/apps) ≠ the bot. The bot is
-              your warmed-up account. You Allow that one in a later step. Do not
-              submit this form as the bot.
+              Submit once. Do not open a second ticket for the same use. Wait
+              for Reddit’s reply.
             </p>
             <p className="mt-2">
-              You are not a moderator here. Regular public subreddits only, as a
-              normal user, when posting exists. Not a mod tool.
+              Then open{" "}
+              <a
+                className="text-fg underline decoration-line underline-offset-4"
+                href={PREFS}
+                target="_blank"
+                rel="noreferrer"
+              >
+                reddit.com/prefs/apps
+              </a>
+              . If create app still says{" "}
+              <span className="text-fg">
+                In order to create an application or use our API you can read
+                our full policies here
+              </span>{" "}
+              and links{" "}
+              <a
+                className="text-fg underline decoration-line underline-offset-4"
+                href={POLICY}
+                target="_blank"
+                rel="noreferrer"
+              >
+                the Responsible Builder Policy
+              </a>
+              , the flag is still off. Stop. Do not keep hitting create app.
+            </p>
+            <p className="mt-2">
+              Unlocked looks like: create an app… works, captcha, then a client
+              id appears. Creating the app is how you agree to the Developer
+              Terms and Data API Terms — there is no extra Accept button.
+            </p>
+            <p className="mt-2">
+              Developer account fills this form and owns prefs/apps. The
+              warmed-up account is Allowed later. Do not submit as the bot.
             </p>
           </div>
         </li>
@@ -228,7 +287,17 @@ function Terms({
           checked={submitted}
           onChange={(e) => onSubmitted(e.target.checked)}
         />
-        I submitted the Data API request from the developer account, not the bot.
+        I selected “I'm a Developer” and “I want to register to use the
+        Reddit API.” and submitted that form once.
+      </label>
+      <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-muted">
+        <input
+          type="checkbox"
+          className="mt-1 size-4 accent-fg"
+          checked={unlocked}
+          onChange={(e) => onUnlocked(e.target.checked)}
+        />
+        prefs/apps is unlocked. Create app no longer bounces to the policy page.
       </label>
       {error ? <p className="mt-4 text-sm leading-relaxed text-bad">{error}</p> : null}
       <Button className="mt-8 w-full" type="button" disabled={!copy} onClick={onNext}>
@@ -276,8 +345,10 @@ function CreateApp({
         Create the app on the developer account. Unique name. No “Reddit”.
       </h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        Stay logged into the same developer account you used on the Data API
-        form. Copy the name exactly — it is unique to this desk.
+        Stay logged into the same developer account. Copy the name exactly — it
+        is unique to this desk. Creating the app is Reddit’s terms agreement
+        (“By creating an app, you agree to Reddit’s Developer Terms and Data
+        API Terms”). There is no extra Accept button.
       </p>
 
       <ol className="mt-8 space-y-6 text-sm leading-relaxed">
@@ -326,7 +397,24 @@ function CreateApp({
           <p className="font-medium">3. Click create app, then paste</p>
           <p className="mt-1 text-muted">
             Client id is the short string under the app name. Secret is labeled
-            secret.
+            secret. If Reddit shows the policy page instead, the flag is still
+            off — go back.
+          </p>
+        </li>
+        <li>
+          <p className="font-medium">4. Register the app label (after it exists)</p>
+          <p className="mt-1 text-muted">
+            Reddit also wants existing Data API apps labeled. Open{" "}
+            <a
+              className="text-fg underline decoration-line underline-offset-4"
+              href={REGISTER_APPS}
+              target="_blank"
+              rel="noreferrer"
+            >
+              developers.reddit.com/app-registration
+            </a>
+            , click <span className="font-mono text-fg">Log in to Start Registration</span>,
+            and register this app from the same developer account.
           </p>
         </li>
       </ol>
