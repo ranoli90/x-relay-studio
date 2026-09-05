@@ -33,6 +33,7 @@ export function ReplicaShell() {
   const saveProfile = useTelegram((s) => s.saveProfile);
   const setWatching = useTelegram((s) => s.setWatching);
   const unlink = useTelegram((s) => s.unlink);
+  const clearError = useTelegram((s) => s.clearError);
   const { query, setQuery } = useChatQuery();
   const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [narrow, setNarrow] = useState(false);
@@ -81,6 +82,12 @@ export function ReplicaShell() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
+
+  useEffect(() => {
+    if (!error) return;
+    const id = window.setTimeout(() => clearError(), 4200);
+    return () => window.clearTimeout(id);
+  }, [error, clearError]);
 
   useEffect(() => {
     if (!narrow && account && !selectedChatId && chats[0]) {
@@ -286,7 +293,10 @@ export function ReplicaShell() {
           </div>
         )}
         {error ? (
-          <p className="absolute bottom-4 left-1/2 z-10 -translate-x-1/2 rounded-md border border-border bg-surface px-3 py-2 text-xs text-down">
+          <p
+            className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-md border border-border bg-surface px-3 py-2 text-xs text-down shadow-sm"
+            role="alert"
+          >
             {error}
           </p>
         ) : null}

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { TelegramError } from "./errors.ts";
 import { assertOidcPayload } from "./oidc-claims.ts";
+import { isServicePeer, redactPreview, redactSecretText } from "./preview.ts";
 import {
   ChatIdSchema,
   ProfileSchema,
@@ -86,5 +87,18 @@ describe("input schemas", () => {
     const picked = pickCredentialFields({ hello_at: "now", checks_json: "{}" });
     assert.equal(picked.hello_at, "now");
     assert.throws(() => pickCredentialFields({ user_id: "x" }), TelegramError);
+  });
+});
+
+describe("secret redaction", () => {
+  it("strips login codes from previews", () => {
+    assert.equal(redactPreview("Login code: 21786. Do not give this code"), "Login code. Do not give this code");
+    assert.equal(redactSecretText("Login code: 21786"), "Login code");
+  });
+
+  it("marks Telegram service peers", () => {
+    assert.equal(isServicePeer("777000"), true);
+    assert.equal(isServicePeer("42777"), true);
+    assert.equal(isServicePeer("6760046139"), false);
   });
 });

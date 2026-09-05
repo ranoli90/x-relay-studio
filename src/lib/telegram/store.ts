@@ -50,6 +50,7 @@ type TelegramState = {
   }) => Promise<void>;
   unlink: () => Promise<void>;
   setWatching: (watching: boolean) => Promise<void>;
+  clearError: () => void;
 };
 
 function isAuthError(err: unknown): boolean {
@@ -78,9 +79,10 @@ export const useTelegram = create<TelegramState>((set, get) => ({
   folder: "all",
   notify: readNotify(),
 
-  setView: (view) => set({ view }),
+  setView: (view) => set({ view, error: null }),
   setProfileOpen: (profileOpen) => set({ profileOpen }),
   setFolder: (folder) => set({ folder }),
+  clearError: () => set({ error: null }),
   setNotify: (on) => {
     if (typeof window !== "undefined") {
       window.localStorage.setItem("xrelay-tg-notify", on ? "1" : "0");

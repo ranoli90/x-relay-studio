@@ -49,6 +49,7 @@ export type TelegramChat = {
   unread: number;
   pinned: boolean;
   muted: boolean;
+  peerId: string | null;
 };
 
 export type TelegramMessage = {

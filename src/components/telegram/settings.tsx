@@ -124,7 +124,7 @@ export function SettingsPane({
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
           <h3 className="text-sm font-medium">Identity</h3>
           <p className="mt-2 font-mono text-xs text-[var(--tg-text-secondary)]">
-            telegram {account.telegramUserId}
+            Account {account.telegramUserId}
           </p>
         </section>
         <Button

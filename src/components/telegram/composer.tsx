@@ -50,7 +50,10 @@ export function Composer({
   return (
     <form
       className="shrink-0 border-t border-white/5 bg-[var(--tg-bg-secondary)] px-3 pt-2"
-      style={{ paddingBottom: `max(0.5rem, calc(env(safe-area-inset-bottom) + ${vv}px))` }}
+      style={{
+        paddingBottom:
+          vv > 0 ? `${vv + 8}px` : "max(0.5rem, env(safe-area-inset-bottom))",
+      }}
       onSubmit={(e) => {
         e.preventDefault();
         submit();

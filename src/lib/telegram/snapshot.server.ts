@@ -11,7 +11,7 @@ import type {
   TelegramAiStatus,
 } from "./types";
 import { assertBioLimit, clampBio, safeHttpUrl, sanitizeUsername } from "./validate";
-import { redactPreview } from "./preview";
+import { redactPreview, redactSecretText } from "./preview";
 
 function newId(prefix: string): string {
   return `${prefix}_${randomBytes(8).toString("hex")}`;
@@ -376,6 +376,7 @@ export async function listChats(userId: string): Promise<TelegramChat[]> {
     unread: row.unread,
     pinned: row.pinned,
     muted: row.muted,
+    peerId: row.peer_id,
   }));
 }
 
@@ -417,7 +418,7 @@ export async function listMessages(
     chatId: row.chat_id,
     fromSelf: row.from_self,
     authorName: row.author_name,
-    body: row.body,
+    body: redactSecretText(row.body),
     createdAt: iso(row.created_at) ?? new Date().toISOString(),
     status: row.status === "sending" ? "sending" : "sent",
   }));

@@ -57,14 +57,19 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
     });
     if (session !== material.session) await saveSignedIn({ userId, session });
 
+    const openId = opts?.chatId ?? null;
     for (const dialog of dialogs) {
       const chatId = scopedChatId(userId, dialog.chatId);
+      const open = Boolean(
+        openId &&
+          (openId === chatId || openId.endsWith(dialog.chatId) || openId.includes(dialog.peerId)),
+      );
       await upsertUserChat({
         id: chatId,
         userId,
         title: dialog.title,
         peerId: dialog.peerId,
-        unread: dialog.unread,
+        unread: open ? 0 : dialog.unread,
         pinned: dialog.pinned,
         muted: dialog.muted,
         lastPreview: redactPreview(dialog.lastPreview),

@@ -1,7 +1,7 @@
 import { Check, ChevronLeft } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { TelegramChat, TelegramMessage } from "@/lib/telegram/types";
-import { mediaLabel } from "@/lib/telegram/preview";
+import { mediaLabel, isServicePeer } from "@/lib/telegram/preview";
 import { cn } from "@/lib/utils";
 import { TgAvatar } from "./avatar";
 import { Composer } from "./composer";
@@ -42,7 +42,9 @@ export function Conversation({
     );
   }
 
-  const writable = chat.kind === "notes" || chat.kind === "user" || chat.kind === "bot";
+  const service = isServicePeer(chat.peerId);
+  const writable = !service && (chat.kind === "notes" || chat.kind === "user");
+  const showAuthor = chat.kind !== "user";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg)]">
@@ -69,8 +71,10 @@ export function Conversation({
               {chat.kind === "notes"
                 ? "Saved in this studio"
                 : chat.kind === "user"
-                  ? "Tap for info"
-                  : "Telegram"}
+                ? service
+                  ? "Telegram service"
+                  : "Tap for info"
+                : "Telegram"}
             </span>
           </span>
         </button>
@@ -83,7 +87,7 @@ export function Conversation({
             {chat.kind === "notes"
               ? "Studio notes live here. Telegram itself is unchanged."
               : chat.kind === "user"
-                ? "No messages pulled yet. Watching will fill this in."
+                ? "No messages in this thread yet."
                 : "No messages yet."}
           </p>
         ) : (
@@ -107,7 +111,7 @@ export function Conversation({
                         : "rounded-bl-md bg-[var(--tg-item-hover)] text-[var(--tg-text)]",
                     )}
                   >
-                    {!msg.fromSelf ? (
+                    {showAuthor && !msg.fromSelf ? (
                       <p className="mb-0.5 text-[length:var(--tg-fs-time)] font-medium text-[var(--tg-primary)]">
                         {msg.authorName}
                       </p>

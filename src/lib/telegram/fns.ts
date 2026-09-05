@@ -323,11 +323,15 @@ export const telegramMessagesFn = createServerFn({ method: "POST" })
         const { getUserSession } = await import("./session.server");
         const session = await getUserSession(context.userId);
         if (session?.session_enc && session.watching) {
-          const { takeRate } = await import("./snapshot.server");
-          await takeRate(context.userId, "tg_history", 12, 15 * 60 * 1000);
-          const { syncWatch } = await import("./watch.server");
-          await syncWatch(context.userId, { chatId: data.chatId, historyLimit: 50 }).catch(() => null);
-          return listMessages(context.userId, data.chatId);
+          try {
+            const { takeRate } = await import("./snapshot.server");
+            await takeRate(context.userId, "tg_history", 12, 15 * 60 * 1000);
+            const { syncWatch } = await import("./watch.server");
+            await syncWatch(context.userId, { chatId: data.chatId, historyLimit: 50 });
+            return listMessages(context.userId, data.chatId);
+          } catch {
+            return existing;
+          }
         }
       }
       return existing;
@@ -351,6 +355,13 @@ export const telegramSendFn = createServerFn({ method: "POST" })
     }
     if (kind === "user") {
       const peer = await getChatPeer(context.userId, data.chatId);
+      if (!peer?.peerId) {
+        throw new TelegramError("invalid", "Connect your Telegram account first.", 400);
+      }
+      const { isServicePeer } = await import("./preview");
+      if (isServicePeer(peer.peerId)) {
+        throw new TelegramError("invalid", "Telegram service chats are read-only here.", 400);
+      }
       const { getUserSession, decryptSessionMaterial, saveSignedIn } = await import("./session.server");
       const { sendAsUser } = await import("./mtproto.server");
       const row = await getUserSession(context.userId);
@@ -449,11 +460,17 @@ export const telegramSyncFn = createServerFn({ method: "POST" })
       const { getUserSession } = await import("./session.server");
       const session = await getUserSession(context.userId);
       if (session?.session_enc && session.watching) {
-        const { takeRate } = await import("./snapshot.server");
-        await takeRate(context.userId, "tg_sync", 20, 10 * 60 * 1000);
-        const { syncWatch } = await import("./watch.server");
-        const pulled = await syncWatch(context.userId, { chatId: data.chatId ?? null });
-        return { ...pulled, watch: (await buildSnapshot(context.userId)).watch };
+        const { takeRate, listChats, listMessages } = await import("./snapshot.server");
+        try {
+          await takeRate(context.userId, "tg_sync", 20, 10 * 60 * 1000);
+          const { syncWatch } = await import("./watch.server");
+          const pulled = await syncWatch(context.userId, { chatId: data.chatId ?? null });
+          return { ...pulled, watch: (await buildSnapshot(context.userId)).watch };
+        } catch {
+          const chats = await listChats(context.userId);
+          const messages = data.chatId ? await listMessages(context.userId, data.chatId) : [];
+          return { chats, messages, watch: (await buildSnapshot(context.userId)).watch };
+        }
       }
       try {
         const { pullUpdates } = await import("./credentials.server");

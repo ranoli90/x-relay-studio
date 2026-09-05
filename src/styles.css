@@ -146,9 +146,8 @@
   overscroll-behavior: contain;
 }
 
-.tg-replica ul {
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
+.tg-replica button {
+  -webkit-tap-highlight-color: transparent;
 }
 
 @media (prefers-reduced-motion: reduce) {

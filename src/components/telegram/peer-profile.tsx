@@ -1,22 +1,20 @@
 import { ChevronLeft } from "lucide-react";
-import type { TelegramChat, TelegramCredentialPublic } from "@/lib/telegram/types";
+import type { TelegramChat } from "@/lib/telegram/types";
+import { isServicePeer } from "@/lib/telegram/preview";
 import { TgAvatar } from "./avatar";
 
 export function PeerProfile({
   chat,
-  credential,
   showBack,
   onBack,
 }: {
   chat: TelegramChat;
-  credential?: TelegramCredentialPublic | null;
+  credential?: unknown;
   showBack: boolean;
   onBack: () => void;
 }) {
-  const helper = credential?.botUsername
-    ? `@${credential.botUsername}`
-    : credential?.botName ?? chat.title;
   const notes = chat.kind === "notes";
+  const service = isServicePeer(chat.peerId);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg-secondary)] text-[var(--tg-text)]">
@@ -39,15 +37,15 @@ export function PeerProfile({
           <TgAvatar name={chat.title} src={chat.photoUrl} size="lg" />
           <h2 className="mt-4 text-xl font-medium tracking-tight">{chat.title}</h2>
           <p className="mt-1 font-mono text-xs text-[var(--tg-text-secondary)]">
-            {notes ? "Studio notes" : chat.kind === "user" ? "Telegram" : helper}
+            {notes ? "Studio notes" : service ? "Telegram service" : "Telegram"}
           </p>
         </div>
         <p className="mt-6 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
           {notes
             ? "Saved in this studio. Your Telegram profile and chats were not changed."
-            : chat.kind === "user"
-              ? "This is a real chat from your Telegram. Messages here are yours. Watching stores them so automation can start later."
-              : "Private thread with your helper."}
+            : service
+              ? "Official Telegram messages. This thread is read-only here."
+              : "This is a real chat from your Telegram. Messages here are yours. Watching stores them so automation can start later."}
         </p>
       </div>
     </div>

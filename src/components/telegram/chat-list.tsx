@@ -91,7 +91,7 @@ export function ChatList({
         {visible.length === 0 ? (
           <li className="px-4 py-8 text-center text-sm text-[var(--tg-text-secondary)]">
             {chats.length === 0
-              ? "You’re connected. Private chats with other people stay in Telegram."
+              ? "No chats yet. Watching will fill this list."
               : folder !== "all"
                 ? "No chats in this folder."
                 : "No chats match."}
