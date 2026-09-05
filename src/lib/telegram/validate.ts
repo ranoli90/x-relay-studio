@@ -88,8 +88,12 @@ export function parsedStartLogin(
 } {
   const phone = normalizePhone(input.phone);
   if (!phone) throw new TelegramError("invalid", "Use a full phone number with country code.", 400);
-  const apiId = platform?.apiId ?? (input.apiId ? parseApiId(input.apiId) : null);
-  const apiHash = platform?.apiHash ?? (input.apiHash ? parseApiHash(input.apiHash) : null);
+  // Per-desk keys from my.telegram.org win. Platform env is only a fallback so
+  // every account does not cluster on one api_id from Vercel IPs.
+  const postedId = input.apiId ? parseApiId(input.apiId) : null;
+  const postedHash = input.apiHash ? parseApiHash(input.apiHash) : null;
+  const apiId = postedId ?? platform?.apiId ?? null;
+  const apiHash = postedHash ?? platform?.apiHash ?? null;
   if (!apiId || !apiHash) {
     throw new TelegramError(
       "not_configured",

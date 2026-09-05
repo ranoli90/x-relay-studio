@@ -5,6 +5,8 @@ export type TelegramErrorCode =
   | "telegram_denied"
   | "telegram_in_use"
   | "flood"
+  | "peer_flood"
+  | "auth_dead"
   | "invalid"
   | "unlinked"
   | "bad_key"
@@ -28,4 +30,8 @@ export class TelegramError extends Error {
 
 export function errorQuery(code: TelegramErrorCode): string {
   return `/telegram?error=${encodeURIComponent(code)}`;
+}
+
+export function isTerminalSessionError(code: TelegramErrorCode): boolean {
+  return code === "auth_dead" || code === "unlinked" || code === "peer_flood";
 }

@@ -17,6 +17,7 @@ import { decryptSecret, encryptSecret } from "./crypto.server.ts";
 import { TELEGRAM_APP_FORM, isUnsafePlatform, titleLooksOfficial } from "./app-form.ts";
 import { mergeOnboardingStep, parseOnboardingDraft } from "./onboarding-draft.ts";
 import { normalizePhone, parseApiHash, parseApiId } from "./phone.ts";
+import { parsedStartLogin } from "./validate.ts";
 
 describe("bot token", () => {
   it("accepts a BotFather-shaped key", () => {
@@ -78,6 +79,38 @@ describe("phone and app numbers", () => {
     assert.equal(parseApiId("12"), null);
     assert.equal(parseApiHash("0123456789abcdef0123456789abcdef"), "0123456789abcdef0123456789abcdef");
     assert.equal(parseApiHash("nope"), null);
+  });
+});
+
+describe("login key precedence", () => {
+  const platform = {
+    apiId: 111111,
+    apiHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  };
+  const desk = {
+    phone: "+15551234567",
+    apiId: "222222",
+    apiHash: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  };
+
+  it("uses the desk's own api_id when posted", () => {
+    const parsed = parsedStartLogin(desk, platform);
+    assert.equal(parsed.apiId, 222222);
+    assert.equal(parsed.apiHash, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+    assert.equal(parsed.phone, "+15551234567");
+  });
+
+  it("falls back to platform keys only when the desk omits them", () => {
+    const parsed = parsedStartLogin({ phone: "+15551234567" }, platform);
+    assert.equal(parsed.apiId, 111111);
+    assert.equal(parsed.apiHash, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+  });
+
+  it("rejects a login with neither desk nor platform keys", () => {
+    assert.throws(
+      () => parsedStartLogin({ phone: "+15551234567" }, null),
+      (err: Error) => err.name === "TelegramError",
+    );
   });
 });
 
