@@ -9,6 +9,7 @@ import { publicOrigin } from "./config.server";
 import { appendMessage, seedHelperChat, seedStudioNotes, upsertLinkedAccount } from "./snapshot.server";
 import type { TelegramCredentialPublic, TelegramOnboardingStep } from "./types";
 import { pickCredentialFields } from "./validate";
+import { hashWebhookSecret, looksHashedWebhookSecret } from "./webhook-secret";
 
 export type CredentialRow = {
   user_id: string;
@@ -46,6 +47,10 @@ function freshPayload(): { payload: string; exp: string } {
   };
 }
 
+const CRED_COLS = `user_id, bot_token_enc, bot_id, bot_username, bot_name, token_hint,
+            start_payload, start_payload_exp, webhook_secret, webhook_active,
+            last_update_id, hello_at, checks_json, onboarded_at`;
+
 export function deriveStep(row: CredentialRow | null): TelegramOnboardingStep {
   if (!row) return "welcome";
   if (!row.hello_at) return "phone";
@@ -76,10 +81,7 @@ export function toPublic(row: CredentialRow | null): TelegramCredentialPublic | 
 export async function getCredentialRow(userId: string): Promise<CredentialRow | null> {
   const sql = await getSql();
   const rows = await sql.query<CredentialRow>(
-    `select user_id, bot_token_enc, bot_id, bot_username, bot_name, token_hint,
-            start_payload, start_payload_exp, webhook_secret, webhook_active,
-            last_update_id, hello_at, checks_json, onboarded_at
-       from telegram_credentials where user_id = $1`,
+    `select ${CRED_COLS} from telegram_credentials where user_id = $1`,
     [userId],
   );
   return rows[0] ?? null;
@@ -136,7 +138,8 @@ export async function saveBotToken(userId: string, rawToken: string, request: Re
   await botDeleteWebhook(parsed.token);
 
   const { payload, exp } = freshPayload();
-  const webhookSecret = randomBytes(24).toString("hex");
+  const webhookSecretPlain = randomBytes(24).toString("hex");
+  const webhookSecretStored = hashWebhookSecret(webhookSecretPlain);
   const enc = encryptSecret(parsed.token);
   const hint = maskBotToken(parsed.token);
   const origin = publicOrigin(request);
@@ -144,7 +147,7 @@ export async function saveBotToken(userId: string, rawToken: string, request: Re
   const https = origin.startsWith("https://");
   let webhookActive = false;
   if (https) {
-    webhookActive = await botSetWebhook(parsed.token, hookUrl, webhookSecret);
+    webhookActive = await botSetWebhook(parsed.token, hookUrl, webhookSecretPlain);
   }
 
   const sql = await getSql();
@@ -178,7 +181,7 @@ export async function saveBotToken(userId: string, rawToken: string, request: Re
       hint,
       payload,
       exp,
-      webhookSecret,
+      webhookSecretStored,
       webhookActive,
     ],
   );
@@ -265,8 +268,12 @@ export async function ingestUpdates(userId: string, updates: TelegramUpdate[]): 
         body: text,
         telegramMessageId: msg.message_id,
       });
-    } catch {
-      // chat may not exist until hello seeds it; ignore a single miss
+    } catch (err) {
+      console.info("[telegram]", {
+        event: "ingest_append_miss",
+        userId,
+        err: err instanceof Error ? err.message.slice(0, 120) : "miss",
+      });
     }
   }
 
@@ -297,14 +304,30 @@ export async function pullUpdates(userId: string): Promise<boolean> {
 export async function findByWebhookSecret(secret: string): Promise<CredentialRow | null> {
   if (!secret) return null;
   const sql = await getSql();
-  const rows = await sql.query<CredentialRow>(
-    `select user_id, bot_token_enc, bot_id, bot_username, bot_name, token_hint,
-            start_payload, start_payload_exp, webhook_secret, webhook_active,
-            last_update_id, hello_at, checks_json, onboarded_at
-       from telegram_credentials where webhook_secret = $1`,
+  const hashed = hashWebhookSecret(secret);
+  const hashedRows = await sql.query<CredentialRow>(
+    `select ${CRED_COLS} from telegram_credentials where webhook_secret = $1`,
+    [hashed],
+  );
+  if (hashedRows[0]) return hashedRows[0];
+  const plainRows = await sql.query<CredentialRow>(
+    `select ${CRED_COLS} from telegram_credentials where webhook_secret = $1`,
     [secret],
   );
-  return rows[0] ?? null;
+  const row = plainRows[0];
+  if (!row) return null;
+  if (row.webhook_secret && !looksHashedWebhookSecret(row.webhook_secret)) {
+    try {
+      await sql.query(
+        `update telegram_credentials set webhook_secret = $2, updated_at = now() where user_id = $1`,
+        [row.user_id, hashed],
+      );
+      row.webhook_secret = hashed;
+    } catch {
+      /* upgrade is best-effort */
+    }
+  }
+  return row;
 }
 
 export async function saveChecks(userId: string, checks: TelegramCheckResult[]): Promise<void> {
