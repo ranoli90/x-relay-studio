@@ -22,6 +22,7 @@ import { Route as ApiRedditOauthCallbackRouteImport } from './routes/api/reddit/
 import { Route as ApiRedditOauthStartRouteImport } from './routes/api/reddit/oauth/start'
 import { Route as ApiTelegramBotHookRouteImport } from './routes/api/telegram/bot/hook'
 import { Route as ApiTelegramOidcCallbackRouteImport } from './routes/api/telegram/oidc/callback'
+import { Route as ApiTelegramPhotoRouteImport } from './routes/api/telegram/photo'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -88,6 +89,11 @@ const ApiTelegramOidcCallbackRoute = ApiTelegramOidcCallbackRouteImport.update({
   path: '/api/telegram/oidc/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTelegramPhotoRoute = ApiTelegramPhotoRouteImport.update({
+  id: '/api/telegram/photo',
+  path: '/api/telegram/photo',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -103,6 +109,7 @@ export interface FileRoutesByFullPath {
   '/api/reddit/oauth/start': typeof ApiRedditOauthStartRoute
   '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
+  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -117,6 +124,7 @@ export interface FileRoutesByTo {
   '/api/reddit/oauth/start': typeof ApiRedditOauthStartRoute
   '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
+  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -133,6 +141,7 @@ export interface FileRoutesById {
   '/api/reddit/oauth/start': typeof ApiRedditOauthStartRoute
   '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
+  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -150,6 +159,7 @@ export interface FileRouteTypes {
     | '/api/reddit/oauth/start'
     | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
+    | '/api/telegram/photo'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -164,6 +174,7 @@ export interface FileRouteTypes {
     | '/api/reddit/oauth/start'
     | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
+    | '/api/telegram/photo'
   id:
     | '__root__'
     | '/'
@@ -179,6 +190,7 @@ export interface FileRouteTypes {
     | '/api/reddit/oauth/start'
     | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
+    | '/api/telegram/photo'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -193,6 +205,7 @@ export interface RootRouteChildren {
   ApiRedditOauthStartRoute: typeof ApiRedditOauthStartRoute
   ApiTelegramBotHookRoute: typeof ApiTelegramBotHookRoute
   ApiTelegramOidcCallbackRoute: typeof ApiTelegramOidcCallbackRoute
+  ApiTelegramPhotoRoute: typeof ApiTelegramPhotoRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -288,6 +301,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTelegramOidcCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/telegram/photo': {
+      id: '/api/telegram/photo'
+      path: '/api/telegram/photo'
+      fullPath: '/api/telegram/photo'
+      preLoaderRoute: typeof ApiTelegramPhotoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -317,6 +337,7 @@ const rootRouteChildren: RootRouteChildren = {
   ApiRedditOauthStartRoute: ApiRedditOauthStartRoute,
   ApiTelegramBotHookRoute: ApiTelegramBotHookRoute,
   ApiTelegramOidcCallbackRoute: ApiTelegramOidcCallbackRoute,
+  ApiTelegramPhotoRoute: ApiTelegramPhotoRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

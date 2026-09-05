@@ -11,6 +11,7 @@ import type {
   TelegramAiStatus,
 } from "./types";
 import { assertBioLimit, clampBio, safeHttpUrl, sanitizeUsername } from "./validate";
+import { redactPreview } from "./preview";
 
 function newId(prefix: string): string {
   return `${prefix}_${randomBytes(8).toString("hex")}`;
@@ -356,8 +357,9 @@ export async function listChats(userId: string): Promise<TelegramChat[]> {
     unread: number;
     pinned: boolean;
     muted: boolean;
+    peer_id: string | null;
   }>(
-    `select id, kind, title, photo_url, last_preview, last_at, unread, pinned, muted
+    `select id, kind, title, photo_url, last_preview, last_at, unread, pinned, muted, peer_id
        from telegram_chats where user_id = $1
        order by pinned desc, last_at desc, title asc`,
     [userId],
@@ -366,8 +368,8 @@ export async function listChats(userId: string): Promise<TelegramChat[]> {
     id: row.id,
     kind: row.kind,
     title: row.title,
-    photoUrl: safeHttpUrl(row.photo_url),
-    lastPreview: row.last_preview,
+    photoUrl: row.photo_url?.startsWith("/") ? row.photo_url : safeHttpUrl(row.photo_url) || chatPhotoUrl(row.peer_id),
+    lastPreview: redactPreview(row.last_preview),
     lastAt: iso(row.last_at),
     unread: row.unread,
     pinned: row.pinned,
@@ -445,6 +447,45 @@ export async function getChatPeer(
   return { kind: row.kind, peerId: row.peer_id };
 }
 
+export async function savePeerPhoto(userId: string, peerId: string, bytes: Buffer): Promise<void> {
+  if (!peerId || bytes.length < 80) return;
+  const sql = await getSql();
+  await sql.query(
+    `insert into telegram_photos (user_id, peer_id, mime, bytes, updated_at)
+     values ($1,$2,'image/jpeg',$3,now())
+     on conflict (user_id, peer_id) do update set bytes = excluded.bytes, updated_at = now()`,
+    [userId, peerId, bytes],
+  );
+}
+
+export async function listPhotoPeers(userId: string): Promise<string[]> {
+  const sql = await getSql();
+  const rows = await sql.query<{ peer_id: string }>(
+    `select peer_id from telegram_photos where user_id = $1`,
+    [userId],
+  );
+  return rows.map((r) => r.peer_id);
+}
+
+export async function getPeerPhoto(
+  userId: string,
+  peerId: string,
+): Promise<{ mime: string; bytes: Buffer } | null> {
+  const sql = await getSql();
+  const rows = await sql.query<{ mime: string; bytes: Buffer }>(
+    `select mime, bytes from telegram_photos where user_id = $1 and peer_id = $2`,
+    [userId, peerId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return { mime: row.mime, bytes: row.bytes };
+}
+
+export function chatPhotoUrl(peerId: string | null | undefined): string | null {
+  if (!peerId) return null;
+  return `/api/telegram/photo?p=${encodeURIComponent(peerId)}`;
+}
+
 export async function upsertUserChat(opts: {
   id: string;
   userId: string;
@@ -455,11 +496,12 @@ export async function upsertUserChat(opts: {
   muted: boolean;
   lastPreview: string | null;
   lastAt: string | null;
+  photoUrl?: string | null;
 }): Promise<void> {
   const sql = await getSql();
   await sql.query(
-    `insert into telegram_chats (id, user_id, kind, title, last_preview, last_at, unread, pinned, muted, peer_id)
-     values ($1,$2,'user',$3,$4,$5,$6,$7,$8,$9)
+    `insert into telegram_chats (id, user_id, kind, title, last_preview, last_at, unread, pinned, muted, peer_id, photo_url)
+     values ($1,$2,'user',$3,$4,$5,$6,$7,$8,$9,$10)
      on conflict (id) do update set
        title = excluded.title,
        last_preview = coalesce(excluded.last_preview, telegram_chats.last_preview),
@@ -467,7 +509,8 @@ export async function upsertUserChat(opts: {
        unread = excluded.unread,
        pinned = excluded.pinned,
        muted = excluded.muted,
-       peer_id = excluded.peer_id`,
+       peer_id = excluded.peer_id,
+       photo_url = coalesce(excluded.photo_url, telegram_chats.photo_url)`,
     [
       opts.id,
       opts.userId,
@@ -478,6 +521,7 @@ export async function upsertUserChat(opts: {
       opts.pinned,
       opts.muted,
       opts.peerId,
+      opts.photoUrl ?? null,
     ],
   );
 }

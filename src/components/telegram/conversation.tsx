@@ -1,6 +1,7 @@
 import { Check, ChevronLeft } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type { TelegramChat, TelegramMessage } from "@/lib/telegram/types";
+import { mediaLabel } from "@/lib/telegram/preview";
 import { cn } from "@/lib/utils";
 import { TgAvatar } from "./avatar";
 import { Composer } from "./composer";
@@ -28,7 +29,9 @@ export function Conversation({
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scroller.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
+    if (nearBottom || messages.length < 12) el.scrollTop = el.scrollHeight;
   }, [messages.length, chat?.id]);
 
   if (!chat) {
@@ -63,7 +66,11 @@ export function Conversation({
           <span className="min-w-0">
             <span className="tg-title block truncate text-[var(--tg-text)]">{chat.title}</span>
             <span className="block truncate text-[length:var(--tg-fs-time)] text-[var(--tg-text-secondary)]">
-              {chat.kind === "notes" ? "Saved in this studio" : chat.kind === "user" ? "Telegram · you" : "Helper · Telegram"}
+              {chat.kind === "notes"
+                ? "Saved in this studio"
+                : chat.kind === "user"
+                  ? "Tap for info"
+                  : "Telegram"}
             </span>
           </span>
         </button>
@@ -105,7 +112,7 @@ export function Conversation({
                         {msg.authorName}
                       </p>
                     ) : null}
-                    <p className="whitespace-pre-wrap break-words">{msg.body}</p>
+                    <p className="whitespace-pre-wrap break-words">{mediaLabel(msg.body)}</p>
                     <p
                       className={cn(
                         "mt-1 flex items-center justify-end gap-1 text-[length:var(--tg-fs-time)]",

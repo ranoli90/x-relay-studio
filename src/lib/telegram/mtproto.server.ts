@@ -23,10 +23,12 @@ function clientOpts() {
     autoReconnect: false,
     retryDelay: 0,
     useWSS: true,
-    deviceModel: "X Relay",
-    appVersion: "1.0",
-    systemVersion: "Web",
+    // Look like a normal phone client, not a named userbot.
+    deviceModel: "iPhone 15 Pro",
+    systemVersion: "18.7",
+    appVersion: "11.14.1",
     langCode: "en",
+    systemLangCode: "en-US",
   };
 }
 
@@ -229,6 +231,8 @@ export async function fetchMe(opts: {
   return { me: result, session };
 }
 
+export type PulledPhoto = { peerId: string; bytes: Buffer };
+
 export type PulledDialog = {
   chatId: string;
   peerId: string;
@@ -267,8 +271,15 @@ function dialogTitle(dialog: Record<string, unknown>): string {
 
 function messageBody(msg: Record<string, unknown>): string {
   if (typeof msg.message === "string" && msg.message.trim()) return msg.message.trim().slice(0, 4000);
-  if (msg.media) return "[media]";
-  if (msg.action) return "[event]";
+  if (msg.media) {
+    const name = String((msg.media as { className?: string }).className ?? "");
+    if (/video/i.test(name)) return "Video";
+    if (/voice|audio/i.test(name)) return "Voice message";
+    if (/sticker/i.test(name)) return "Sticker";
+    if (/photo/i.test(name)) return "Photo";
+    return "Attachment";
+  }
+  if (msg.action) return "Event";
   return "";
 }
 
@@ -314,10 +325,21 @@ export async function pullInbox(opts: {
   dialogLimit?: number;
   historyLimit?: number;
   historyChats?: number;
-}): Promise<{ dialogs: PulledDialog[]; histories: { chatId: string; messages: PulledMessage[] }[]; session: string }> {
-  const dialogLimit = opts.dialogLimit ?? 20;
-  const historyLimit = opts.historyLimit ?? 8;
-  const historyChats = opts.historyChats ?? 3;
+  skipPhotoPeers?: string[];
+  photoLimit?: number;
+  focusChatId?: string | null;
+}): Promise<{
+  dialogs: PulledDialog[];
+  histories: { chatId: string; messages: PulledMessage[] }[];
+  photos: PulledPhoto[];
+  session: string;
+}> {
+  const dialogLimit = opts.dialogLimit ?? 40;
+  const historyLimit = opts.historyLimit ?? 40;
+  const historyChats = opts.historyChats ?? 0;
+  const photoLimit = opts.photoLimit ?? 6;
+  const skip = new Set(opts.skipPhotoPeers ?? []);
+  const focusChatId = opts.focusChatId ?? null;
   const { result, session } = await withClient(
     { apiId: opts.apiId, apiHash: opts.apiHash, session: opts.session },
     async ({ client }) => {
@@ -342,7 +364,15 @@ export async function pullInbox(opts: {
         };
       });
       const histories: { chatId: string; messages: PulledMessage[] }[] = [];
-      for (const dialog of dialogs.slice(0, historyChats)) {
+      const historyDialogs = focusChatId
+        ? dialogs.filter(
+            (d) =>
+              focusChatId.endsWith(d.chatId) ||
+              focusChatId.includes(d.chatId) ||
+              focusChatId.includes(d.peerId),
+          ).slice(0, 1)
+        : dialogs.slice(0, historyChats);
+      for (const dialog of historyDialogs) {
         try {
           const rawMsgs = (await client.getMessages(dialog.entity as never, {
             limit: historyLimit,
@@ -378,7 +408,26 @@ export async function pullInbox(opts: {
           });
         }
       }
-      return { dialogs, histories };
+      const photos: PulledPhoto[] = [];
+      for (const dialog of dialogs) {
+        if (photos.length >= photoLimit) break;
+        if (!dialog.peerId || skip.has(dialog.peerId)) continue;
+        try {
+          const rawPhoto = await client.downloadProfilePhoto(dialog.entity as never, {
+            isBig: false,
+          });
+          const bytes =
+            rawPhoto && typeof rawPhoto === "object" && "length" in rawPhoto
+              ? Buffer.from(rawPhoto as Uint8Array)
+              : null;
+          if (bytes && bytes.length > 80 && bytes.length < 180_000) {
+            photos.push({ peerId: dialog.peerId, bytes });
+          }
+        } catch {
+          /* no photo */
+        }
+      }
+      return { dialogs, histories, photos };
     },
   );
   return { ...result, session };

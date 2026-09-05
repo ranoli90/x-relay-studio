@@ -17,7 +17,8 @@ import {
   saveSignedIn,
 } from "./session.server";
 import { fetchMe, pullInbox } from "./mtproto.server";
-import { appendMessage, getAccount, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
+import { redactPreview } from "./preview";
+import { appendMessage, getAccount, listPhotoPeers, savePeerPhoto, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
 
 function scopedChatId(userId: string, dialogChatId: string): string {
   const uid = userId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 36);
@@ -42,21 +43,26 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
   try {
     const account = await getAccount(userId);
     const selfId = account?.telegramUserId ?? 0;
-    const { dialogs, histories, session } = await pullInbox({
+    const skipPhotos = await listPhotoPeers(userId);
+    const { dialogs, histories, photos, session } = await pullInbox({
       apiId: material.apiId,
       apiHash: material.apiHash,
       session: material.session,
       selfId,
-      dialogLimit: 20,
-      historyLimit: opts?.historyLimit ?? 8,
-      historyChats: opts?.chatId ? 1 : 3,
+      dialogLimit: 50,
+      historyLimit: opts?.historyLimit ?? 40,
+      historyChats: 0,
+      skipPhotoPeers: skipPhotos,
+      photoLimit: 6,
+      focusChatId: opts?.chatId ?? null,
     });
     if (session !== material.session) await saveSignedIn({ userId, session });
 
-    const selected = opts?.chatId ?? null;
-    const historyTargets = selected
-      ? dialogs.filter((d) => selected.endsWith(d.chatId) || selected.includes(d.chatId)).slice(0, 1)
-      : dialogs;
+    const havePhoto = new Set(skipPhotos);
+    for (const photo of photos) {
+      await savePeerPhoto(userId, photo.peerId, photo.bytes);
+      havePhoto.add(photo.peerId);
+    }
 
     for (const dialog of dialogs) {
       const chatId = scopedChatId(userId, dialog.chatId);
@@ -68,16 +74,17 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
         unread: dialog.unread,
         pinned: dialog.pinned,
         muted: dialog.muted,
-        lastPreview: dialog.lastPreview,
+        lastPreview: redactPreview(dialog.lastPreview),
         lastAt: dialog.lastAt,
+        photoUrl: havePhoto.has(dialog.peerId)
+          ? `/api/telegram/photo?p=${encodeURIComponent(dialog.peerId)}`
+          : null,
       });
     }
 
     const byChat = new Map(histories.map((h) => [h.chatId, h.messages]));
-    for (const dialog of historyTargets) {
-      const pulled = byChat.get(dialog.chatId);
-      if (!pulled) continue;
-      const chatId = scopedChatId(userId, dialog.chatId);
+    for (const [dialogChatId, pulled] of byChat) {
+      const chatId = scopedChatId(userId, dialogChatId);
       for (const msg of pulled) {
         const saved = await appendMessage({
           userId,

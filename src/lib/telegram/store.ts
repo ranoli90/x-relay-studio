@@ -56,6 +56,8 @@ function isAuthError(err: unknown): boolean {
   return err instanceof Error && err.message === "Unauthorized";
 }
 
+let syncInFlight = false;
+
 function readNotify(): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem("xrelay-tg-notify") === "1";
@@ -110,7 +112,8 @@ export const useTelegram = create<TelegramState>((set, get) => ({
 
   sync: async () => {
     const { snapshot, selectedChatId, notify, messages } = get();
-    if (!snapshot?.account) return;
+    if (!snapshot?.account || syncInFlight) return;
+    syncInFlight = true;
     try {
       const next = await telegramSyncFn({ data: { chatId: selectedChatId } });
       const prevUnread = (snapshot.chats ?? []).reduce((n, c) => n + (c.unread ?? 0), 0);
@@ -141,6 +144,8 @@ export const useTelegram = create<TelegramState>((set, get) => ({
       }
     } catch {
       // keep last good snapshot
+    } finally {
+      syncInFlight = false;
     }
   },
 

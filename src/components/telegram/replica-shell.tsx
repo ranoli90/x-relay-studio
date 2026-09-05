@@ -2,7 +2,7 @@ import { Link, Navigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Logo } from "@/components/logo";
 import { PushScreen } from "@/components/screen-stack";
-import { UserButton } from "@/lib/auth/gates";
+import { authEnabled, signOut } from "@/lib/auth/client";
 import { useTelegram } from "@/lib/telegram/store";
 import { ChatList, useChatQuery } from "./chat-list";
 import { Conversation } from "./conversation";
@@ -37,16 +37,42 @@ export function ReplicaShell() {
   const [confirmUnlink, setConfirmUnlink] = useState(false);
   const [narrow, setNarrow] = useState(false);
 
+  const account = snapshot?.account ?? null;
+  const credential = snapshot?.credential ?? null;
+  const watch = snapshot?.watch ?? null;
+  const chats = snapshot?.chats ?? [];
+  const selected = chats.find((c) => c.id === selectedChatId) ?? null;
+
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    const id = window.setInterval(() => {
-      void sync();
-    }, 8000);
-    return () => window.clearInterval(id);
-  }, [sync]);
+    let timer: number | null = null;
+    let stopped = false;
+    const delay = () => {
+      if (typeof document !== "undefined" && document.visibilityState === "hidden") return 120_000;
+      if (watch?.lastError) return 90_000;
+      return 45_000;
+    };
+    const tick = async () => {
+      if (stopped) return;
+      if (typeof document === "undefined" || document.visibilityState === "visible") {
+        await sync();
+      }
+      if (!stopped) timer = window.setTimeout(() => void tick(), delay());
+    };
+    timer = window.setTimeout(() => void tick(), 5_000);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void sync();
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      stopped = true;
+      if (timer) window.clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [sync, watch?.lastError]);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 839px)");
@@ -55,12 +81,6 @@ export function ReplicaShell() {
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, []);
-
-  const account = snapshot?.account ?? null;
-  const credential = snapshot?.credential ?? null;
-  const watch = snapshot?.watch ?? null;
-  const chats = snapshot?.chats ?? [];
-  const selected = chats.find((c) => c.id === selectedChatId) ?? null;
 
   useEffect(() => {
     if (!narrow && account && !selectedChatId && chats[0]) {
@@ -119,48 +139,47 @@ export function ReplicaShell() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-bg text-fg">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-bg px-4">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-bg px-3 pt-[env(safe-area-inset-top)]">
         <Link
           to="/"
           className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
         >
-          <Logo className="size-7" />
-          <span className="min-w-0">
+          <Logo className="size-6 shrink-0" />
+          <span className="hidden min-w-0 sm:block">
             <span className="block truncate text-sm font-medium">X Relay</span>
-            <span className="block truncate font-mono text-xs text-subtle">Telegram</span>
           </span>
         </Link>
-        {account?.preview ? (
-          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[length:var(--tg-fs-micro)] uppercase tracking-widest text-subtle">
-            Preview
+        {account && !account.preview ? (
+          <span className="min-w-0 truncate font-mono text-[11px] text-subtle">
+            <span className={watch?.watching ? "text-up" : ""}>
+              {watch?.watching ? "Watching" : "Paused"}
+            </span>
+            <span className="text-subtle">
+              {" "}
+              · {watch?.chatsWatched ?? chats.filter((c) => c.kind === "user").length} chats
+            </span>
           </span>
-        ) : watch?.watching ? (
-          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[length:var(--tg-fs-micro)] uppercase tracking-widest text-subtle">
-            Watching
-          </span>
+        ) : account?.preview ? (
+          <span className="font-mono text-[11px] uppercase tracking-widest text-subtle">Preview</span>
         ) : null}
-        <Link
-          to="/"
-          className="ml-auto hidden text-xs text-subtle transition-colors hover:text-fg sm:inline"
-        >
-          Back to platforms
-        </Link>
-        <div className="ml-auto sm:ml-0">
-          <UserButton />
-        </div>
+        {authEnabled ? (
+          <button
+            type="button"
+            className="ml-auto shrink-0 text-xs text-subtle hover:text-fg"
+            onClick={() => void signOut("/")}
+          >
+            Sign out
+          </button>
+        ) : (
+          <Link to="/" className="ml-auto shrink-0 text-xs text-subtle hover:text-fg">
+            Home
+          </Link>
+        )}
       </header>
 
-      {account && !account.preview ? (
-        <div className="flex h-9 shrink-0 items-center gap-3 overflow-hidden border-b border-border px-4 font-mono text-[11px] text-subtle">
-          <span className={watch?.watching ? "text-up" : ""}>
-            {watch?.watching ? "Watching your Telegram" : "Watching paused"}
-          </span>
-          <span className="truncate">
-            {watch?.chatsWatched ?? 0} chats · {watch?.messagesIngested ?? 0} stored ·{" "}
-            {watch?.pendingForAi ?? 0} queued
-          </span>
-          {watch?.openRouterReady ? <span>OpenRouter ready</span> : <span>OpenRouter not set</span>}
-          {watch?.lastError ? <span className="truncate text-down">{watch.lastError}</span> : null}
+      {watch?.lastError ? (
+        <div className="shrink-0 border-b border-border px-3 py-1.5 text-xs text-down">
+          {watch.lastError}
         </div>
       ) : null}
 
@@ -221,7 +240,7 @@ export function ReplicaShell() {
                 </PushScreen>
               </div>
             ) : (
-              <div className="grid h-full min-h-0 grid-cols-[minmax(0,420px)_minmax(0,1fr)_minmax(0,360px)]">
+              <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)_minmax(0,320px)]">
                 {list}
                 {view === "edit" ? (
                   <ProfileEdit
@@ -245,21 +264,23 @@ export function ReplicaShell() {
                   conversation
                 )}
                 {view === "edit" || view === "settings" || view === "profile" ? (
-                  <div className="grid place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)]">
+                  <div className="hidden place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)] xl:grid">
                     <div>
                       <p className="text-[var(--tg-text)]">{account.displayName}</p>
                       <p className="mt-2 text-xs">Saved in this studio. Telegram itself is unchanged.</p>
                     </div>
                   </div>
                 ) : selected ? (
-                  <PeerProfile
-                    chat={selected}
-                    credential={credential}
-                    showBack={false}
-                    onBack={() => undefined}
-                  />
+                  <div className="hidden min-h-0 xl:block">
+                    <PeerProfile
+                      chat={selected}
+                      credential={credential}
+                      showBack={false}
+                      onBack={() => undefined}
+                    />
+                  </div>
                 ) : (
-                  <div className="grid place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)]">
+                  <div className="hidden place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)] xl:grid">
                     <div>
                       <p className="text-[var(--tg-text)]">{account.displayName}</p>
                       <p className="mt-2 text-xs">Open a chat, or your profile from the list.</p>

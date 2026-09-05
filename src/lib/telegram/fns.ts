@@ -315,7 +315,23 @@ export const telegramMessagesFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(MessagesSchema, input))
   .handler(async ({ context, data }): Promise<TelegramMessage[]> => {
-    const { listMessages } = await import("./snapshot.server");
+    const { listMessages, getChatKind } = await import("./snapshot.server");
+    const kind = await getChatKind(context.userId, data.chatId);
+    if (kind === "user") {
+      const existing = await listMessages(context.userId, data.chatId);
+      if (existing.length < 25) {
+        const { getUserSession } = await import("./session.server");
+        const session = await getUserSession(context.userId);
+        if (session?.session_enc && session.watching) {
+          const { takeRate } = await import("./snapshot.server");
+          await takeRate(context.userId, "tg_history", 12, 15 * 60 * 1000);
+          const { syncWatch } = await import("./watch.server");
+          await syncWatch(context.userId, { chatId: data.chatId, historyLimit: 50 }).catch(() => null);
+          return listMessages(context.userId, data.chatId);
+        }
+      }
+      return existing;
+    }
     return listMessages(context.userId, data.chatId);
   });
 
@@ -433,6 +449,8 @@ export const telegramSyncFn = createServerFn({ method: "POST" })
       const { getUserSession } = await import("./session.server");
       const session = await getUserSession(context.userId);
       if (session?.session_enc && session.watching) {
+        const { takeRate } = await import("./snapshot.server");
+        await takeRate(context.userId, "tg_sync", 20, 10 * 60 * 1000);
         const { syncWatch } = await import("./watch.server");
         const pulled = await syncWatch(context.userId, { chatId: data.chatId ?? null });
         return { ...pulled, watch: (await buildSnapshot(context.userId)).watch };

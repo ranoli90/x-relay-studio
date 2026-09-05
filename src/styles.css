@@ -142,6 +142,13 @@
   background-color: var(--tg-bg);
   background-image: radial-gradient(rgb(255 255 255 / 0.035) 0.6px, transparent 0.6px);
   background-size: 10px 10px;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.tg-replica ul {
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 @media (prefers-reduced-motion: reduce) {
