@@ -20,24 +20,17 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
           Desk {formatDeskNumber(deskNumber)}. Pick a platform.
         </h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
-          That number is the only login we keep. Operator is the desk OS.
-          X, Telegram, and Reddit each connect their own account on top of it.
+          That number is the only login we keep. Desk is chats plus operator in one window.
+          Connect Telegram from inside the desk. X and Reddit stay their own accounts.
         </p>
 
         <div className="mt-8 grid grid-cols-1 gap-3 min-[520px]:grid-cols-2">
           <PlatformCard
             to="/desk"
-            label="Operator"
-            kicker="Primary"
-            description="Telegram-clone desk. Thought stream, diary, catalog, approve or hold. The LLM is a mouth with tools."
+            label="Desk"
+            kicker="Telegram + operator"
+            description="Chats, drafts, catalog, payments, approve or hold. Same window. Connect your Telegram account from the top bar."
             icon={<DeskTile />}
-          />
-          <PlatformCard
-            to="/telegram"
-            label="Telegram"
-            kicker="Connect"
-            description="Your account. Watch chats. Queued inbound hits the brain."
-            icon={<TelegramTile />}
           />
           <PlatformCard
             to="/x"
@@ -111,22 +104,8 @@ function XTile() {
   return (
     <span className="grid size-16 place-items-center rounded-lg bg-fg text-bg" aria-hidden="true">
       <svg viewBox="0 0 24 24" className="size-7" fill="currentColor">
-        <path d="M14.3 10.5 22 2h-2.2l-6.6 7.4L8 2H2l8.1 11.5L2 22h2.2l7-7.9L16 22h6l-7.7-11.5ZM12 13.2l-.8-1.1L5 3.6h2.7l5.1 7.1.8 1.1 6.7 9.2h-2.7L12 13.2Z" />
+        <path d="M14.3 10.5 22 2h-2.2l-6.6 7.4L8 2H2 l8.1 11.5L2 22h2.2l7-7.9L16 22h6l-7.7-11.5ZM12 13.2l-.8-1.1L5 3.6h2.7l5.1 7.1.8 1.1 6.7 9.2h-2.7L12 13.2Z" />
       </svg>
-    </span>
-  );
-}
-
-function TelegramTile() {
-  return (
-    <span className="block size-16 overflow-hidden rounded-lg bg-fg" aria-hidden="true">
-      <img
-        src="/telegram-mark.jpg"
-        alt=""
-        width={64}
-        height={64}
-        className="size-16 object-cover outline outline-1 -outline-offset-1 outline-fg/10"
-      />
     </span>
   );
 }

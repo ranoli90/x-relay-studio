@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
-    "build": "node scripts/with-app-env.mjs vite build && node scripts/copy-pglite-assets.mjs && node scripts/copy-telegram-client.mjs",
+    "build": "node scripts/with-app-env.mjs vite build && node scripts/copy-pglite-assets.mjs && node scripts/copy-telegram-client.mjs && node scripts/migrate.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "check:migrations": "node scripts/check-migration-unique.mjs",
     "build:dev": "node scripts/with-app-env.mjs vite build --mode development",

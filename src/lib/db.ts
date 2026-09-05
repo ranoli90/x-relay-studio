@@ -69,6 +69,44 @@ function toSql(run: Run): Sql {
   return sql;
 }
 
+const migrationFiles = import.meta.glob("/migrations/*.sql", {
+  query: "?raw",
+  import: "default",
+  eager: true,
+}) as Record<string, string>;
+
+async function applyNeonMigrations(pool: import("pg").Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query(
+      "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
+    );
+    const applied = (await client.query("SELECT name FROM _migrations")).rows.map(
+      (r: { name: string }) => r.name,
+    );
+    for (const { name, path } of pendingMigrations(Object.keys(migrationFiles), applied)) {
+      const text = migrationFiles[path];
+      if (!text) continue;
+      try {
+        await client.query("BEGIN");
+        await client.query(text);
+        await client.query("INSERT INTO _migrations (name) VALUES ($1)", [name]);
+        await client.query("COMMIT");
+        console.log(`[db] applied ${name}`);
+      } catch (err) {
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          /* keep original */
+        }
+        throw err;
+      }
+    }
+  } finally {
+    client.release();
+  }
+}
+
 function createNeonSql(): Promise<Sql> {
   globalRef.__pgSqlPromise__ ??= (async () => {
     const { Pool, types } = await import("pg");
@@ -86,6 +124,7 @@ function createNeonSql(): Promise<Sql> {
       void client.query("set statement_timeout = 15000");
       void client.query("set lock_timeout = 8000");
     });
+    await applyNeonMigrations(pool);
     return toSql(async <T>(text: string, params: unknown[]) => {
       const res = await pool.query(text, params);
       return res.rows as T[];
