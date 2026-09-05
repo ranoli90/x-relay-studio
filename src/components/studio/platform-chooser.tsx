@@ -8,8 +8,8 @@ import { cn } from "@/lib/utils";
 function DeskNumberLockup({ deskNumber }: { deskNumber: string }) {
   const digits = normalizeDeskNumber(deskNumber);
   const pretty = formatDeskNumber(digits);
-  const first = pretty.slice(0, 9); // "6310 7142"
-  const second = pretty.slice(10); // "4599 6624"
+  const first = pretty.slice(0, 9);
+  const second = pretty.slice(10);
   return (
     <p
       className="mt-2 font-mono text-[1.65rem] leading-tight tracking-wide text-fg tabular-nums sm:text-3xl"
@@ -42,7 +42,7 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
         <h1 className="mt-6 text-3xl font-medium tracking-tight">Pick a platform.</h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
           That number is the only login we keep. Telegram is the live inbox — real chats,
-          drafts, send. X and Reddit stay their own accounts.
+          drafts, send. X and Reddit are coming soon.
         </p>
 
         <div className="mt-8 grid grid-cols-1 gap-3 min-[520px]:grid-cols-2">
@@ -54,19 +54,18 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
             icon={<TelegramTile />}
           />
           <PlatformCard
-            to="/x"
             label="X"
-            kicker="Open"
+            kicker="Coming soon"
             description="Posting account, sources, rewrite, drip."
             icon={<XTile />}
+            disabled
           />
           <PlatformCard
-            to="/reddit"
             label="Reddit"
-            kicker="Connect"
+            kicker="Coming soon"
             description="Create the Reddit app, Allow, health, then inbox."
             icon={<RedditTile />}
-            accent
+            disabled
           />
         </div>
       </div>
@@ -80,32 +79,46 @@ function PlatformCard({
   kicker,
   description,
   icon,
-  accent,
+  disabled,
 }: {
-  to: "/x" | "/telegram" | "/reddit";
+  to?: "/x" | "/telegram" | "/reddit";
   label: string;
   kicker: string;
   description: string;
   icon: ReactNode;
-  accent?: boolean;
+  disabled?: boolean;
 }) {
-  return (
-    <Link
-      to={to}
-      className={cn(
-        "group flex min-h-[11rem] flex-col rounded-xl border bg-surface p-5 text-left",
-        accent
-          ? "border-[#ff4500]/50 hover:bg-[#ff4500]/10"
-          : "border-border hover:bg-surface-2",
-        "transition-[background-color,border-color,transform] duration-[var(--motion-quick)] ease-[var(--ease-out)]",
-        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40",
-        "active:scale-[0.99]",
-      )}
-    >
+  const className = cn(
+    "flex min-h-[11rem] flex-col rounded-xl border bg-surface p-5 text-left",
+    disabled
+      ? "cursor-not-allowed border-border opacity-55"
+      : "group border-border hover:bg-surface-2",
+    !disabled &&
+      "transition-[background-color,border-color,transform] duration-[var(--motion-quick)] ease-[var(--ease-out)]",
+    !disabled && "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40",
+    !disabled && "active:scale-[0.99]",
+  );
+
+  const body = (
+    <>
       {icon}
       <p className="mt-5 font-mono text-xs uppercase tracking-widest text-subtle">{kicker}</p>
       <h2 className="mt-2 text-xl font-medium tracking-tight">{label}</h2>
       <p className="mt-2 text-sm leading-relaxed text-muted">{description}</p>
+    </>
+  );
+
+  if (disabled || !to) {
+    return (
+      <div className={className} aria-disabled="true">
+        {body}
+      </div>
+    );
+  }
+
+  return (
+    <Link to={to} className={className}>
+      {body}
     </Link>
   );
 }
