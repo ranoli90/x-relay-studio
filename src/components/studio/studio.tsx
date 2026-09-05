@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router";
 import { Download, Plus, Radio, Search, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { InspectView } from "@/components/inspect-view";
@@ -115,7 +116,9 @@ function Header() {
   return (
     <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4 sm:px-6">
       <div className="flex items-center gap-2 sm:hidden">
-        <Logo className="size-7" />
+        <Link to="/" className="rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40">
+          <Logo className="size-7" />
+        </Link>
       </div>
       {publishers.length > 0 && (
         <label className="min-w-0 sm:hidden">
@@ -224,11 +227,13 @@ function Sidebar({ booting }: { booting: boolean }) {
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-bg sm:flex">
       <div className="flex h-14 items-center gap-2 border-b border-border px-4">
-        <Logo className="size-7" />
-        <div className="min-w-0">
-          <p className="truncate text-sm font-medium">X Relay</p>
-          <p className="truncate font-mono text-xs text-subtle">Studio</p>
-        </div>
+        <Link to="/" className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40">
+          <Logo className="size-7" />
+          <div className="min-w-0">
+            <p className="truncate text-sm font-medium">X Relay</p>
+            <p className="truncate font-mono text-xs text-subtle">Studio</p>
+          </div>
+        </Link>
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
         <p className="px-2 pb-2 font-mono text-xs uppercase tracking-widest text-subtle">Posting as</p>

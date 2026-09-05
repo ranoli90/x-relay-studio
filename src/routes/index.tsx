@@ -1,14 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { LoginScreen } from "@/components/studio/login-screen";
-import { Studio } from "@/components/studio/studio";
-import { useCurrentUserState } from "@/lib/auth/use-current-user";
+import { PlatformChooser } from "@/components/studio/platform-chooser";
 
-export const Route = createFileRoute("/")({ component: Home });
-
-function Home() {
-  const { sessionUser } = Route.useRouteContext();
-  const { user, isPending } = useCurrentUserState();
-  const signedIn = Boolean(user) || (isPending && Boolean(sessionUser));
-  if (signedIn) return <Studio />;
-  return <LoginScreen pending={isPending} />;
-}
+export const Route = createFileRoute("/")({ component: PlatformChooser });

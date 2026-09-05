@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -38,6 +39,12 @@ export function LoginScreen({ pending = false }: { pending?: boolean }) {
           If you manage a brand you don’t log into here, use Google, then confirm the
           posting handle.
         </p>
+        <Link
+          to="/"
+          className="mt-6 inline-block text-xs text-subtle transition-colors duration-[var(--motion-quick)] hover:text-fg"
+        >
+          All platforms
+        </Link>
       </div>
     </main>
   );
@@ -52,7 +59,7 @@ function XButton() {
       disabled={busy}
       onClick={() => {
         setBusy(true);
-        void signIn("grok-x", { callbackURL: "/" }).catch(() => setBusy(false));
+        void signIn("grok-x", { callbackURL: "/x" }).catch(() => setBusy(false));
       }}
     >
       <XMark />
@@ -71,7 +78,7 @@ function GoogleButton() {
       disabled={busy}
       onClick={() => {
         setBusy(true);
-        void signIn("grok-google", { callbackURL: "/" }).catch(() => setBusy(false));
+        void signIn("grok-google", { callbackURL: "/x" }).catch(() => setBusy(false));
       }}
     >
       {busy ? "Opening Google…" : "Or continue with Google"}
