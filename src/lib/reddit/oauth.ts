@@ -64,13 +64,15 @@ async function tokenRequest(opts: {
 }
 
 export class RedditOAuthError extends Error {
-  constructor(
-    public code: string,
-    public description: string,
-    public status: number,
-  ) {
+  code: string;
+  description: string;
+  status: number;
+  constructor(code: string, description: string, status: number) {
     super(description ? `${code}: ${description}` : code);
     this.name = "RedditOAuthError";
+    this.code = code;
+    this.description = description;
+    this.status = status;
   }
 }
 
@@ -130,7 +132,7 @@ export async function revokeToken(opts: {
   token: string;
 }) {
   const basic = Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString("base64");
-  await fetch(REVOKE_URL, {
+  const res = await fetch(REVOKE_URL, {
     method: "POST",
     headers: {
       Authorization: `Basic ${basic}`,
@@ -143,4 +145,8 @@ export async function revokeToken(opts: {
     }),
     signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
   });
+  if (!res.ok) {
+    throw new RedditOAuthError("REVOKE_FAILED", `Reddit returned HTTP ${res.status}.`, res.status);
+  }
+  return { ok: true as const, status: res.status };
 }

@@ -159,8 +159,9 @@ function Terms({
       </h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
         There is no Accept button on prefs/apps. Creating the first app is
-        locked until Reddit records this request. The switch is two dropdowns
-        on their form, word for word from{" "}
+        locked until Reddit records this request. Submitting the form is not
+        Reddit’s approval of this use case — it only asks them to unlock app
+        creation. The switch is two dropdowns on their form, word for word from{" "}
         <a
           className="text-fg underline decoration-line underline-offset-4"
           href="https://www.reddit.com/r/reddit.com/wiki/api/"

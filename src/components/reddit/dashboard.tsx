@@ -7,7 +7,7 @@ import type { RedditAccountPublic } from "@/lib/reddit/types";
 import { disconnectAccount, runHealthCheck } from "@/lib/reddit/server";
 import { Button } from "@/components/ui/button";
 import { PushScreen } from "@/components/screen-stack";
-import { AddAccount } from "./add-account";
+import { OnboardingCoordinator } from "./onboarding/coordinator";
 import { InboxView } from "./inbox-view";
 import { cn } from "@/lib/utils";
 
@@ -41,7 +41,7 @@ export function Dashboard({
     return (
       <div className="min-h-dvh bg-bg">
         <Topbar />
-        <AddAccount additional onConnected={onChanged} />
+        <OnboardingCoordinator embedded onFinished={onChanged} />
       </div>
     );
   }
@@ -167,10 +167,9 @@ export function Dashboard({
       </div>
       <PushScreen open={adding} className="bg-bg" z={20}>
         <div className="min-h-dvh overflow-y-auto bg-bg">
-          <Topbar />
-          <AddAccount
-            additional
-            onConnected={() => {
+          <OnboardingCoordinator
+            embedded
+            onFinished={() => {
               setAdding(false);
               onChanged();
             }}

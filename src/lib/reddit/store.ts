@@ -1,5 +1,5 @@
 import { getSql } from "@/lib/db";
-import { decryptSecret, encryptSecret } from "@/lib/secrets";
+import { decryptSecret, encryptSecret, SecretOpenError } from "@/lib/secrets";
 import type { HealthReport, RedditAccountPublic, RedditAppPublic } from "./types";
 
 type AppRow = {
@@ -11,6 +11,7 @@ type AppRow = {
   app_label: string | null;
   app_id: string | null;
   terms_at: string | Date | null;
+  credential_version?: number | null;
 };
 
 type AccountRow = {
@@ -50,22 +51,18 @@ function seal(value: string): string {
 
 function open(value: string | null | undefined): string {
   if (!value) return "";
-  try {
-    return decryptSecret(value);
-  } catch {
-    return value;
-  }
+  return decryptSecret(value);
 }
 
 function decodeApp(row: AppRow): AppRow {
-  return { ...row, client_secret: open(row.client_secret) || row.client_secret };
+  return { ...row, client_secret: open(row.client_secret) };
 }
 
 function decodeAccount(row: AccountRow): AccountRow {
   return {
     ...row,
-    refresh_token: open(row.refresh_token) || row.refresh_token,
-    access_token: row.access_token ? open(row.access_token) || row.access_token : row.access_token,
+    refresh_token: open(row.refresh_token),
+    access_token: row.access_token ? open(row.access_token) : row.access_token,
   };
 }
 
@@ -166,6 +163,7 @@ export async function listAccounts(userId: string) {
   const rows = await sql<AccountRow>`
     select * from reddit_accounts
     where user_id = ${userId}
+      and disabled_at is null
     order by created_at asc
   `;
   return rows.map(decodeAccount);
@@ -174,7 +172,8 @@ export async function listAccounts(userId: string) {
 export async function countAccounts(userId: string) {
   const sql = await getSql();
   const rows = await sql<{ n: number }>`
-    select count(*)::int as n from reddit_accounts where user_id = ${userId}
+    select count(*)::int as n from reddit_accounts
+    where user_id = ${userId} and disabled_at is null
   `;
   return Number(rows[0]?.n ?? 0);
 }
@@ -345,6 +344,22 @@ export async function deleteAccount(userId: string, accountId: string) {
     delete from reddit_accounts
     where user_id = ${userId} and id = ${accountId}
     returning *
+  `;
+  return rows[0] ? decodeAccount(rows[0]) : null;
+}
+
+export async function disableAccount(userId: string, accountId: string) {
+  const sql = await getSql();
+  const rows = await sql<AccountRow>`
+    update reddit_accounts
+       set disabled_at = coalesce(disabled_at, now()),
+           disconnected_at = coalesce(disconnected_at, now()),
+           connection_state = 'disabled',
+           cleanup_pending = true,
+           health_ok = false,
+           updated_at = now()
+     where user_id = ${userId} and id = ${accountId}
+     returning *
   `;
   return rows[0] ? decodeAccount(rows[0]) : null;
 }

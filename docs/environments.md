@@ -10,7 +10,13 @@
 | `FXTWITTER_ENABLED` | defaults on locally, **off** on Vercel | off unless you accept unofficial X lookup |
 | `TELEGRAM_MTPROTO_ENABLED` | default on | set `false` to kill the user client |
 | `REDDIT_ENABLED` | default on | set `false` to refuse OAuth start |
+| `REDDIT_ONBOARDING_ENABLED` | default on locally | **off** until migrations and tests pass |
+| `REDDIT_ASSISTED_SIGNUP_ENABLED` | default off | remains off without approval + Browserbase |
+| `REDDIT_BROWSER_PROVIDER` | `fake` | must be `browserbase` before assisted signup |
+| Reddit onboarding worker | no-op without `DATABASE_URL`; preview drains fake commands in-process | `npm run worker:reddit-onboarding` with Postgres |
 | `CRON_ENABLED` | default on | set `false` to no-op `/api/cron/studio` |
 | Migrations | `npm run db:migrate` from a laptop or a release job | never from `vite build` |
 
 Production boot fails closed without `DATABASE_URL` and `BETTER_AUTH_SECRET`.
+
+Do not run `npm run build` against a production database to “test” migrations. Use `npm run db:migrate` with an isolated `DATABASE_URL`.
