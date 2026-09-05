@@ -2,8 +2,29 @@ import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Logo } from "@/components/logo";
 import { UserButton } from "@/lib/auth/gates";
-import { formatDeskNumber } from "@/lib/desk/number";
+import { formatDeskNumber, normalizeDeskNumber } from "@/lib/desk/number";
 import { cn } from "@/lib/utils";
+
+function DeskNumberLockup({ deskNumber }: { deskNumber: string }) {
+  const digits = normalizeDeskNumber(deskNumber);
+  const pretty = formatDeskNumber(digits);
+  const first = pretty.slice(0, 9); // "6310 7142"
+  const second = pretty.slice(10); // "4599 6624"
+  return (
+    <p
+      className="mt-2 font-mono text-[1.65rem] leading-tight tracking-wide text-fg tabular-nums sm:text-3xl"
+      aria-label={`Desk number ${pretty}`}
+    >
+      <span className="inline-block whitespace-nowrap">{first || pretty}</span>
+      {second ? (
+        <>
+          {" "}
+          <span className="inline-block whitespace-nowrap">{second}</span>
+        </>
+      ) : null}
+    </p>
+  );
+}
 
 export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
   return (
@@ -16,9 +37,9 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">
           Your account with us
         </p>
-        <h1 className="mt-3 text-3xl font-medium tracking-tight">
-          Desk {formatDeskNumber(deskNumber)}. Pick a platform.
-        </h1>
+        <p className="mt-3 text-sm text-muted">Desk</p>
+        <DeskNumberLockup deskNumber={deskNumber} />
+        <h1 className="mt-6 text-3xl font-medium tracking-tight">Pick a platform.</h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
           That number is the only login we keep. Telegram is the live inbox — real chats,
           drafts, send. X and Reddit stay their own accounts.
