@@ -8,41 +8,44 @@ import { cn } from "@/lib/utils";
 export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
   return (
     <main className="grid min-h-dvh place-items-center bg-bg px-4 py-10 text-fg">
-      <div className="page-enter w-full max-w-3xl">
+      <div className="page-enter w-full max-w-4xl">
         <div className="flex items-start justify-between gap-4">
           <Logo />
           <UserButton />
         </div>
-        <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">X Relay</p>
-        <h1 className="mt-3 text-3xl font-medium tracking-tight">Choose your platform.</h1>
-        <p className="mt-3 max-w-lg text-sm leading-relaxed text-muted">
-          Your desk with us is anonymous — number{" "}
-          <span className="font-mono text-fg">{formatDeskNumber(deskNumber)}</span>
-          . X, Telegram, and Reddit are separate doors. Each one signs in that
-          platform’s account on top of this desk.
+        <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">
+          Your account with us
+        </p>
+        <h1 className="mt-3 text-3xl font-medium tracking-tight">
+          Desk {formatDeskNumber(deskNumber)}. Pick a platform.
+        </h1>
+        <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
+          That number is the only login we keep. X, Telegram, and Reddit each
+          connect their own account on top of it. Reddit is the orange door.
         </p>
 
-        <div className="mt-8 grid gap-3 sm:grid-cols-3">
+        <div className="mt-8 grid grid-cols-1 gap-3 min-[520px]:grid-cols-3">
           <PlatformCard
             to="/x"
             label="X"
             kicker="Open"
-            description="Sign in the posting account, assign public sources, rewrite, and drip."
+            description="Posting account, sources, rewrite, drip."
             icon={<XTile />}
           />
           <PlatformCard
             to="/telegram"
             label="Telegram"
             kicker="Open"
-            description="Sign in with Telegram. Profile, messages, and the account sitting in this browser."
+            description="Sign in with Telegram. Profile and messages."
             icon={<TelegramTile />}
           />
           <PlatformCard
             to="/reddit"
             label="Reddit"
-            kicker="Open"
-            description="Allow on Reddit. Health checks, then a read-only inbox. No posting yet."
+            kicker="Connect"
+            description="Create the Reddit app, Allow, health, then inbox."
             icon={<RedditTile />}
+            accent
           />
         </div>
       </div>
@@ -56,20 +59,25 @@ function PlatformCard({
   kicker,
   description,
   icon,
+  accent,
 }: {
   to: "/x" | "/telegram" | "/reddit";
   label: string;
   kicker: string;
   description: string;
   icon: ReactNode;
+  accent?: boolean;
 }) {
   return (
     <Link
       to={to}
       className={cn(
-        "group flex flex-col rounded-xl border border-border bg-surface p-5 text-left",
+        "group flex min-h-[11rem] flex-col rounded-xl border bg-surface p-5 text-left",
+        accent
+          ? "border-[#ff4500]/50 hover:bg-[#ff4500]/10"
+          : "border-border hover:bg-surface-2",
         "transition-[background-color,border-color,transform] duration-[var(--motion-quick)] ease-[var(--ease-out)]",
-        "hover:bg-surface-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40",
         "active:scale-[0.99]",
       )}
     >
@@ -107,9 +115,17 @@ function TelegramTile() {
 
 function RedditTile() {
   return (
-    <span className="grid size-16 place-items-center rounded-lg bg-reddit text-reddit-fg" aria-hidden="true">
-      <svg viewBox="0 0 24 24" className="size-8" fill="currentColor">
-        <path d="M12 2 20 14h-5v8H9v-8H4L12 2Z" />
+    <span
+      className="grid size-16 place-items-center rounded-lg"
+      style={{ backgroundColor: "#FF4500", color: "#fff7f2" }}
+      aria-hidden="true"
+    >
+      <svg viewBox="0 0 24 24" className="size-9" fill="currentColor">
+        <circle cx="12" cy="14" r="7.2" />
+        <circle cx="9.2" cy="13.6" r="1.15" fill="#FF4500" />
+        <circle cx="14.8" cy="13.6" r="1.15" fill="#FF4500" />
+        <circle cx="16.6" cy="6.2" r="1.7" />
+        <path d="M12.2 8.4 15.4 6.4" stroke="currentColor" strokeWidth="1.6" fill="none" strokeLinecap="round" />
       </svg>
     </span>
   );

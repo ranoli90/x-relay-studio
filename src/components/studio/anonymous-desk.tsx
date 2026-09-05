@@ -260,9 +260,10 @@ export function BindDesk({
       <div className="page-enter w-full max-w-md">
         <Logo />
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">X Relay</p>
-        <h1 className="mt-3 text-3xl font-medium tracking-tight">Issue this session a desk number.</h1>
+        <h1 className="mt-3 text-3xl font-medium tracking-tight">This is your account with us.</h1>
         <p className="mt-3 text-sm leading-relaxed text-muted">
           No name. No email. A 16-digit number is the only identity we keep.
+          After this you pick X, Telegram, or Reddit.
         </p>
         {error ? <p className="mt-4 text-sm text-down">{error}</p> : null}
         <Button
@@ -279,7 +280,7 @@ export function BindDesk({
               });
           }}
         >
-          {busy ? "Issuing…" : "Issue desk number"}
+          {busy ? "Opening…" : "Open a desk"}
         </Button>
       </div>
     </main>
