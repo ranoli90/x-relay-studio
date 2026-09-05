@@ -1,4 +1,5 @@
 -- Path A hardening: unique webhook secrets, local username, inbound message dedupe.
+-- Renumbered from 0010_telegram_hardening.sql so prefixes stay unique.
 
 alter table telegram_accounts
   add column if not exists replica_username text;

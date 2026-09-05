@@ -24,7 +24,7 @@ export const Route = createFileRoute("/api/cron/studio")({
         }
         const { withCronLock } = await import("@/lib/jobs/lock");
         const { tickDueSources } = await import("@/lib/studio/sync.server");
-        const { tickLiveAll } = await import("@/lib/studio/drip.server");
+        const { tickLiveAll } = await import("@/lib/studio/tick-live.server");
         const lease = await withCronLock(async () => {
           const scrape = await tickDueSources(6);
           const live = await tickLiveAll(4);

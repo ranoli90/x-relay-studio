@@ -1,4 +1,5 @@
 -- Path B: the user's real Telegram (MTProto). Encrypted session + watch state.
+-- Renumbered from 0012_telegram_user.sql so prefixes stay unique.
 -- Bot helper keys stay in telegram_credentials and are unused on this path.
 
 create table if not exists telegram_user_sessions (

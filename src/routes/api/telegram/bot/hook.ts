@@ -27,7 +27,10 @@ export const Route = createFileRoute("/api/telegram/bot/hook")({
         try {
           await takeRate(row.user_id, "webhook", 120, 60_000);
         } catch {
-          return new Response("rate", { status: 429 });
+          return new Response("rate", {
+            status: 429,
+            headers: { "retry-after": "30" },
+          });
         }
         await ingestUpdates(row.user_id, [update]);
         return Response.json({ ok: true });

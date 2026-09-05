@@ -44,13 +44,24 @@ export function telegramConfigured(): boolean {
   return telegramOidcConfig() !== null || telegramUserApp() !== null;
 }
 
+function configuredOrigin(): string | null {
+  const raw = env("BETTER_AUTH_URL") ?? env("APP_ORIGIN");
+  if (!raw) return null;
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return null;
+  }
+}
+
 export function publicOrigin(request: Request): string {
-  const fromEnv = env("BETTER_AUTH_URL")?.replace(/\/$/, "");
+  const fromEnv = configuredOrigin();
   if (fromEnv) return fromEnv;
   const url = new URL(request.url);
-  const host = request.headers.get("x-forwarded-host") ?? url.host;
-  const proto = request.headers.get("x-forwarded-proto") ?? url.protocol.replace(":", "");
-  return `${proto}://${host}`;
+  if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+    return url.origin;
+  }
+  throw new Error("Set BETTER_AUTH_URL or APP_ORIGIN before connecting Telegram.");
 }
 
 export function telegramRedirectUri(request: Request): string {

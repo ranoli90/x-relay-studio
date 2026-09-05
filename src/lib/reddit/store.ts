@@ -1,4 +1,5 @@
 import { getSql } from "@/lib/db";
+import { decryptSecret, encryptSecret } from "@/lib/secrets";
 import type { HealthReport, RedditAccountPublic, RedditAppPublic } from "./types";
 
 type AppRow = {
@@ -43,6 +44,31 @@ type TicketRow = {
   expires_at: string | Date;
 };
 
+function seal(value: string): string {
+  return encryptSecret(value);
+}
+
+function open(value: string | null | undefined): string {
+  if (!value) return "";
+  try {
+    return decryptSecret(value);
+  } catch {
+    return value;
+  }
+}
+
+function decodeApp(row: AppRow): AppRow {
+  return { ...row, client_secret: open(row.client_secret) || row.client_secret };
+}
+
+function decodeAccount(row: AccountRow): AccountRow {
+  return {
+    ...row,
+    refresh_token: open(row.refresh_token) || row.refresh_token,
+    access_token: row.access_token ? open(row.access_token) || row.access_token : row.access_token,
+  };
+}
+
 function parseHealth(raw: string | null): HealthReport | null {
   if (!raw) return null;
   try {
@@ -83,7 +109,7 @@ export async function getApp(userId: string) {
   const rows = await sql<AppRow>`
     select * from reddit_apps where user_id = ${userId} limit 1
   `;
-  return rows[0] ?? null;
+  return rows[0] ? decodeApp(rows[0]) : null;
 }
 
 export function toPublicApp(
@@ -113,13 +139,14 @@ export async function upsertApp(opts: {
 }) {
   const sql = await getSql();
   const terms = (opts.termsAt ?? new Date()).toISOString();
+  const sealedSecret = seal(opts.clientSecret);
   await sql`
     insert into reddit_apps (
       user_id, client_id, client_secret, user_agent_name, redirect_uri,
       app_label, app_id, terms_at, updated_at
     )
     values (
-      ${opts.userId}, ${opts.clientId}, ${opts.clientSecret}, ${opts.userAgentName},
+      ${opts.userId}, ${opts.clientId}, ${sealedSecret}, ${opts.userAgentName},
       ${opts.redirectUri}, ${opts.appLabel}, ${opts.appId}, ${terms}, now()
     )
     on conflict (user_id) do update set
@@ -141,7 +168,7 @@ export async function listAccounts(userId: string) {
     where user_id = ${userId}
     order by created_at asc
   `;
-  return rows;
+  return rows.map(decodeAccount);
 }
 
 export async function countAccounts(userId: string) {
@@ -159,7 +186,7 @@ export async function getAccount(userId: string, accountId: string) {
     where user_id = ${userId} and id = ${accountId}
     limit 1
   `;
-  return rows[0] ?? null;
+  return rows[0] ? decodeAccount(rows[0]) : null;
 }
 
 export async function getAccountByRedditId(userId: string, redditId: string) {
@@ -169,7 +196,7 @@ export async function getAccountByRedditId(userId: string, redditId: string) {
     where user_id = ${userId} and reddit_id = ${redditId}
     limit 1
   `;
-  return rows[0] ?? null;
+  return rows[0] ? decodeAccount(rows[0]) : null;
 }
 
 export async function redditIdTakenByOther(redditId: string, userId: string) {
@@ -204,6 +231,8 @@ export async function upsertAccount(opts: {
 }) {
   const sql = await getSql();
   const healthJson = JSON.stringify(opts.health);
+  const sealedRefresh = seal(opts.refreshToken);
+  const sealedAccess = seal(opts.accessToken);
   await sql`
     insert into reddit_accounts (
       id, user_id, reddit_id, name, icon_img, created_utc, has_verified_email,
@@ -213,7 +242,7 @@ export async function upsertAccount(opts: {
       ${opts.id}, ${opts.userId}, ${opts.redditId}, ${opts.name}, ${opts.iconImg},
       ${opts.createdUtc}, ${opts.hasVerifiedEmail}, ${opts.isGold}, ${opts.isMod},
       ${opts.isSuspended}, ${opts.linkKarma}, ${opts.commentKarma}, ${opts.totalKarma},
-      ${opts.refreshToken}, ${opts.accessToken}, ${opts.accessExpiresAt.toISOString()},
+      ${sealedRefresh}, ${sealedAccess}, ${opts.accessExpiresAt.toISOString()},
       ${opts.scopes}, ${healthJson}, ${opts.health.okToUse}, now()
     )
     on conflict (user_id, reddit_id) do update set
@@ -245,19 +274,21 @@ export async function saveTokens(opts: {
   refreshToken?: string;
 }) {
   const sql = await getSql();
+  const sealedAccess = seal(opts.accessToken);
   if (opts.refreshToken) {
+    const sealedRefresh = seal(opts.refreshToken);
     await sql`
       update reddit_accounts
-      set access_token = ${opts.accessToken},
+      set access_token = ${sealedAccess},
           access_expires_at = ${opts.expiresAt.toISOString()},
-          refresh_token = ${opts.refreshToken},
+          refresh_token = ${sealedRefresh},
           updated_at = now()
       where user_id = ${opts.userId} and id = ${opts.accountId}
     `;
   } else {
     await sql`
       update reddit_accounts
-      set access_token = ${opts.accessToken},
+      set access_token = ${sealedAccess},
           access_expires_at = ${opts.expiresAt.toISOString()},
           updated_at = now()
       where user_id = ${opts.userId} and id = ${opts.accountId}
@@ -315,7 +346,7 @@ export async function deleteAccount(userId: string, accountId: string) {
     where user_id = ${userId} and id = ${accountId}
     returning *
   `;
-  return rows[0] ?? null;
+  return rows[0] ? decodeAccount(rows[0]) : null;
 }
 
 export async function insertTicket(opts: {

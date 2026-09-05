@@ -1,4 +1,5 @@
 -- Per-user Telegram helper keys (Bot API). Encrypted at rest. No session strings.
+-- Renumbered from 0009_telegram_credentials.sql so prefixes stay unique.
 -- Exists before telegram_accounts so onboarding can save a key first.
 
 create table if not exists telegram_credentials (

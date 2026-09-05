@@ -8,6 +8,12 @@ const tweetCache = new Map<string, CacheEntry<Tweet>>();
 const profileCache = new Map<string, CacheEntry<UserProfile>>();
 const TTL_MS = 90_000;
 
+export function unofficialXLookupEnabled(): boolean {
+  const raw = process.env.FXTWITTER_ENABLED?.trim().toLowerCase();
+  if (raw === "false" || raw === "0" || raw === "off") return false;
+  return true;
+}
+
 function fromCache<T>(map: Map<string, CacheEntry<T>>, key: string): T | null {
   const hit = map.get(key);
   if (!hit) return null;
@@ -19,6 +25,9 @@ function fromCache<T>(map: Map<string, CacheEntry<T>>, key: string): T | null {
 }
 
 async function getJson(url: string, timeoutMs = 5_000): Promise<unknown> {
+  if (!unofficialXLookupEnabled()) {
+    throw new Error("Unofficial X lookup is disabled. Set FXTWITTER_ENABLED=true to use the public FXTwitter mirror.");
+  }
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), timeoutMs);
   try {
@@ -172,6 +181,7 @@ export function mapFxUser(rawUnknown: unknown): UserProfile | null {
 }
 
 export async function fetchTweet(id: string): Promise<Tweet | null> {
+  if (!unofficialXLookupEnabled()) return null;
   const cached = fromCache(tweetCache, id);
   if (cached) return cached;
   try {
@@ -185,6 +195,7 @@ export async function fetchTweet(id: string): Promise<Tweet | null> {
 }
 
 export async function fetchProfile(handle: string): Promise<UserProfile | null> {
+  if (!unofficialXLookupEnabled()) return null;
   const key = handle.replace(/^@/, "").toLowerCase();
   const cached = fromCache(profileCache, key);
   if (cached) return cached;
@@ -199,6 +210,7 @@ export async function fetchProfile(handle: string): Promise<UserProfile | null> 
 }
 
 export async function hydrateTweets(partial: Tweet[], limit = 12): Promise<Tweet[]> {
+  if (!unofficialXLookupEnabled()) return partial.slice(0, limit);
   const slice = partial.slice(0, limit);
   const out = slice.slice();
   const pending: number[] = [];
@@ -229,6 +241,7 @@ export async function hydrateTweets(partial: Tweet[], limit = 12): Promise<Tweet
 }
 
 export async function hydrateProfiles(handles: string[], limit = 12): Promise<UserProfile[]> {
+  if (!unofficialXLookupEnabled()) return [];
   const unique = [...new Set(handles.map((h) => h.replace(/^@/, "")).filter(Boolean))].slice(0, limit);
   const results = await Promise.all(unique.map((h) => fetchProfile(h)));
   return results.filter((p): p is UserProfile => p !== null);

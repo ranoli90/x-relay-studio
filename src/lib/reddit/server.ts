@@ -1,7 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { fetchInbox } from "./inbox";
-import { buildHealthReport, probePublicProfile } from "./health";
+import { buildHealthReport } from "./health";
+import { probePublicProfile } from "./health-probe";
 import {
   clientCredentials,
   RedditOAuthError,
@@ -232,7 +233,7 @@ export const runHealthCheck = createServerFn({ method: "POST" })
             : "Reddit API failed.";
     }
     const publicProfile = me?.name
-      ? await probePublicProfile(me.name, live.userAgent)
+      ? await probePublicProfile(me.name, live.userAgent, live.accessToken)
       : "unknown";
     const health = buildHealthReport({
       me,
