@@ -8,14 +8,11 @@ export const Route = createFileRoute("/api/telegram/bot/hook")({
   server: {
     handlers: {
       POST: async ({ request }) => {
-        const url = new URL(request.url);
         const header = request.headers.get("x-telegram-bot-api-secret-token") ?? "";
-        const query = url.searchParams.get("s") ?? "";
-        const secret = header || query;
-        if (!secret) return new Response("no", { status: 401 });
-        const row = await findByWebhookSecret(secret);
+        if (!header) return new Response("no", { status: 401 });
+        const row = await findByWebhookSecret(header);
         if (!row?.webhook_secret) return new Response("no", { status: 401 });
-        if (!timingSafeEqualString(secret, row.webhook_secret)) {
+        if (!timingSafeEqualString(header, row.webhook_secret)) {
           return new Response("no", { status: 401 });
         }
         let update: TelegramUpdate;
@@ -30,7 +27,7 @@ export const Route = createFileRoute("/api/telegram/bot/hook")({
         try {
           await takeRate(row.user_id, "webhook", 120, 60_000);
         } catch {
-          return Response.json({ ok: true });
+          return new Response("rate", { status: 429 });
         }
         await ingestUpdates(row.user_id, [update]);
         return Response.json({ ok: true });
