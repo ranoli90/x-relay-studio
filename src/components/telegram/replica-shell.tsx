@@ -44,6 +44,7 @@ export function ReplicaShell() {
   }, []);
 
   const account = snapshot?.account ?? null;
+  const credential = snapshot?.credential ?? null;
   const chats = snapshot?.chats ?? [];
   const selected = chats.find((c) => c.id === selectedChatId) ?? null;
 
@@ -57,11 +58,20 @@ export function ReplicaShell() {
     setConfirmUnlink(true);
   }
 
+  const settings = account ? (
+    <SettingsPane
+      account={account}
+      credential={credential}
+      onBack={() => setView("profile")}
+      onUnlink={requestUnlink}
+    />
+  ) : null;
+
   const mobileMain =
     view === "edit" && account ? (
       <ProfileEdit account={account} saving={saving} onBack={() => setView("profile")} onSave={(d) => void saveProfile(d)} />
     ) : view === "settings" && account ? (
-      <SettingsPane account={account} onBack={() => setView("profile")} onUnlink={requestUnlink} />
+      settings
     ) : view === "profile" && account ? (
       <ProfilePane
         account={account}
@@ -155,7 +165,7 @@ export function ReplicaShell() {
                     onSave={(d) => void saveProfile(d)}
                   />
                 ) : view === "settings" ? (
-                  <SettingsPane account={account} onBack={() => setView("profile")} onUnlink={requestUnlink} />
+                  settings
                 ) : (
                   <Conversation
                     chat={selected}

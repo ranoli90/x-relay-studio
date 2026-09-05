@@ -16,6 +16,7 @@ import { Route as XRouteImport } from './routes/x'
 import { Route as TelegramAppRouteImport } from './routes/telegram.app'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiCronStudioRouteImport } from './routes/api/cron/studio'
+import { Route as ApiTelegramBotHookRouteImport } from './routes/api/telegram/bot/hook'
 import { Route as ApiTelegramOidcCallbackRouteImport } from './routes/api/telegram/oidc/callback'
 
 const IndexRoute = IndexRouteImport.update({
@@ -53,6 +54,11 @@ const ApiCronStudioRoute = ApiCronStudioRouteImport.update({
   path: '/api/cron/studio',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTelegramBotHookRoute = ApiTelegramBotHookRouteImport.update({
+  id: '/api/telegram/bot/hook',
+  path: '/api/telegram/bot/hook',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiTelegramOidcCallbackRoute = ApiTelegramOidcCallbackRouteImport.update({
   id: '/api/telegram/oidc/callback',
   path: '/api/telegram/oidc/callback',
@@ -67,6 +73,7 @@ export interface FileRoutesByFullPath {
   '/telegram/app': typeof TelegramAppRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
 }
 export interface FileRoutesByTo {
@@ -77,6 +84,7 @@ export interface FileRoutesByTo {
   '/telegram/app': typeof TelegramAppRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
 }
 export interface FileRoutesById {
@@ -88,6 +96,7 @@ export interface FileRoutesById {
   '/telegram/app': typeof TelegramAppRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
 }
 export interface FileRouteTypes {
@@ -100,6 +109,7 @@ export interface FileRouteTypes {
     | '/telegram/app'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -110,6 +120,7 @@ export interface FileRouteTypes {
     | '/telegram/app'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
   id:
     | '__root__'
@@ -120,6 +131,7 @@ export interface FileRouteTypes {
     | '/telegram/app'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
   fileRoutesById: FileRoutesById
 }
@@ -130,6 +142,7 @@ export interface RootRouteChildren {
   XRoute: typeof XRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiCronStudioRoute: typeof ApiCronStudioRoute
+  ApiTelegramBotHookRoute: typeof ApiTelegramBotHookRoute
   ApiTelegramOidcCallbackRoute: typeof ApiTelegramOidcCallbackRoute
 }
 
@@ -184,6 +197,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCronStudioRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/telegram/bot/hook': {
+      id: '/api/telegram/bot/hook'
+      path: '/api/telegram/bot/hook'
+      fullPath: '/api/telegram/bot/hook'
+      preLoaderRoute: typeof ApiTelegramBotHookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/telegram/oidc/callback': {
       id: '/api/telegram/oidc/callback'
       path: '/api/telegram/oidc/callback'
@@ -213,6 +233,7 @@ const rootRouteChildren: RootRouteChildren = {
   XRoute: XRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiCronStudioRoute: ApiCronStudioRoute,
+  ApiTelegramBotHookRoute: ApiTelegramBotHookRoute,
   ApiTelegramOidcCallbackRoute: ApiTelegramOidcCallbackRoute,
 }
 export const routeTree = rootRouteImport

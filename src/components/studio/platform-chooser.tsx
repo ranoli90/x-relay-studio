@@ -27,7 +27,7 @@ export function PlatformChooser() {
             to="/telegram"
             label="Telegram"
             kicker="Open"
-            description="Sign in with Telegram. Profile, messages, and the account sitting in this browser."
+            description="Connect your Telegram. Set up a helper, check it works, then open the desk."
             icon={<TelegramTile />}
           />
         </div>

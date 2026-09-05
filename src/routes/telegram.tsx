@@ -1,8 +1,11 @@
-import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { TelegramLoginScreen } from "@/components/telegram/login-screen";
+import { TelegramOnboarding } from "@/components/telegram/onboarding";
+import { ReplicaShell } from "@/components/telegram/replica-shell";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
-import { telegramStatusFn, telegramEnterPreviewFn } from "@/lib/telegram/fns";
+import { telegramStatusFn } from "@/lib/telegram/fns";
+import { useTelegram } from "@/lib/telegram/store";
 import type { TelegramStatus } from "@/lib/telegram/types";
 
 type TelegramSearch = { error?: string };
@@ -33,7 +36,7 @@ function TelegramDoor() {
       .then((s) => {
         if (cancelled) return;
         setStatus(s);
-        if (s.linked) setGoApp(true);
+        if (s.onboarded || (s.linked && !s.hasOwnKey)) setGoApp(true);
         setReady(true);
       })
       .catch(() => {
@@ -44,19 +47,34 @@ function TelegramDoor() {
     };
   }, [signedIn, isPending]);
 
-  if (goApp) return <Navigate to="/telegram/app" />;
+  useEffect(() => {
+    if (!goApp) return;
+    if (window.location.pathname !== "/telegram/app") {
+      window.history.replaceState(null, "", "/telegram/app");
+    }
+  }, [goApp]);
+
+  if (goApp) return <ReplicaShell />;
 
   const displayName = user?.displayName ?? user?.primaryEmail ?? undefined;
 
+  if (!signedIn || isPending || (signedIn && !ready)) {
+    return (
+      <TelegramLoginScreen pending={isPending || (signedIn && !ready)} error={error ?? null} />
+    );
+  }
+
   return (
-    <TelegramLoginScreen
-      pending={isPending || (signedIn && !ready)}
-      signedIn={signedIn && !isPending}
+    <TelegramOnboarding
       status={status}
       displayName={displayName}
       error={error ?? null}
+      onReady={() => setGoApp(true)}
       onPreview={() => {
-        void telegramEnterPreviewFn({ data: { displayName } }).then(() => setGoApp(true));
+        void useTelegram
+          .getState()
+          .enterPreview(displayName ?? "You")
+          .then(() => setGoApp(true));
       }}
     />
   );

@@ -1,16 +1,22 @@
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { TelegramAccount } from "@/lib/telegram/types";
+import type { TelegramAccount, TelegramCredentialPublic } from "@/lib/telegram/types";
 
 export function SettingsPane({
   account,
+  credential,
   onBack,
   onUnlink,
 }: {
   account: TelegramAccount;
+  credential?: TelegramCredentialPublic | null;
   onBack: () => void;
   onUnlink: () => void;
 }) {
+  const helper = credential?.botUsername
+    ? `@${credential.botUsername}`
+    : credential?.botName ?? null;
+
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg-secondary)] text-[var(--tg-text)]">
       <header className="flex h-14 shrink-0 items-center gap-1 px-2">
@@ -20,7 +26,17 @@ export function SettingsPane({
         <h2 className="text-sm font-medium">Settings</h2>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8">
-        <section className="rounded-xl bg-[var(--tg-item-hover)] p-4">
+        {helper ? (
+          <section className="rounded-xl bg-[var(--tg-item-hover)] p-4">
+            <h3 className="text-sm font-medium">Your helper</h3>
+            <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
+              Connected through {helper}
+              {credential?.tokenHint ? ` · key ${credential.tokenHint}` : ""}. Disconnect to paste a
+              different key.
+            </p>
+          </section>
+        ) : null}
+        <section className={`${helper ? "mt-3" : ""} rounded-xl bg-[var(--tg-item-hover)] p-4`}>
           <h3 className="text-sm font-medium">Devices</h3>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
             {account.preview

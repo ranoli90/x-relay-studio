@@ -6,7 +6,10 @@ export type TelegramErrorCode =
   | "telegram_in_use"
   | "flood"
   | "invalid"
-  | "unlinked";
+  | "unlinked"
+  | "bad_key"
+  | "hello_wait"
+  | "checks_incomplete";
 
 export class TelegramError extends Error {
   readonly code: TelegramErrorCode;

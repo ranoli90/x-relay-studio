@@ -1,7 +1,8 @@
 import { randomBytes } from "node:crypto";
 import { getSql } from "@/lib/db";
+import { helperChatId, notesChatId } from "./bot-token";
 import { TelegramError } from "./errors";
-import { BIO_GRAPHEME_LIMIT, STUDIO_NOTES_CHAT_ID } from "./types";
+import { BIO_GRAPHEME_LIMIT } from "./types";
 import type { TelegramAccount, TelegramChat, TelegramMessage, TelegramPath } from "./types";
 import { graphemeCount, sliceGraphemes } from "./graphemes";
 
@@ -96,9 +97,10 @@ export async function getAccount(userId: string): Promise<TelegramAccount | null
 
 export async function seedStudioNotes(userId: string, displayName: string): Promise<void> {
   const sql = await getSql();
+  const chatId = notesChatId(userId);
   const existing = await sql.query<{ id: string }>(
     `select id from telegram_chats where user_id = $1 and id = $2`,
-    [userId, STUDIO_NOTES_CHAT_ID],
+    [userId, chatId],
   );
   const body = `You’re connected as ${displayName}. Telegram only shared your identity with this app. Private chats with other people stay in Telegram.`;
   const now = new Date().toISOString();
@@ -106,14 +108,78 @@ export async function seedStudioNotes(userId: string, displayName: string): Prom
     await sql.query(
       `insert into telegram_chats (id, user_id, kind, title, last_preview, last_at, pinned)
        values ($1, $2, 'notes', 'Studio', $3, $4, true)`,
-      [STUDIO_NOTES_CHAT_ID, userId, body.slice(0, 140), now],
+      [chatId, userId, body.slice(0, 140), now],
     );
     await sql.query(
       `insert into telegram_messages (id, user_id, chat_id, from_self, author_name, body, created_at)
        values ($1, $2, $3, false, 'Studio', $4, $5)`,
-      [newId("msg"), userId, STUDIO_NOTES_CHAT_ID, body, now],
+      [newId("msg"), userId, chatId, body, now],
     );
   }
+}
+
+export async function seedHelperChat(
+  userId: string,
+  botName: string,
+  userFirstName: string,
+): Promise<void> {
+  const sql = await getSql();
+  const chatId = helperChatId(userId);
+  const existing = await sql.query<{ id: string }>(
+    `select id from telegram_chats where user_id = $1 and id = $2`,
+    [userId, chatId],
+  );
+  const body = `${userFirstName} tapped Start. This is the private thread with your helper.`;
+  const now = new Date().toISOString();
+  if (!existing[0]) {
+    await sql.query(
+      `insert into telegram_chats (id, user_id, kind, title, last_preview, last_at, pinned)
+       values ($1, $2, 'bot', $3, $4, $5, true)`,
+      [chatId, userId, botName || "Helper", body.slice(0, 140), now],
+    );
+    await sql.query(
+      `insert into telegram_messages (id, user_id, chat_id, from_self, author_name, body, created_at)
+       values ($1, $2, $3, false, $4, $5, $6)`,
+      [newId("msg"), userId, chatId, botName || "Helper", body, now],
+    );
+  }
+}
+
+export async function appendMessage(opts: {
+  userId: string;
+  chatId: string;
+  fromSelf: boolean;
+  authorName: string;
+  body: string;
+}): Promise<TelegramMessage> {
+  const text = opts.body.trim();
+  if (!text) throw new TelegramError("invalid", "Message is empty.", 400);
+  if (text.length > 4000) throw new TelegramError("invalid", "Message is too long.", 400);
+  const sql = await getSql();
+  const chat = await sql.query<{ id: string }>(
+    `select id from telegram_chats where user_id = $1 and id = $2`,
+    [opts.userId, opts.chatId],
+  );
+  if (!chat[0]) throw new TelegramError("invalid", "Chat not found.", 404);
+  const now = new Date().toISOString();
+  const id = newId("msg");
+  await sql.query(
+    `insert into telegram_messages (id, user_id, chat_id, from_self, author_name, body, created_at)
+     values ($1,$2,$3,$4,$5,$6,$7)`,
+    [id, opts.userId, opts.chatId, opts.fromSelf, opts.authorName, text, now],
+  );
+  await sql.query(
+    `update telegram_chats set last_preview = $1, last_at = $2 where user_id = $3 and id = $4`,
+    [text.slice(0, 140), now, opts.userId, opts.chatId],
+  );
+  return {
+    id,
+    chatId: opts.chatId,
+    fromSelf: opts.fromSelf,
+    authorName: opts.authorName,
+    body: text,
+    createdAt: now,
+  };
 }
 
 export async function upsertLinkedAccount(opts: {
@@ -262,15 +328,25 @@ export async function listMessages(
   }));
 }
 
+export async function getChatKind(
+  userId: string,
+  chatId: string,
+): Promise<TelegramChat["kind"] | null> {
+  const sql = await getSql();
+  const rows = await sql.query<{ kind: TelegramChat["kind"] }>(
+    `select kind from telegram_chats where user_id = $1 and id = $2`,
+    [userId, chatId],
+  );
+  return rows[0]?.kind ?? null;
+}
+
 export async function sendNote(
   userId: string,
   chatId: string,
   body: string,
   authorName: string,
+  opts?: { asSelf?: boolean },
 ): Promise<TelegramMessage> {
-  const text = body.trim();
-  if (!text) throw new TelegramError("invalid", "Message is empty.", 400);
-  if (text.length > 4000) throw new TelegramError("invalid", "Message is too long.", 400);
   const sql = await getSql();
   const chat = await sql.query<{ id: string; kind: string }>(
     `select id, kind from telegram_chats where user_id = $1 and id = $2`,
@@ -280,25 +356,13 @@ export async function sendNote(
   if (chat[0].kind !== "notes") {
     throw new TelegramError("invalid", "This path can only write Studio notes.", 400);
   }
-  const now = new Date().toISOString();
-  const id = newId("msg");
-  await sql.query(
-    `insert into telegram_messages (id, user_id, chat_id, from_self, author_name, body, created_at)
-     values ($1,$2,$3,true,$4,$5,$6)`,
-    [id, userId, chatId, authorName, text, now],
-  );
-  await sql.query(
-    `update telegram_chats set last_preview = $1, last_at = $2 where user_id = $3 and id = $4`,
-    [text.slice(0, 140), now, userId, chatId],
-  );
-  return {
-    id,
+  return appendMessage({
+    userId,
     chatId,
-    fromSelf: true,
+    fromSelf: opts?.asSelf ?? true,
     authorName,
-    body: text,
-    createdAt: now,
-  };
+    body,
+  });
 }
 
 export async function updateReplicaProfile(

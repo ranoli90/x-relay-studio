@@ -1,6 +1,10 @@
+import type { TelegramCheckResult } from "./checks";
+
 export type TelegramPath = "oidc" | "mtproto";
 
 export type TelegramChatKind = "notes" | "bot" | "user";
+
+export type TelegramOnboardingStep = "welcome" | "key" | "hello" | "checks" | "done";
 
 export type TelegramAccount = {
   telegramUserId: number;
@@ -41,11 +45,27 @@ export type TelegramMessage = {
   createdAt: string;
 };
 
+export type TelegramCredentialPublic = {
+  hasToken: boolean;
+  botUsername: string | null;
+  botName: string | null;
+  botId: number | null;
+  tokenHint: string | null;
+  helloLink: string | null;
+  helloReceived: boolean;
+  onboarded: boolean;
+  webhookActive: boolean;
+  checks: TelegramCheckResult[];
+  step: TelegramOnboardingStep;
+};
+
 export type TelegramSnapshot = {
   configured: boolean;
   mtprotoEnabled: boolean;
+  onboarded: boolean;
   account: TelegramAccount | null;
   chats: TelegramChat[];
+  credential: TelegramCredentialPublic | null;
 };
 
 export type TelegramStatus = {
@@ -53,6 +73,11 @@ export type TelegramStatus = {
   mtprotoEnabled: boolean;
   linked: boolean;
   preview: boolean;
+  onboarded: boolean;
+  hasOwnKey: boolean;
+  platformLogin: boolean;
+  step: TelegramOnboardingStep;
+  credential: TelegramCredentialPublic | null;
 };
 
 export const STUDIO_NOTES_CHAT_ID = "studio-notes";

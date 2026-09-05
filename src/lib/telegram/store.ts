@@ -52,7 +52,9 @@ export const useTelegram = create<TelegramState>((set, get) => ({
   setProfileOpen: (profileOpen) => set({ profileOpen }),
 
   load: async () => {
-    set({ loading: true, error: null });
+    const keep = Boolean(get().snapshot?.account);
+    if (!keep) set({ loading: true, error: null });
+    else set({ error: null });
     try {
       const snapshot = await telegramMeFn();
       set({ snapshot, loading: false });
@@ -78,6 +80,7 @@ export const useTelegram = create<TelegramState>((set, get) => ({
         loading: false,
         error: err instanceof Error ? err.message : "Could not open preview.",
       });
+      throw err;
     }
   },
 
@@ -92,6 +95,24 @@ export const useTelegram = create<TelegramState>((set, get) => ({
       set({
         messagesLoading: false,
         error: err instanceof Error ? err.message : "Could not load messages.",
+      });
+    }
+  },
+
+  saveProfile: async (input) => {
+    set({ saving: true, error: null });
+    try {
+      const account = await telegramUpdateProfileFn({ data: input });
+      const snapshot = get().snapshot;
+      set({
+        saving: false,
+        snapshot: snapshot ? { ...snapshot, account } : snapshot,
+        view: "profile",
+      });
+    } catch (err) {
+      set({
+        saving: false,
+        error: err instanceof Error ? err.message : "Could not save profile.",
       });
     }
   },
@@ -121,24 +142,6 @@ export const useTelegram = create<TelegramState>((set, get) => ({
     }
   },
 
-  saveProfile: async (input) => {
-    set({ saving: true, error: null });
-    try {
-      const account = await telegramUpdateProfileFn({ data: input });
-      const snapshot = get().snapshot;
-      set({
-        saving: false,
-        snapshot: snapshot ? { ...snapshot, account } : snapshot,
-        view: "profile",
-      });
-    } catch (err) {
-      set({
-        saving: false,
-        error: err instanceof Error ? err.message : "Could not save profile.",
-      });
-    }
-  },
-
   unlink: async () => {
     set({ loading: true, error: null });
     try {
@@ -148,8 +151,10 @@ export const useTelegram = create<TelegramState>((set, get) => ({
         snapshot: {
           configured: get().snapshot?.configured ?? false,
           mtprotoEnabled: false,
+          onboarded: false,
           account: null,
           chats: [],
+          credential: null,
         },
         view: "list",
         selectedChatId: null,
