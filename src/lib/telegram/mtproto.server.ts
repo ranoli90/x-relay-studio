@@ -1,6 +1,11 @@
 /** Server-only Telegram user client. Never import from client code. */
 import { TelegramError } from "./errors";
-import { floodWaitSeconds, mtprotoClientOpts } from "./mtproto-policy.server";
+import {
+  floodWaitSeconds,
+  isDcConnectFailure,
+  mtprotoClientOpts,
+  type MtprotoTransport,
+} from "./mtproto-policy.server";
 
 type Teleproto = typeof import("teleproto");
 
@@ -17,8 +22,8 @@ function loadLib(): Promise<Teleproto> {
   return libPromise;
 }
 
-function clientOpts() {
-  return mtprotoClientOpts();
+function clientOpts(transport: MtprotoTransport) {
+  return mtprotoClientOpts(transport);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -79,6 +84,13 @@ function mapRpc(err: unknown): TelegramError {
   if (msg.includes("AUTH_KEY") || msg.includes("SESSION_REVOKED") || msg.includes("SESSION_EXPIRED")) {
     return new TelegramError("unlinked", "Telegram signed this desk out. Connect again.", 401);
   }
+  if (isDcConnectFailure(raw)) {
+    return new TelegramError(
+      "flood",
+      "Telegram’s data center didn’t answer. Tap try again in a few seconds.",
+      503,
+    );
+  }
   if (
     msg.includes("CONNECTION") ||
     msg.includes("CONNECT") ||
@@ -90,7 +102,7 @@ function mapRpc(err: unknown): TelegramError {
     msg.includes("TIMEOUT") ||
     msg.includes(" DC ")
   ) {
-    return new TelegramError("flood", "Couldn't refresh Telegram just now.", 503);
+    return new TelegramError("flood", "Couldn't reach Telegram just now. Try again.", 503);
   }
   if (msg.includes("CANNOT FIND PACKAGE") || msg.includes("CANNOT FIND MODULE")) {
     return new TelegramError("not_configured", "Telegram client failed to load on this server. Try again in a minute.", 500);
@@ -101,12 +113,18 @@ function mapRpc(err: unknown): TelegramError {
 
 type Creds = { apiId: number; apiHash: string; session?: string };
 
-async function openClient(creds: Creds) {
-  const lib = await loadLib();
-  const session = new lib.sessions.StringSession(creds.session ?? "");
-  const client = new lib.TelegramClient(session, creds.apiId, creds.apiHash, clientOpts());
-  await withTimeout(client.connect(), 12_000, "connect");
-  return { lib, client, save: () => String(client.session.save() ?? creds.session ?? "") };
+function connectTransports(): MtprotoTransport[] {
+  if (process.env.TELEGRAM_MTPROTO_WSS === "true") return ["wss"];
+  if (process.env.TELEGRAM_MTPROTO_WSS === "false") return ["tcp"];
+  return ["tcp", "wss"];
+}
+
+function isRetryableConnect(err: unknown): boolean {
+  const raw = err instanceof Error ? err.message : String(err);
+  return (
+    isDcConnectFailure(raw) ||
+    /CONNECT|TIMEOUT|SOCKET|WSS|ECONN|ETIMEDOUT|ENOTFOUND|EAI_AGAIN/i.test(raw)
+  );
 }
 
 async function closeClient(client: { disconnect?: () => Promise<void> | void }) {
@@ -115,6 +133,33 @@ async function closeClient(client: { disconnect?: () => Promise<void> | void }) 
   } catch {
     /* ignore */
   }
+}
+
+async function openClient(creds: Creds) {
+  const lib = await loadLib();
+  const transports = connectTransports();
+  let last: unknown;
+  for (let i = 0; i < transports.length; i++) {
+    const transport = transports[i];
+    const session = new lib.sessions.StringSession(creds.session ?? "");
+    const client = new lib.TelegramClient(session, creds.apiId, creds.apiHash, clientOpts(transport));
+    try {
+      await withTimeout(client.connect(), 22_000, "connect");
+      return { lib, client, save: () => String(client.session.save() ?? creds.session ?? "") };
+    } catch (err) {
+      last = err;
+      await closeClient(client);
+      const raw = err instanceof Error ? err.message : String(err);
+      const canFallback = i < transports.length - 1 && isRetryableConnect(err);
+      console.info("[telegram]", {
+        event: canFallback ? "mtproto_transport_fallback" : "mtproto_connect_failed",
+        transport,
+        message: raw.slice(0, 160),
+      });
+      if (!canFallback) throw mapRpc(err);
+    }
+  }
+  throw mapRpc(last);
 }
 
 export async function sendLoginCode(opts: {
@@ -126,7 +171,7 @@ export async function sendLoginCode(opts: {
   try {
     const sent = await withTimeout(
       client.sendCode({ apiId: opts.apiId, apiHash: opts.apiHash }, opts.phone),
-      15_000,
+      20_000,
       "send code",
     );
     const phoneCodeHash = String(
