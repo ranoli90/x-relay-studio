@@ -68,49 +68,53 @@ function localLine(
 ): string {
   switch (plan.workflow) {
     case "W4_QUALIFY":
-      return `hey — i don't do long free chats. polaroid set is ${x.price ?? "$25"} if you actually want to look. otherwise we can leave it.`;
+      return `hey, i'm around. what are you looking for — pics, a custom, or just talking a bit first?`;
     case "W5_DAY_ARC": {
-      const fact = x.him || "that thing you mentioned";
-      return `was thinking about ${fact.toLowerCase()}.\n\nhow late are you up`;
+      if (plan.tactic === "discover_custom" || plan.sku === "custom_clip") {
+        return `sure! what would you want me to do in it? how long?\n\nand how's your day going`;
+      }
+      const fact = x.him;
+      if (fact) return `was thinking about ${fact.toLowerCase()}.\n\nhow's your day going`;
+      return `hey ${x.name.toLowerCase()} — how's your day going`;
     }
     case "W6_CLOSE_NOW":
-      return x.skuTitle
-        ? `${x.skuTitle.toLowerCase()} is ${x.price}. that's the one. want it?`
-        : `polaroid set is $25. that's the door.`;
+      if (plan.sku === "custom_clip" || plan.tactic === "discover_custom") {
+        return `yeah i can do a custom. what do you want me to do in it, and how long?\n\nonce i know that i'll tell you the price and a rail`;
+      }
+      return x.skuTitle && x.price
+        ? `yeah ${x.skuTitle.toLowerCase()} is ${x.price}. you got cashapp or throne?`
+        : `what are you wanting exactly? then i can tell you the price`;
     case "W7_GFE":
-      return `gfe isn't a vibe, it's a seat. i hold one, we talk terms with me actually reading them. i'm not signing anything in this chat.`;
+      return `yeah we can talk about that. i like talking first so it doesn't feel fake — what are you wanting out of it this week?`;
     case "W8_OFFER":
-      return `if you sent it, the rail has to clear. screenshot isn't the receipt here — i'll see it when it lands.`;
+      return `if you sent it i'll see it when it lands. cashapp / throne / paypal — or an email gift card if the app flags you. screenshot isn't the receipt here`;
     case "W10_AFTERCARE":
-      return `got it to you. i'm around later, no pitch.`;
+      return `got it to you. how you feeling, still good?`;
     case "W11_REACTIVATE": {
-      const mem = x.us || x.him || "that last thing you said";
-      return `still think about ${mem.toLowerCase()}. no agenda.`;
+      const mem = x.us || x.him;
+      return mem ? `still think about ${mem.toLowerCase()}. how've you been` : `hey, been a minute. how's your week`;
     }
     case "W12_OBJECTION":
       return plan.tactic === "not_her"
-        ? `yeah. i'm not her, and i don't take money and vanish. polaroid set is ${x.price ?? "$25"} if you want a small proof before anything bigger.`
-        : `that's the floor. polaroid set ${x.price ?? "$25"} or we leave it — i'm not haggling the catalog.`;
+        ? `ugh yeah that sucks, i'm not her. we can start small or just talk a bit first so you're not guessing. what did you actually want?`
+        : `we can figure price after i know what you want. what are you thinking?`;
     case "W13_PROOF":
-      return `fair. i've got an unused proof for you, same-outfit, not a recycled live. sending that — not a new custom.`;
+      return `fair, i get it. i can send a quick same-outfit so you're not guessing — not a whole custom`;
     case "W14_MEDIA_IN":
-      return `got the picture. i don't mark paid off a screenshot. when the rail pings, it moves.`;
+      return `got the pic. i wait for the rail to ping before i mark it paid`;
     case "W15_HANDOFF":
-      return `give me a minute — i need to look at this before i answer.`;
+      return `give me a minute, i wanna actually read this before i answer`;
     case "W16_QUEUE":
-      return `buried in something. i'll ping you in a bit.`;
+      return `buried in something, i'll ping you in a bit`;
     case "W2_SAFETY":
       if (plan.tactic === "no_irl") return `i don't meet. this stays here.`;
       if (plan.tactic === "ignore_payload") return `no. what did you actually want?`;
       return `i only talk to adults, and i don't do that.`;
     default:
-      return `hey ${x.name.toLowerCase()}. i'm here.`;
+      return `hey ${x.name.toLowerCase()}. what's up`;
   }
 }
 
-function fallbackSafe(plan: ReplyPlan, price: string | null): string {
-  if (plan.workflow === "W6_CLOSE_NOW" || plan.workflow === "W4_QUALIFY") {
-    return `polaroid set is ${price ?? "$25"}. that's it.`;
-  }
-  return `give me a second.`;
+function fallbackSafe(_plan: ReplyPlan, _price: string | null): string {
+  return `give me a second — what did you have in mind?`;
 }
