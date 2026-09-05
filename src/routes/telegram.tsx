@@ -22,7 +22,7 @@ function TelegramDoor() {
   const onDesk = pathname === "/telegram/app" || pathname.startsWith("/telegram/app/");
   const { sessionUser } = Route.useRouteContext();
   const { user, isPending } = useCurrentUserState();
-  const signedIn = Boolean(user) || (isPending && Boolean(sessionUser));
+  const signedIn = Boolean(user) || Boolean(sessionUser);
   const { error } = Route.useSearch();
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [ready, setReady] = useState(false);
@@ -53,6 +53,9 @@ function TelegramDoor() {
   }, [signedIn, isPending, navigate, onDesk]);
 
   if (onDesk) return <Outlet />;
+
+  // Desk number is the account. Never start X/Google from this door —
+  // that client is preview-only and X rejects the production callback.
   if (!signedIn && !isPending) return <Navigate to="/" />;
 
   const displayName = user?.displayName ?? undefined;
