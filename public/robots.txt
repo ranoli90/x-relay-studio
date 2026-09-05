@@ -1,0 +1,9 @@
+User-agent: *
+Disallow: /api/
+Disallow: /telegram/app
+Disallow: /reddit
+Disallow: /x
+Allow: /
+Allow: /privacy
+Allow: /terms
+Allow: /status
