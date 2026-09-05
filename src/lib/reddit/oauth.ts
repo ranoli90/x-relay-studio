@@ -1,5 +1,9 @@
 import { REDDIT_SCOPES } from "./types";
 
+const TOKEN_URL = "https://www.reddit.com/api/v1/access_token";
+const REVOKE_URL = "https://www.reddit.com/api/v1/revoke_token";
+const TOKEN_TIMEOUT_MS = 15_000;
+
 export function authorizeUrl(opts: {
   clientId: string;
   redirectUri: string;
@@ -29,10 +33,8 @@ async function tokenRequest(opts: {
   userAgent: string;
   body: URLSearchParams;
 }): Promise<TokenResponse> {
-  const basic = Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString(
-    "base64",
-  );
-  const res = await fetch("https://www.reddit.com/api/v1/access_token", {
+  const basic = Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString("base64");
+  const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
       Authorization: `Basic ${basic}`,
@@ -41,6 +43,7 @@ async function tokenRequest(opts: {
       Accept: "application/json",
     },
     body: opts.body,
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
   });
   const text = await res.text();
   let json: Record<string, unknown> = {};
@@ -53,6 +56,9 @@ async function tokenRequest(opts: {
     const err = String(json.error || res.status);
     const desc = json.error_description ? String(json.error_description) : "";
     throw new RedditOAuthError(err, desc, res.status);
+  }
+  if (typeof json.access_token !== "string" || typeof json.expires_in !== "number") {
+    throw new RedditOAuthError("BAD_TOKEN", "Reddit returned an incomplete token payload.", res.status);
   }
   return json as unknown as TokenResponse;
 }
@@ -123,10 +129,8 @@ export async function revokeToken(opts: {
   userAgent: string;
   token: string;
 }) {
-  const basic = Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString(
-    "base64",
-  );
-  await fetch("https://www.reddit.com/api/v1/revoke_token", {
+  const basic = Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString("base64");
+  await fetch(REVOKE_URL, {
     method: "POST",
     headers: {
       Authorization: `Basic ${basic}`,
@@ -137,5 +141,6 @@ export async function revokeToken(opts: {
       token: opts.token,
       token_type_hint: "refresh_token",
     }),
+    signal: AbortSignal.timeout(TOKEN_TIMEOUT_MS),
   });
 }
