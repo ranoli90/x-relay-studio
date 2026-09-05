@@ -108,6 +108,7 @@ export type TelegramStatus = {
   hasOwnKey: boolean;
   platformLogin: boolean;
   needsAppKeys: boolean;
+  persistent: boolean;
   step: TelegramOnboardingStep;
   credential: TelegramCredentialPublic | null;
   watch: TelegramWatch | null;

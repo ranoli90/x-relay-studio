@@ -96,6 +96,7 @@ export function TelegramOnboarding({
           <WelcomeStep
             displayName={displayName}
             needsAppKeys={needsAppKeys}
+            persistent={live?.persistent ?? status?.persistent ?? true}
             onContinue={() => setStep(needsAppKeys ? "app" : "phone")}
             onPreview={onPreview}
           />
@@ -195,11 +196,13 @@ function Back({ onClick }: { onClick: () => void }) {
 function WelcomeStep({
   displayName,
   needsAppKeys,
+  persistent,
   onContinue,
   onPreview,
 }: {
   displayName?: string;
   needsAppKeys: boolean;
+  persistent: boolean;
   onContinue: () => void;
   onPreview: () => void;
 }) {
@@ -245,6 +248,12 @@ function WelcomeStep({
         This desk shows up as a new device in Telegram. Revoke it anytime in Settings → Devices.
         Preview is local and is not your account.
       </p>
+      {persistent ? null : (
+        <p className="mt-4 rounded-xl border border-down/40 bg-down/10 p-3 text-sm leading-relaxed text-fg">
+          This live site isn’t saving desks yet, so Telegram login codes will fail. Storage has to
+          be connected first.
+        </p>
+      )}
     </>
   );
 }
@@ -429,7 +438,12 @@ function PhoneStep({
       });
       onSent(next);
     } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Could not send a login code.");
+      const msg = e instanceof Error ? e.message : "";
+      setErr(
+        msg === "Unauthorized"
+          ? "This desk didn’t stay signed in. Open it again from the home screen — storage isn’t saving sessions yet."
+          : msg || "Could not send a login code.",
+      );
     } finally {
       setBusy(false);
     }

@@ -39,6 +39,7 @@ async function buildStatus(userId: string): Promise<TelegramStatus> {
     "./session.server"
   );
   const account = await getAccount(userId);
+  const { dbSource } = await import("@/lib/db");
   let cred = null;
   try {
     cred = await getCredentialRow(userId);
@@ -61,6 +62,7 @@ async function buildStatus(userId: string): Promise<TelegramStatus> {
     hasOwnKey: Boolean(session?.session_enc) || Boolean(publicCred?.hasToken),
     platformLogin: telegramConfigured(),
     needsAppKeys: telegramUserApp() === null,
+    persistent: dbSource === "neon",
     step,
     credential: publicCred,
     watch,

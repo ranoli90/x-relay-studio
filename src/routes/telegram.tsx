@@ -27,6 +27,7 @@ function TelegramDoor() {
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [ready, setReady] = useState(false);
   const [previewErr, setPreviewErr] = useState<string | null>(null);
+  const [statusErr, setStatusErr] = useState<string | null>(null);
 
   useEffect(() => {
     if (onDesk) return;
@@ -39,13 +40,21 @@ function TelegramDoor() {
       .then((s) => {
         if (cancelled) return;
         setStatus(s);
+        setStatusErr(null);
         if (s.onboarded) {
           void navigate({ to: "/telegram/app" });
         }
         setReady(true);
       })
-      .catch(() => {
-        if (!cancelled) setReady(true);
+      .catch((e: unknown) => {
+        if (cancelled) return;
+        const msg = e instanceof Error ? e.message : "";
+        setStatusErr(
+          msg === "Unauthorized"
+            ? "This desk didn’t stay signed in. Open it again from the home screen."
+            : "Could not load this desk.",
+        );
+        setReady(true);
       });
     return () => {
       cancelled = true;
@@ -62,7 +71,7 @@ function TelegramDoor() {
 
   if (!signedIn || isPending || (signedIn && !ready)) {
     return (
-      <TelegramLoginScreen pending={isPending || (signedIn && !ready)} error={error ?? previewErr} />
+      <TelegramLoginScreen pending={isPending || (signedIn && !ready)} error={error ?? previewErr ?? statusErr} />
     );
   }
 
@@ -70,7 +79,7 @@ function TelegramDoor() {
     <TelegramOnboarding
       status={status}
       displayName={displayName}
-      error={error ?? previewErr}
+      error={error ?? previewErr ?? statusErr}
       onReady={() => {
         void navigate({ to: "/telegram/app" });
       }}
