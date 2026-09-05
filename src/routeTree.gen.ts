@@ -11,10 +11,12 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as LoginRouteImport } from './routes/login'
-import { Route as XRouteImport } from './routes/x'
 import { Route as TelegramRouteImport } from './routes/telegram'
+import { Route as XRouteImport } from './routes/x'
+import { Route as TelegramAppRouteImport } from './routes/telegram.app'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiCronStudioRouteImport } from './routes/api/cron/studio'
+import { Route as ApiTelegramOidcCallbackRouteImport } from './routes/api/telegram/oidc/callback'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -26,15 +28,20 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TelegramRoute = TelegramRouteImport.update({
+  id: '/telegram',
+  path: '/telegram',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const XRoute = XRouteImport.update({
   id: '/x',
   path: '/x',
   getParentRoute: () => rootRouteImport,
 } as any)
-const TelegramRoute = TelegramRouteImport.update({
-  id: '/telegram',
-  path: '/telegram',
-  getParentRoute: () => rootRouteImport,
+const TelegramAppRoute = TelegramAppRouteImport.update({
+  id: '/app',
+  path: '/app',
+  getParentRoute: () => TelegramRoute,
 } as any)
 const ApiAuthSplatRoute = ApiAuthSplatRouteImport.update({
   id: '/api/auth/$',
@@ -46,47 +53,84 @@ const ApiCronStudioRoute = ApiCronStudioRouteImport.update({
   path: '/api/cron/studio',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiTelegramOidcCallbackRoute = ApiTelegramOidcCallbackRouteImport.update({
+  id: '/api/telegram/oidc/callback',
+  path: '/api/telegram/oidc/callback',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/telegram': typeof TelegramRouteWithChildren
   '/x': typeof XRoute
-  '/telegram': typeof TelegramRoute
+  '/telegram/app': typeof TelegramAppRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/telegram': typeof TelegramRouteWithChildren
   '/x': typeof XRoute
-  '/telegram': typeof TelegramRoute
+  '/telegram/app': typeof TelegramAppRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/login': typeof LoginRoute
+  '/telegram': typeof TelegramRouteWithChildren
   '/x': typeof XRoute
-  '/telegram': typeof TelegramRoute
+  '/telegram/app': typeof TelegramAppRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/login' | '/x' | '/telegram' | '/api/auth/$' | '/api/cron/studio'
+  fullPaths:
+    | '/'
+    | '/login'
+    | '/telegram'
+    | '/x'
+    | '/telegram/app'
+    | '/api/auth/$'
+    | '/api/cron/studio'
+    | '/api/telegram/oidc/callback'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/login' | '/x' | '/telegram' | '/api/auth/$' | '/api/cron/studio'
-  id: '__root__' | '/' | '/login' | '/x' | '/telegram' | '/api/auth/$' | '/api/cron/studio'
+  to:
+    | '/'
+    | '/login'
+    | '/telegram'
+    | '/x'
+    | '/telegram/app'
+    | '/api/auth/$'
+    | '/api/cron/studio'
+    | '/api/telegram/oidc/callback'
+  id:
+    | '__root__'
+    | '/'
+    | '/login'
+    | '/telegram'
+    | '/x'
+    | '/telegram/app'
+    | '/api/auth/$'
+    | '/api/cron/studio'
+    | '/api/telegram/oidc/callback'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   LoginRoute: typeof LoginRoute
+  TelegramRoute: typeof TelegramRouteWithChildren
   XRoute: typeof XRoute
-  TelegramRoute: typeof TelegramRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiCronStudioRoute: typeof ApiCronStudioRoute
+  ApiTelegramOidcCallbackRoute: typeof ApiTelegramOidcCallbackRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -105,6 +149,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof LoginRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/telegram': {
+      id: '/telegram'
+      path: '/telegram'
+      fullPath: '/telegram'
+      preLoaderRoute: typeof TelegramRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/x': {
       id: '/x'
       path: '/x'
@@ -112,12 +163,12 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof XRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/telegram': {
-      id: '/telegram'
-      path: '/telegram'
-      fullPath: '/telegram'
-      preLoaderRoute: typeof TelegramRouteImport
-      parentRoute: typeof rootRouteImport
+    '/telegram/app': {
+      id: '/telegram/app'
+      path: '/app'
+      fullPath: '/telegram/app'
+      preLoaderRoute: typeof TelegramAppRouteImport
+      parentRoute: typeof TelegramRoute
     }
     '/api/auth/$': {
       id: '/api/auth/$'
@@ -133,16 +184,36 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCronStudioRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/telegram/oidc/callback': {
+      id: '/api/telegram/oidc/callback'
+      path: '/api/telegram/oidc/callback'
+      fullPath: '/api/telegram/oidc/callback'
+      preLoaderRoute: typeof ApiTelegramOidcCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
+
+interface TelegramRouteChildren {
+  TelegramAppRoute: typeof TelegramAppRoute
+}
+
+const TelegramRouteChildren: TelegramRouteChildren = {
+  TelegramAppRoute: TelegramAppRoute,
+}
+
+const TelegramRouteWithChildren = TelegramRoute._addFileChildren(
+  TelegramRouteChildren,
+)
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   LoginRoute: LoginRoute,
+  TelegramRoute: TelegramRouteWithChildren,
   XRoute: XRoute,
-  TelegramRoute: TelegramRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiCronStudioRoute: ApiCronStudioRoute,
+  ApiTelegramOidcCallbackRoute: ApiTelegramOidcCallbackRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -104,6 +104,20 @@
   }
 }
 
+.tg-replica {
+  --tg-primary: #8774e1;
+  --tg-bg: #212121;
+  --tg-bg-secondary: #0f0f0f;
+  --tg-text: #ffffff;
+  --tg-text-secondary: #aaaaaa;
+  --tg-own-bubble: #766ac8;
+  --tg-item-hover: #2c2c2c;
+  --tg-item-active: #292929;
+  color: var(--tg-text);
+  background: var(--tg-bg);
+  min-height: 0;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

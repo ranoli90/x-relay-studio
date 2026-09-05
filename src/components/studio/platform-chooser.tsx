@@ -11,8 +11,8 @@ export function PlatformChooser() {
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">X Relay</p>
         <h1 className="mt-3 text-3xl font-medium tracking-tight">Choose your platform.</h1>
         <p className="mt-3 max-w-md text-sm leading-relaxed text-muted">
-          Same desk, two doors. X is open now. Telegram is reserved for a later
-          tool — nothing runs there yet.
+          Same desk, two doors. Sign in the identity for the platform you’ll use
+          here.
         </p>
 
         <div className="mt-8 grid gap-3 sm:grid-cols-2">
@@ -26,8 +26,8 @@ export function PlatformChooser() {
           <PlatformCard
             to="/telegram"
             label="Telegram"
-            kicker="Later"
-            description="A new desk for this shop. Prepared, not built."
+            kicker="Open"
+            description="Sign in with Telegram. Profile, messages, and the account sitting in this browser."
             icon={<TelegramTile />}
           />
         </div>
