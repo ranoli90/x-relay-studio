@@ -6,6 +6,12 @@ import { Input } from "@/components/ui/input";
 import { TELEGRAM_CHECKS, requiredChecksPassed } from "@/lib/telegram/checks";
 import { TELEGRAM_APP_FORM, appFormUrl, titleLooksOfficial } from "@/lib/telegram/app-form";
 import {
+  clearOnboardingDraft,
+  mergeOnboardingStep,
+  readOnboardingDraft,
+  writeOnboardingDraft,
+} from "@/lib/telegram/onboarding-draft";
+import {
   telegramFinishOnboardingFn,
   telegramRunAllChecksFn,
   telegramStartLoginFn,
@@ -16,16 +22,6 @@ import type { TelegramOnboardingStep, TelegramStatus } from "@/lib/telegram/type
 import { cn } from "@/lib/utils";
 
 const STEPS: TelegramOnboardingStep[] = ["welcome", "app", "phone", "code", "password", "checks"];
-
-const STEP_INDEX: Record<TelegramOnboardingStep, number> = {
-  welcome: 0,
-  app: 1,
-  phone: 2,
-  code: 3,
-  password: 4,
-  checks: 5,
-  done: 6,
-};
 
 function initialStep(status: TelegramStatus | null): TelegramOnboardingStep {
   const server = status?.watch
@@ -50,21 +46,39 @@ export function TelegramOnboarding({
   onReady: () => void;
   onPreview: () => void;
 }) {
-  const [step, setStep] = useState<TelegramOnboardingStep>(() => initialStep(status));
+  const draft = typeof window !== "undefined" ? readOnboardingDraft() : null;
+  const [step, setStep] = useState<TelegramOnboardingStep>(() =>
+    mergeOnboardingStep(initialStep(status), draft?.step ?? null),
+  );
   const [live, setLive] = useState(status);
-  const [apiId, setApiId] = useState("");
-  const [apiHash, setApiHash] = useState("");
+  const [apiId, setApiId] = useState(draft?.apiId ?? "");
+  const [apiHash, setApiHash] = useState(draft?.apiHash ?? "");
+  const [phone, setPhone] = useState(draft?.phone ?? "");
   const needsAppKeys = Boolean(live?.needsAppKeys ?? status?.needsAppKeys);
 
   useEffect(() => {
     setLive(status);
     const next = initialStep(status);
-    setStep((current) => {
-      if (STEP_INDEX[next] > STEP_INDEX[current]) return next;
-      if (current === "welcome" && next !== "welcome") return next;
-      return current;
-    });
+    setStep((current) => mergeOnboardingStep(next, current));
   }, [status]);
+
+  useEffect(() => {
+    if (step === "done") {
+      clearOnboardingDraft();
+      return;
+    }
+    writeOnboardingDraft({ step, apiId, apiHash, phone });
+  }, [step, apiId, apiHash, phone]);
+
+  useEffect(() => {
+    const flush = () => writeOnboardingDraft({ step, apiId, apiHash, phone });
+    window.addEventListener("pagehide", flush);
+    document.addEventListener("visibilitychange", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      document.removeEventListener("visibilitychange", flush);
+    };
+  }, [step, apiId, apiHash, phone]);
 
   return (
     <main className="grid min-h-dvh place-items-center bg-bg px-4 py-10 text-fg">
@@ -101,6 +115,8 @@ export function TelegramOnboarding({
             needsAppKeys={needsAppKeys}
             apiId={apiId}
             apiHash={apiHash}
+            phone={phone}
+            onPhone={setPhone}
             phoneHint={live?.watch?.phoneHint ?? status?.watch?.phoneHint}
             onBack={() => setStep(needsAppKeys ? "app" : "welcome")}
             onSent={(next) => {
@@ -134,7 +150,10 @@ export function TelegramOnboarding({
             status={live ?? status}
             onBack={() => setStep(live?.watch?.needsPassword ? "password" : "code")}
             onStatus={setLive}
-            onReady={onReady}
+            onReady={() => {
+              clearOnboardingDraft();
+              onReady();
+            }}
           />
         ) : null}
       </div>
@@ -286,14 +305,19 @@ function AppKeysStep({
         your Telegram. Type the values below exactly. Then paste the api_id and api_hash it gives
         you.
       </p>
-      <a
-        href={TELEGRAM_APP_FORM.toolsPath}
-        target="_blank"
-        rel="noreferrer"
+      <button
+        type="button"
         className="mt-4 inline-flex h-11 items-center justify-center rounded-md border border-border px-4 text-sm text-fg"
+        onClick={() => {
+          window.open(TELEGRAM_APP_FORM.toolsPath, "_blank", "noopener,noreferrer");
+        }}
       >
         Open my.telegram.org/apps
-      </a>
+      </button>
+      <p className="mt-2 text-xs leading-relaxed text-subtle">
+        Keep this tab. Telegram opens on another screen. When you come back, your values will still
+        be here.
+      </p>
       <ol className="mt-6 grid gap-2 text-sm leading-relaxed text-muted">
         <li>
           <span className="font-mono text-xs text-subtle">1</span>
@@ -375,6 +399,8 @@ function PhoneStep({
   needsAppKeys,
   apiId,
   apiHash,
+  phone,
+  onPhone,
   phoneHint,
   onBack,
   onSent,
@@ -382,11 +408,12 @@ function PhoneStep({
   needsAppKeys: boolean;
   apiId: string;
   apiHash: string;
+  phone: string;
+  onPhone: (value: string) => void;
   phoneHint?: string | null;
   onBack: () => void;
   onSent: (status: TelegramStatus) => void;
 }) {
-  const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -427,7 +454,7 @@ function PhoneStep({
       >
         <Input
           value={phone}
-          onChange={(e) => setPhone(e.target.value)}
+          onChange={(e) => onPhone(e.target.value)}
           placeholder="+1 555 123 4567"
           autoComplete="tel"
           inputMode="tel"

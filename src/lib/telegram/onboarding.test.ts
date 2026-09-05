@@ -15,6 +15,7 @@ import {
 } from "./checks.ts";
 import { decryptSecret, encryptSecret } from "./crypto.server.ts";
 import { TELEGRAM_APP_FORM, isUnsafePlatform, titleLooksOfficial } from "./app-form.ts";
+import { mergeOnboardingStep, parseOnboardingDraft } from "./onboarding-draft.ts";
 import { normalizePhone, parseApiHash, parseApiId } from "./phone.ts";
 
 describe("bot token", () => {
@@ -88,5 +89,22 @@ describe("my.telegram.org form values", () => {
     assert.equal(isUnsafePlatform("Android"), true);
     assert.equal(isUnsafePlatform("Web"), false);
     assert.match(TELEGRAM_APP_FORM.shortName, /^[A-Za-z0-9]{5,32}$/);
+  });
+});
+
+describe("onboarding draft", () => {
+  it("keeps the local app step when the server is still welcome", () => {
+    assert.equal(mergeOnboardingStep("welcome", "app"), "app");
+    assert.equal(mergeOnboardingStep("code", "app"), "code");
+    assert.equal(mergeOnboardingStep("password", "app"), "password");
+    const parsed = parseOnboardingDraft({
+      step: "app",
+      apiId: "123456",
+      apiHash: "abc",
+      phone: "+15551234567",
+    });
+    assert.equal(parsed?.step, "app");
+    assert.equal(parsed?.apiId, "123456");
+    assert.equal(parseOnboardingDraft({ step: "password", apiId: "1", apiHash: "2", phone: "" }), null);
   });
 });
