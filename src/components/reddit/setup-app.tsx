@@ -6,6 +6,10 @@ import { getSetupCopy, saveRedditApp } from "@/lib/reddit/server";
 
 const TERMS = [
   {
+    label: "Read the full API terms and sign up for usage (wiki)",
+    href: "https://www.reddit.com/r/reddit.com/wiki/api/#wiki_read_the_full_api_terms_and_sign_up_for_usage",
+  },
+  {
     label: "Developer Terms",
     href: "https://www.redditinc.com/policies/developer-terms",
   },

@@ -141,29 +141,75 @@ async function uiFlow() {
     pass("live-reddit-check", "n/a");
     pass("secret-masked", "n/a");
   } else {
+    const form = page.getByRole("link", { name: /data api signup form/i });
+    if (await form.count()) pass("copy-data-api-form", "Data API signup form is linked");
+    else fail("copy-data-api-form", "missing form link");
+    if (/Reddit Relay/i.test(terms)) fail("no-reddit-relay-name", "old name Reddit Relay still on screen");
+    else pass("no-reddit-relay-name", "app name is not Reddit Relay");
+    if (/Desk \d{4} \d{4} mail/.test(terms)) pass("copy-desk-name", "unique per-desk app name");
+    else fail("copy-desk-name", terms.slice(0, 240));
+    if (/cannot include Reddit|must not contain Reddit|Do not type Reddit/i.test(terms)) {
+      pass("copy-no-reddit-in-name", "name field forbids Reddit/Snoo");
+    } else fail("copy-no-reddit-in-name", "missing");
+    if (/warmed-up/i.test(terms)) pass("copy-warmed-up", "developer vs warmed-up bot is named");
+    else fail("copy-warmed-up", "missing");
+    if (/not a moderator/i.test(terms)) pass("copy-not-mod", "present");
+    else fail("copy-not-mod", "missing");
+    if (/developer account/i.test(terms)) pass("copy-developer-vs-bot", "present");
+    else fail("copy-developer-vs-bot", "missing");
+    if (/wiki\/api/i.test(await page.content())) pass("copy-wiki", "wiki API terms page linked");
+    else fail("copy-wiki", "missing wiki");
 
-  await page.getByRole("button", { name: /test credentials and continue/i }).click();
-  await page.waitForTimeout(1500);
-  await page.screenshot({ path: `${DIR}/05-empty-save.png` });
-  const after = await page.locator("body").innerText();
-  if (/paste both|client id|could not/i.test(after)) {
-    pass("empty-save-blocked", "We refuse to save untested credentials");
-  } else fail("empty-save-blocked", after.slice(0, 200));
+    await page.getByRole("button", { name: /continue to create app/i }).click();
+    await page.waitForTimeout(400);
+    const blocked = await page.locator("body").innerText();
+    if (/read the terms and submit/i.test(blocked)) pass("terms-gated", "cannot skip Data API signup");
+    else fail("terms-gated", blocked.slice(0, 200));
 
-  await page.getByPlaceholder("without u/").fill("e2e_probe");
-  await page.getByPlaceholder("string under the app name").fill("not_a_real_id");
-  await page.getByPlaceholder("labeled secret").fill("not_a_real_secret");
-  await page.getByRole("button", { name: /test credentials and continue/i }).click();
-  await page.waitForTimeout(5000);
-  await page.screenshot({ path: `${DIR}/06-bad-creds.png` });
-  const rejected = await page.locator("body").innerText();
-  if (/reddit rejected|client id|blocked this app|reddit said/i.test(rejected)) {
-    pass("live-reddit-check", "Credentials are tested against Reddit before save — fake ones fail");
-  } else fail("live-reddit-check", rejected.slice(0, 240));
+    const boxes = page.locator('input[type="checkbox"]');
+    await boxes.nth(0).check();
+    await boxes.nth(1).check();
+    await page.getByRole("button", { name: /continue to create app/i }).click();
+    await page.getByText(/create the app on the developer/i).waitFor({ timeout: 10000 });
+    await page.screenshot({ path: `${DIR}/05-create-app.png` });
+    const create = await page.locator("body").innerText();
+    if (/web app/i.test(create) && /do not click script/i.test(create)) pass("copy-web app radio", "web app, not script");
+    else fail("copy-web app radio", "missing");
+    if (/do not click installed app/i.test(create)) pass("copy-not installed", "present");
+    else fail("copy-not installed", "missing");
+    if (/do not click script/i.test(create)) pass("copy-not script", "present");
+    else fail("copy-not script", "missing");
+    if (/leave this field empty/i.test(create)) pass("copy-about url empty", "present");
+    else fail("copy-about url empty", "missing");
+    if (/oauth\/callback/i.test(create)) pass("copy-oauth callback path", "present");
+    else fail("copy-oauth callback path", "missing");
+    if (/redirect uri/i.test(create)) pass("copy-redirect uri", "present");
+    else fail("copy-redirect uri", "missing");
+    if (/password/i.test(create) && /reddit password/i.test(create)) fail("no-password-path", "asks for Reddit password");
+    else pass("no-password-path", "never asks for the Reddit account password");
 
-  const secretType = await page.getByPlaceholder("labeled secret").getAttribute("type");
-  if (secretType === "password") pass("secret-masked", "App secret is masked; Reddit account password is never collected");
-  else fail("secret-masked", `secret type=${secretType}`);
+    await page.getByRole("button", { name: /test credentials and continue/i }).click();
+    await page.waitForTimeout(1500);
+    await page.screenshot({ path: `${DIR}/06-empty-save.png` });
+    const after = await page.locator("body").innerText();
+    if (/paste both|client id|could not|type the reddit username/i.test(after)) {
+      pass("empty-save-blocked", "We refuse to save untested credentials");
+    } else fail("empty-save-blocked", after.slice(0, 200));
+
+    await page.getByPlaceholder("without u/").fill("e2e_probe");
+    await page.getByPlaceholder("string under the app name").fill("not_a_real_id");
+    await page.getByPlaceholder("labeled secret").fill("not_a_real_secret");
+    await page.getByRole("button", { name: /test credentials and continue/i }).click();
+    await page.waitForTimeout(5000);
+    await page.screenshot({ path: `${DIR}/07-bad-creds.png` });
+    const rejected = await page.locator("body").innerText();
+    if (/reddit rejected|client id|blocked this app|reddit said/i.test(rejected)) {
+      pass("live-reddit-check", "Credentials are tested against Reddit before save — fake ones fail");
+    } else fail("live-reddit-check", rejected.slice(0, 240));
+
+    const secretType = await page.getByPlaceholder("labeled secret").getAttribute("type");
+    if (secretType === "password") pass("secret-masked", "App secret is masked; Reddit account password is never collected");
+    else fail("secret-masked", `secret type=${secretType}`);
   }
 
   if (errors.length) fail("page-errors", errors.join(" | "));
