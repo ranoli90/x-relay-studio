@@ -23,9 +23,47 @@ export class RedditApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    public retryAfterSec: number | null = null,
   ) {
     super(message);
     this.name = "RedditApiError";
+  }
+}
+
+const OAUTH_HOST = "oauth.reddit.com";
+
+function assertOauthUrl(path: string): string {
+  if (path.startsWith("http")) {
+    const url = new URL(path);
+    if (url.protocol !== "https:" || url.hostname !== OAUTH_HOST) {
+      throw new RedditApiError(400, "BAD_HOST", "Reddit API calls must use oauth.reddit.com.");
+    }
+    return url.toString();
+  }
+  if (!path.startsWith("/")) {
+    throw new RedditApiError(400, "BAD_PATH", "Reddit API path must be absolute.");
+  }
+  return `https://${OAUTH_HOST}${path}`;
+}
+
+function headerInt(v: string | null) {
+  if (v == null || v === "") return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function waitSeconds(res: Response): number {
+  const retryAfter = headerInt(res.headers.get("retry-after"));
+  const reset = headerInt(res.headers.get("x-ratelimit-reset"));
+  const raw = retryAfter ?? reset ?? 2;
+  return Math.min(20, Math.max(1, raw));
+}
+
+function parseJson<T>(text: string, status: number): T {
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new RedditApiError(status, "BAD_JSON", text.slice(0, 240) || "Reddit returned invalid JSON");
   }
 }
 
@@ -34,16 +72,26 @@ export async function oauthGet<T>(opts: {
   userAgent: string;
   path: string;
 }): Promise<{ data: T; remaining: number | null; reset: number | null }> {
-  const url = opts.path.startsWith("http")
-    ? opts.path
-    : `https://oauth.reddit.com${opts.path}`;
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${opts.accessToken}`,
-      "User-Agent": opts.userAgent,
-      Accept: "application/json",
-    },
-  });
+  const url = assertOauthUrl(opts.path);
+  const headers = {
+    Authorization: `Bearer ${opts.accessToken}`,
+    "User-Agent": opts.userAgent,
+    Accept: "application/json",
+  };
+
+  const once = () =>
+    fetch(url, {
+      headers,
+      signal: AbortSignal.timeout(15_000),
+    });
+
+  let res = await once();
+  if (res.status === 429) {
+    const wait = waitSeconds(res);
+    await new Promise((resolve) => setTimeout(resolve, wait * 1000));
+    res = await once();
+  }
+
   const remaining = headerInt(res.headers.get("x-ratelimit-remaining"));
   const reset = headerInt(res.headers.get("x-ratelimit-reset"));
   const text = await res.text();
@@ -52,6 +100,7 @@ export async function oauthGet<T>(opts: {
       429,
       "RATELIMIT",
       `Reddit asked us to wait ${reset ?? "a moment"}s.`,
+      waitSeconds(res),
     );
   }
   if (!res.ok) {
@@ -61,13 +110,7 @@ export async function oauthGet<T>(opts: {
       text.slice(0, 240) || `Reddit returned ${res.status}`,
     );
   }
-  return { data: JSON.parse(text) as T, remaining, reset };
-}
-
-function headerInt(v: string | null) {
-  if (v == null || v === "") return null;
-  const n = Number(v);
-  return Number.isFinite(n) ? n : null;
+  return { data: parseJson<T>(text, res.status), remaining, reset };
 }
 
 export async function fetchMe(accessToken: string, userAgent: string) {
@@ -92,7 +135,7 @@ export async function ensureAccessToken(opts: {
   refreshToken: string;
   accessToken: string | null;
   accessExpiresAt: Date | null;
-}): Promise<{ accessToken: string; expiresAt: Date; refreshed: boolean }> {
+}): Promise<{ accessToken: string; expiresAt: Date; refreshed: boolean; refreshToken?: string }> {
   const ua = userAgentFor(opts.userAgentName, opts.appId);
   const skewMs = 5 * 60 * 1000;
   if (
@@ -116,5 +159,6 @@ export async function ensureAccessToken(opts: {
     accessToken: tok.access_token,
     expiresAt: new Date(Date.now() + tok.expires_in * 1000),
     refreshed: true,
+    refreshToken: tok.refresh_token,
   };
 }
