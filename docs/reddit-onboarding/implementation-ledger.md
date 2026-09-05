@@ -1,7 +1,8 @@
 # Reddit onboarding implementation ledger
 
 Reviewed baseline: `main` at `beeab5c7ca76ccac3cfa25eabf371f573561519d` (2026-09-05).
-Working branch: `feat/reddit-onboarding`.
+Working branch: `feat/reddit-onboarding` @ `8ac6fdd`.
+Draft PR: https://github.com/ranoli90/x-relay-studio/pull/21
 This work is additive on that SHA. The repository was not reset.
 
 ## Phase 0 — inventory
