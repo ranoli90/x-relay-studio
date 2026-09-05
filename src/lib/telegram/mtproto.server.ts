@@ -23,10 +23,9 @@ function clientOpts() {
     autoReconnect: false,
     retryDelay: 0,
     useWSS: true,
-    // Look like a normal phone client, not a named userbot.
-    deviceModel: "iPhone 15 Pro",
-    systemVersion: "18.7",
-    appVersion: "11.14.1",
+    deviceModel: "PC",
+    systemVersion: "Windows 11",
+    appVersion: "5.16.2",
     langCode: "en",
     systemLangCode: "en-US",
   };
@@ -491,4 +490,18 @@ export async function sendAsUser(opts: {
     },
   );
   return { telegramMessageId: result, session };
+}
+
+export async function revokeSession(opts: {
+  apiId: number;
+  apiHash: string;
+  session: string;
+}): Promise<void> {
+  try {
+    await withClient(opts, async ({ client }) => {
+      await client.logOut();
+    });
+  } catch {
+    /* already dead */
+  }
 }

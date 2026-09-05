@@ -109,7 +109,7 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
       userId,
       chatsWatched: row.chats_watched || 0,
       messagesIngested: row.messages_ingested || 0,
-      error: hadChats ? null : message,
+      error: hadChats ? "Last live refresh missed." : message,
     });
   }
 

@@ -40,12 +40,7 @@ export function Composer({
     if (area.current) area.current.style.height = "auto";
   }
 
-  const placeholder =
-    disabled && kind === "bot"
-      ? "This chat is read-only on this path."
-      : kind === "user"
-        ? "Message as you"
-        : "Message";
+  const placeholder = "Message";
 
   return (
     <form
@@ -66,7 +61,8 @@ export function Composer({
           disabled={disabled}
           rows={1}
           placeholder={placeholder}
-          className="max-h-32 min-h-11 w-full resize-none rounded-xl bg-[var(--tg-item-hover)] px-3 py-2.5 text-[length:var(--tg-fs-body)] text-[var(--tg-text)] outline-none placeholder:text-[var(--tg-text-secondary)] disabled:opacity-50"
+          className="max-h-32 min-h-11 w-full resize-none rounded-xl bg-[var(--tg-item-hover)] px-3 py-2.5 text-base text-[var(--tg-text)] outline-none placeholder:text-[var(--tg-text-secondary)] disabled:opacity-50"
+          enterKeyHint="send"
           onChange={(e) => {
             setValue(e.target.value);
             e.currentTarget.style.height = "auto";

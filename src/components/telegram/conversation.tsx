@@ -29,10 +29,14 @@ export function Conversation({
   const scroller = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = scroller.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat?.id]);
+  useEffect(() => {
+    const el = scroller.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
-    if (nearBottom || messages.length < 12) el.scrollTop = el.scrollHeight;
-  }, [messages.length, chat?.id]);
+    if (nearBottom) el.scrollTop = el.scrollHeight;
+  }, [messages.length]);
 
   if (!chat) {
     return (

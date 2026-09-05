@@ -422,7 +422,19 @@ export const telegramUnlinkFn = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     const { unlinkAccount } = await import("./snapshot.server");
     const { deleteCredentials } = await import("./credentials.server");
-    const { deleteUserSession } = await import("./session.server");
+    const { deleteUserSession, getUserSession, decryptSessionMaterial } = await import(
+      "./session.server"
+    );
+    try {
+      const row = await getUserSession(context.userId);
+      if (row?.session_enc) {
+        const material = await decryptSessionMaterial(row);
+        const { revokeSession } = await import("./mtproto.server");
+        await revokeSession(material);
+      }
+    } catch {
+      /* still delete local copy */
+    }
     await deleteUserSession(context.userId);
     await deleteCredentials(context.userId);
     await unlinkAccount(context.userId);

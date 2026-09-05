@@ -409,7 +409,12 @@ export async function listMessages(
     status: string | null;
   }>(
     `select id, chat_id, from_self, author_name, body, created_at, status
-       from telegram_messages where user_id = $1 and chat_id = $2
+       from (
+         select id, chat_id, from_self, author_name, body, created_at, status
+           from telegram_messages where user_id = $1 and chat_id = $2
+          order by created_at desc
+          limit 200
+       ) q
        order by created_at asc`,
     [userId, chatId],
   );
@@ -603,6 +608,8 @@ export async function updateReplicaProfile(
 
 export async function unlinkAccount(userId: string): Promise<void> {
   const sql = await getSql();
+  await sql.query(`delete from telegram_photos where user_id = $1`, [userId]);
+  await sql.query(`delete from telegram_rate_events where user_id = $1`, [userId]);
   await sql.query(`delete from telegram_accounts where user_id = $1`, [userId]);
   console.info("[telegram]", { event: "unlinked", userId });
 }

@@ -54,7 +54,7 @@ export function ReplicaShell() {
     const delay = () => {
       if (typeof document !== "undefined" && document.visibilityState === "hidden") return 120_000;
       if (watch?.lastError) return 90_000;
-      return 45_000;
+      return 60_000;
     };
     const tick = async () => {
       if (stopped) return;
@@ -63,7 +63,7 @@ export function ReplicaShell() {
       }
       if (!stopped) timer = window.setTimeout(() => void tick(), delay());
     };
-    timer = window.setTimeout(() => void tick(), 5_000);
+    timer = window.setTimeout(() => void tick(), 12_000);
     const onVis = () => {
       if (document.visibilityState === "visible") void sync();
     };
@@ -76,7 +76,7 @@ export function ReplicaShell() {
   }, [sync, watch?.lastError]);
 
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 839px)");
+    const mq = window.matchMedia("(max-width: 1023px)");
     const apply = () => setNarrow(mq.matches);
     apply();
     mq.addEventListener("change", apply);
@@ -146,7 +146,7 @@ export function ReplicaShell() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-bg text-fg">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-bg px-3 pt-[env(safe-area-inset-top)]">
+      <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border bg-bg px-3 [padding-top:env(safe-area-inset-top)]">
         <Link
           to="/"
           className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
@@ -305,7 +305,7 @@ export function ReplicaShell() {
           busy={loading}
           onCancel={() => setConfirmUnlink(false)}
           onConfirm={() => {
-            void unlink().finally(() => setConfirmUnlink(false));
+            void unlink().then(() => setConfirmUnlink(false));
           }}
         />
       </div>

@@ -230,7 +230,13 @@ export const useTelegram = create<TelegramState>((set, get) => ({
       createdAt: new Date().toISOString(),
       status: "sending",
     };
-    set({ sending: true, error: null, messages: [...get().messages, temp] });
+    const cached = get().messageCache[chatId] ?? get().messages;
+    set({
+      sending: true,
+      error: null,
+      messages: get().selectedChatId === chatId ? [...cached, temp] : get().messages,
+      messageCache: { ...get().messageCache, [chatId]: [...cached, temp] },
+    });
     try {
       const message = await telegramSendFn({ data: { chatId, body } });
       const chats = (get().snapshot?.chats ?? []).map((chat) =>
@@ -239,17 +245,19 @@ export const useTelegram = create<TelegramState>((set, get) => ({
           : chat,
       );
       const snapshot = get().snapshot;
-      const nextMessages = [...get().messages.filter((m) => m.id !== temp.id), message];
+      const thread = (get().messageCache[chatId] ?? []).filter((m) => m.id !== temp.id).concat(message);
       set({
         sending: false,
-        messages: nextMessages,
-        messageCache: { ...get().messageCache, [chatId]: nextMessages },
+        messages: get().selectedChatId === chatId ? thread : get().messages,
+        messageCache: { ...get().messageCache, [chatId]: thread },
         snapshot: snapshot ? { ...snapshot, chats } : snapshot,
       });
     } catch (err) {
+      const thread = (get().messageCache[chatId] ?? get().messages).filter((m) => m.id !== temp.id);
       set({
         sending: false,
-        messages: get().messages.filter((m) => m.id !== temp.id),
+        messages: get().selectedChatId === chatId ? thread : get().messages,
+        messageCache: { ...get().messageCache, [chatId]: thread },
         error: err instanceof Error ? err.message : "Could not send.",
       });
     }
@@ -280,6 +288,7 @@ export const useTelegram = create<TelegramState>((set, get) => ({
         loading: false,
         error: err instanceof Error ? err.message : "Could not disconnect.",
       });
+      throw err;
     }
   },
 

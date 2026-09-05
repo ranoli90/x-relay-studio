@@ -66,7 +66,7 @@ export function ChatList({
             value={query}
             onChange={(e) => onQuery(e.target.value)}
             placeholder="Search"
-            className="h-11 w-full rounded-xl bg-[var(--tg-item-hover)] pl-10 pr-3 text-[length:var(--tg-fs-body)] text-[var(--tg-text)] outline-none placeholder:text-[var(--tg-text-secondary)]"
+            className="h-11 w-full rounded-xl bg-[var(--tg-item-hover)] pl-10 pr-3 text-base text-[var(--tg-text)] outline-none placeholder:text-[var(--tg-text-secondary)]"
           />
         </label>
         <div className="mt-2 flex gap-1">
@@ -76,7 +76,7 @@ export function ChatList({
               type="button"
               onClick={() => onFolder(f.id)}
               className={cn(
-                "h-8 rounded-full px-3 text-[length:var(--tg-fs-meta)]",
+                "h-11 rounded-full px-3 text-[length:var(--tg-fs-meta)]",
                 folder === f.id
                   ? "bg-[var(--tg-primary)] text-[var(--tg-own-text)]"
                   : "text-[var(--tg-text-secondary)] hover:bg-[var(--tg-item-hover)]",
@@ -87,7 +87,7 @@ export function ChatList({
           ))}
         </div>
       </div>
-      <ul className="min-h-0 flex-1 overflow-y-auto">
+      <ul className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
         {visible.length === 0 ? (
           <li className="px-4 py-8 text-center text-sm text-[var(--tg-text-secondary)]">
             {chats.length === 0

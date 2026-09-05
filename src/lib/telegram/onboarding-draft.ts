@@ -71,7 +71,10 @@ export function readOnboardingDraft(): TelegramOnboardingDraft | null {
 export function writeOnboardingDraft(draft: TelegramOnboardingDraft): void {
   if (typeof window === "undefined") return;
   try {
-    window.localStorage.setItem(ONBOARDING_DRAFT_KEY, JSON.stringify(draft));
+    window.localStorage.setItem(
+      ONBOARDING_DRAFT_KEY,
+      JSON.stringify({ ...draft, apiHash: "" }),
+    );
   } catch {
     /* quota / private mode */
   }

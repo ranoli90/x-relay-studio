@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { cn } from "@/lib/utils";
 import { initials } from "./format";
 
@@ -49,6 +49,9 @@ export function TgAvatar({
   size?: "sm" | "md" | "lg";
 }) {
   const [broken, setBroken] = useState(false);
+  useEffect(() => {
+    setBroken(false);
+  }, [src]);
   const dim = size === "sm" ? "size-10" : size === "lg" ? "size-24" : "size-12";
   const text = size === "lg" ? "text-2xl" : "text-sm";
   if (src && !broken) {
