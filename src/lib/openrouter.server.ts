@@ -1,10 +1,8 @@
 /**
  * OpenRouter is locked in — the key never leaves the server and is never
- * asked for in the UI. Env OPENROUTER_API_KEY overrides if present.
+ * asked for in the UI. Production fails closed if OPENROUTER_API_KEY is missing.
  */
-const OPENROUTER_API_KEY =
-  process.env.OPENROUTER_API_KEY ??
-  "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";
+const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY?.trim() ?? "";
 
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
@@ -32,6 +30,28 @@ export type ChatResult = {
   model: string;
 };
 
+function requireKey(): string {
+  if (!OPENROUTER_API_KEY) {
+    throw new Error(
+      "OPENROUTER_API_KEY is not set. Rewrites are disabled until the operator configures a key.",
+    );
+  }
+  if (!OPENROUTER_API_KEY.startsWith("sk-or-")) {
+    throw new Error("OPENROUTER_API_KEY does not look like an OpenRouter key.");
+  }
+  return OPENROUTER_API_KEY;
+}
+
+function referer(): string {
+  const raw = (process.env.BETTER_AUTH_URL || process.env.APP_ORIGIN || "").trim();
+  if (!raw) return "https://localhost";
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return "https://localhost";
+  }
+}
+
 function isModelUnavailable(status: number, body: string): boolean {
   if (status === 404) return true;
   const lower = body.toLowerCase();
@@ -43,6 +63,7 @@ function isModelUnavailable(status: number, body: string): boolean {
 }
 
 export async function chatOpenRouter(opts: ChatOptions): Promise<ChatResult> {
+  requireKey();
   const models = [DEFAULT_MODEL, ...FALLBACK_MODELS];
   let lastErr = "OpenRouter request failed";
 
@@ -53,7 +74,6 @@ export async function chatOpenRouter(opts: ChatOptions): Promise<ChatResult> {
       const message = err instanceof Error ? err.message : String(err);
       lastErr = message;
       if (!isModelUnavailable(0, message) && !message.includes("404")) {
-        // Only fall through on missing-model; other errors are real.
         if (!/model|not found|no endpoints/i.test(message)) throw err;
       }
     }
@@ -62,6 +82,7 @@ export async function chatOpenRouter(opts: ChatOptions): Promise<ChatResult> {
 }
 
 async function chatOnce(model: string, opts: ChatOptions): Promise<ChatResult> {
+  const key = requireKey();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 55_000);
 
@@ -96,9 +117,9 @@ async function chatOnce(model: string, opts: ChatOptions): Promise<ChatResult> {
       method: "POST",
       signal: controller.signal,
       headers: {
-        Authorization: `Bearer ${OPENROUTER_API_KEY}`,
+        Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
-        "HTTP-Referer": "https://xrelay.app",
+        "HTTP-Referer": referer(),
         "X-Title": "X Relay",
       },
       body: JSON.stringify(body),
@@ -173,13 +194,18 @@ export function extractJson(text: string): unknown {
   }
 }
 
+export function openRouterConfigured(): boolean {
+  return Boolean(OPENROUTER_API_KEY);
+}
+
 export function openRouterKey(): string {
-  return OPENROUTER_API_KEY;
+  return requireKey();
 }
 
 export async function pingOpenRouter(): Promise<boolean> {
+  const key = requireKey();
   const res = await fetch("https://openrouter.ai/api/v1/key", {
-    headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}` },
+    headers: { Authorization: `Bearer ${key}` },
     signal: AbortSignal.timeout(12_000),
   });
   return res.ok;
