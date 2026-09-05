@@ -160,7 +160,14 @@ export default defineConfig(({ command, isPreview }) => ({
   ssr: {
     // Bundle teleproto into the serverless function. Leaving it external
     // produced "Cannot find package 'teleproto'" on Vercel.
-    noExternal: ["teleproto"],
+    noExternal: [
+      "teleproto",
+      "big-integer",
+      "mime",
+      "socks",
+      "store2",
+      "node-localstorage",
+    ],
   },
   plugins: [
     pgliteBootstrapPlugin(),

@@ -6,7 +6,13 @@ type Teleproto = typeof import("teleproto");
 let libPromise: Promise<Teleproto> | null = null;
 
 function loadLib(): Promise<Teleproto> {
-  libPromise ??= import("teleproto");
+  libPromise ??= import("teleproto").then((mod) => {
+    const lib = (mod as { default?: Teleproto }).default ?? (mod as Teleproto);
+    if (!lib?.TelegramClient || !lib.sessions) {
+      throw new TelegramError("not_configured", "Telegram client failed to load on this server.", 500);
+    }
+    return lib;
+  });
   return libPromise;
 }
 
