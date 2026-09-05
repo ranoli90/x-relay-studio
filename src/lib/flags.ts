@@ -36,3 +36,16 @@ export function cronJobsEnabled(): boolean {
 export function openRouterEnabled(): boolean {
   return Boolean(process.env.OPENROUTER_API_KEY?.trim()) && readFlag("OPENROUTER_ENABLED") !== false;
 }
+
+/** Hold switch for studio scrape / drip / fill ticks. Off stops external callers. */
+export function studioTickEnabled(): boolean {
+  return readFlag("STUDIO_TICK_ENABLED") !== false;
+}
+
+/**
+ * X never auto-posts. Outbox "sent" is operator-acked after a manual draft.
+ * Not an env flag — cannot be turned on.
+ */
+export function xAutoPostEnabled(): boolean {
+  return false;
+}

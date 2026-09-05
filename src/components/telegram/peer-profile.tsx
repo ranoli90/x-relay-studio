@@ -1,7 +1,9 @@
 import { ChevronLeft } from "lucide-react";
 import type { TelegramChat } from "@/lib/telegram/types";
 import { isServicePeer } from "@/lib/telegram/preview";
+import { cn } from "@/lib/utils";
 import { TgAvatar } from "./avatar";
+import { tgFocusClass } from "./format";
 
 export function PeerProfile({
   chat,
@@ -23,7 +25,7 @@ export function PeerProfile({
           <button
             type="button"
             onClick={onBack}
-            className="grid size-11 place-items-center"
+            className={cn("grid size-11 min-h-[44px] min-w-[44px] place-items-center", tgFocusClass)}
             aria-label="Back"
           >
             <ChevronLeft className="size-5" />
@@ -45,7 +47,7 @@ export function PeerProfile({
             ? "Saved in this studio. Your Telegram profile and chats were not changed."
             : service
               ? "Official Telegram messages. This thread is read-only here."
-              : "This is a real chat from your Telegram. Messages here are yours. Watching stores them so automation can start later."}
+              : "This is a real chat from your Telegram. Messages here are yours."}
         </p>
       </div>
     </div>

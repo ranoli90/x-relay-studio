@@ -99,7 +99,7 @@ describe("understand + route", () => {
 describe("catalog + validator", () => {
   it("rejects invented prices", () => {
     assert.equal(inventedPrice("custom is $15", DEFAULT_CATALOG), 15);
-    assert.equal(inventedPrice("polaroid set is $25", DEFAULT_CATALOG), null);
+    assert.equal(inventedPrice("custom is $25", DEFAULT_CATALOG), null);
   });
   it("drops leaked strategy fields", () => {
     const drop = validateDraft("strategy=one_sku trust_score 9", DEFAULT_CATALOG, 16, []);

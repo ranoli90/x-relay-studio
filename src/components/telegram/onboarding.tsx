@@ -211,8 +211,8 @@ function WelcomeStep({
       <h1 className="mt-3 text-3xl font-medium tracking-tight">Connect your Telegram.</h1>
       <p className="mt-3 text-sm leading-relaxed text-muted">
         {displayName ? `${displayName}, this ` : "This "}
-        is your real account — not a bot. We watch your chats and messages so later you can start
-        automation. Sending still happens as you.
+        is your real account — not a bot. We watch your chats so they show up here. You still send
+        every message yourself.
       </p>
       <ol className="mt-6 grid gap-3 rounded-xl border border-border bg-surface p-4 text-sm leading-relaxed">
         {needsAppKeys ? (

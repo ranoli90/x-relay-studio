@@ -20,25 +20,32 @@ import type {
 
 type View = "list" | "chat" | "profile" | "edit" | "settings" | "peer";
 
+export type TelegramUiErrorSource = "local" | "provider";
+
 type TelegramState = {
   loading: boolean;
   sending: boolean;
+  sendingChatId: string | null;
   saving: boolean;
   error: string | null;
+  errorSource: TelegramUiErrorSource | null;
   snapshot: TelegramSnapshot | null;
   view: View;
   selectedChatId: string | null;
   messages: TelegramMessage[];
   messageCache: Record<string, TelegramMessage[]>;
+  drafts: Record<string, string>;
   messagesLoading: boolean;
   profileOpen: boolean;
   folder: TelegramFolder;
   notify: boolean;
+  generation: number;
   load: () => Promise<void>;
   sync: () => Promise<void>;
   enterPreview: (displayName: string) => Promise<void>;
   selectChat: (id: string | null) => Promise<void>;
-  send: (body: string) => Promise<void>;
+  send: (body: string) => Promise<boolean>;
+  setDraft: (chatId: string, value: string) => void;
   setView: (view: View) => void;
   setProfileOpen: (open: boolean) => void;
   setFolder: (folder: TelegramFolder) => void;
@@ -50,6 +57,7 @@ type TelegramState = {
     username?: string;
   }) => Promise<void>;
   unlink: () => Promise<void>;
+  dropSession: () => void;
   setWatching: (watching: boolean) => Promise<void>;
   setAutomationArmed: (armed: boolean) => Promise<void>;
   clearError: () => void;
@@ -66,254 +74,408 @@ function readNotify(): boolean {
   return window.localStorage.getItem("xrelay-tg-notify") === "1";
 }
 
-export const useTelegram = create<TelegramState>((set, get) => ({
-  loading: true,
-  sending: false,
-  saving: false,
-  error: null,
-  snapshot: null,
-  view: "list",
-  selectedChatId: null,
-  messages: [],
-  messageCache: {},
-  messagesLoading: false,
-  profileOpen: false,
-  folder: "all",
-  notify: readNotify(),
+function providerMessage(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message.trim() ? err.message : fallback;
+}
 
-  setView: (view) => set({ view, error: null }),
-  setProfileOpen: (profileOpen) => set({ profileOpen }),
-  setFolder: (folder) => set({ folder }),
-  clearError: () => set({ error: null }),
-  setNotify: (on) => {
-    if (typeof window !== "undefined") {
-      window.localStorage.setItem("xrelay-tg-notify", on ? "1" : "0");
-      if (on && "Notification" in window && Notification.permission === "default") {
-        void Notification.requestPermission();
-      }
-    }
-    set({ notify: on });
-  },
+/** F19: a late load/sync/messages response must not apply after unlink or a chat switch. */
+export function shouldApplyTelegram(
+  started: { generation: number; chatId?: string | null },
+  current: { generation: number; selectedChatId: string | null },
+  opts?: { requireSameChat?: boolean },
+): boolean {
+  if (current.generation !== started.generation) return false;
+  if (opts?.requireSameChat && current.selectedChatId !== started.chatId) return false;
+  return true;
+}
 
-  load: async () => {
-    const keep = Boolean(get().snapshot?.account);
-    if (!keep) set({ loading: true, error: null });
-    else set({ error: null });
-    try {
-      const snapshot = await telegramMeFn();
-      set({ snapshot, loading: false });
-    } catch (err) {
-      if (isAuthError(err)) {
-        set({ loading: false, snapshot: null });
-        return;
+function emptyLinkedSnapshot(configured: boolean, generation: number): TelegramSnapshot {
+  return {
+    configured,
+    mtprotoEnabled: false,
+    onboarded: false,
+    account: null,
+    chats: [],
+    credential: null,
+    watch: null,
+    generation,
+  };
+}
+
+export const useTelegram = create<TelegramState>((set, get) => {
+  function epoch() {
+    return { generation: get().generation, selectedChatId: get().selectedChatId };
+  }
+
+  function dropCaches(nextGeneration: number) {
+    return {
+      generation: nextGeneration,
+      selectedChatId: null as string | null,
+      messages: [] as TelegramMessage[],
+      messageCache: {} as Record<string, TelegramMessage[]>,
+      drafts: {} as Record<string, string>,
+      view: "list" as const,
+      sending: false,
+      sendingChatId: null as string | null,
+      messagesLoading: false,
+      error: null as string | null,
+      errorSource: null as TelegramUiErrorSource | null,
+    };
+  }
+
+  return {
+    loading: true,
+    sending: false,
+    sendingChatId: null,
+    saving: false,
+    error: null,
+    errorSource: null,
+    snapshot: null,
+    view: "list",
+    selectedChatId: null,
+    messages: [],
+    messageCache: {},
+    drafts: {},
+    messagesLoading: false,
+    profileOpen: false,
+    folder: "all",
+    notify: readNotify(),
+    generation: 0,
+
+    setView: (view) => set({ view, error: null, errorSource: null }),
+    setProfileOpen: (profileOpen) => set({ profileOpen }),
+    setFolder: (folder) => set({ folder }),
+    clearError: () => set({ error: null, errorSource: null }),
+    setDraft: (chatId, value) => {
+      const drafts = { ...get().drafts };
+      if (value) drafts[chatId] = value;
+      else delete drafts[chatId];
+      set({ drafts });
+    },
+    setNotify: (on) => {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem("xrelay-tg-notify", on ? "1" : "0");
+        if (on && "Notification" in window && Notification.permission === "default") {
+          void Notification.requestPermission();
+        }
       }
+      set({ notify: on });
+    },
+
+    dropSession: () => {
       set({
+        ...dropCaches(get().generation + 1),
         loading: false,
-        error: err instanceof Error ? err.message : "Could not load Telegram.",
+        saving: false,
+        snapshot: null,
       });
-    }
-  },
+    },
 
-  sync: async () => {
-    const { snapshot, selectedChatId, notify, messages } = get();
-    if (!snapshot?.account || syncInFlight) return;
-    syncInFlight = true;
-    try {
-      const next = await telegramSyncFn({ data: { chatId: selectedChatId } });
-      const prevUnread = (snapshot.chats ?? []).reduce((n, c) => n + (c.unread ?? 0), 0);
-      const nextUnread = next.chats.reduce((n, c) => n + (c.unread ?? 0), 0);
-      const nextMessages = selectedChatId ? next.messages : messages;
-      set({
-        snapshot: {
-          ...snapshot,
-          chats: next.chats,
-          watch: snapshot.watch,
-        },
-        messages: nextMessages,
-        messageCache: selectedChatId
-          ? { ...get().messageCache, [selectedChatId]: next.messages }
-          : get().messageCache,
-      });
-      if (
-        notify &&
-        nextUnread > prevUnread &&
-        typeof window !== "undefined" &&
-        "Notification" in window &&
-        Notification.permission === "granted"
-      ) {
-        const incoming = next.chats.find((c) => c.unread > 0);
-        new Notification(incoming?.title ?? "Telegram", {
-          body: incoming?.lastPreview ?? "New message",
+    load: async () => {
+      const started = { generation: get().generation, chatId: get().selectedChatId };
+      const keep = Boolean(get().snapshot?.account);
+      if (!keep) set({ loading: true, error: null, errorSource: null });
+      else set({ error: null, errorSource: null });
+      try {
+        const snapshot = await telegramMeFn();
+        if (!shouldApplyTelegram(started, epoch())) return;
+        const prevServer = get().snapshot?.generation;
+        const hadAccount = Boolean(get().snapshot?.account);
+        const serverGen = snapshot.generation ?? 1;
+        const accountChanged = Boolean(prevServer) && prevServer !== serverGen;
+        if (!snapshot.account || accountChanged) {
+          const nextGen = hadAccount || accountChanged ? get().generation + 1 : get().generation;
+          set({
+            snapshot,
+            loading: false,
+            ...dropCaches(nextGen),
+          });
+          return;
+        }
+        set({ snapshot, loading: false });
+      } catch (err) {
+        if (!shouldApplyTelegram(started, epoch())) return;
+        if (isAuthError(err)) {
+          set({
+            ...dropCaches(get().generation + 1),
+            loading: false,
+            snapshot: null,
+          });
+          return;
+        }
+        set({
+          loading: false,
+          error: providerMessage(err, "Could not load Telegram."),
+          errorSource: "provider",
         });
       }
-    } catch {
-      // keep last good snapshot
-    } finally {
-      syncInFlight = false;
-    }
-  },
+    },
 
-  enterPreview: async (displayName) => {
-    set({ loading: true, error: null });
-    try {
-      const snapshot = await telegramEnterPreviewFn({ data: { displayName } });
-      set({ snapshot, loading: false, view: "list" });
-    } catch (err) {
-      set({
-        loading: false,
-        error: err instanceof Error ? err.message : "Could not open preview.",
-      });
-      throw err;
-    }
-  },
+    sync: async () => {
+      const started = { generation: get().generation, chatId: get().selectedChatId };
+      const { snapshot, notify } = get();
+      if (!snapshot?.account || syncInFlight) return;
+      syncInFlight = true;
+      try {
+        const next = await telegramSyncFn({ data: { chatId: started.chatId } });
+        if (!shouldApplyTelegram(started, epoch())) return;
+        const live = get().snapshot;
+        if (!live?.account) return;
+        const prevUnread = (live.chats ?? []).reduce((n, c) => n + (c.unread ?? 0), 0);
+        const nextUnread = next.chats.reduce((n, c) => n + (c.unread ?? 0), 0);
+        const sameChat = shouldApplyTelegram(started, epoch(), { requireSameChat: true });
+        const chatId = started.chatId;
+        set({
+          snapshot: {
+            ...live,
+            chats: next.chats,
+            watch: live.watch,
+          },
+          messages: sameChat && chatId ? next.messages : get().messages,
+          messageCache:
+            chatId
+              ? { ...get().messageCache, [chatId]: next.messages }
+              : get().messageCache,
+        });
+        if (
+          notify &&
+          nextUnread > prevUnread &&
+          typeof window !== "undefined" &&
+          "Notification" in window &&
+          Notification.permission === "granted"
+        ) {
+          const incoming = next.chats.find((c) => c.unread > 0);
+          new Notification(incoming?.title ?? "Telegram", {
+            body: incoming?.lastPreview ?? "New message",
+          });
+        }
+      } catch {
+        // keep last good snapshot
+      } finally {
+        syncInFlight = false;
+      }
+    },
 
-  selectChat: async (id) => {
-    if (!id) {
-      set({ selectedChatId: null, view: "list" });
-      return;
-    }
-    const cached = get().messageCache[id];
-    set({
-      selectedChatId: id,
-      view: "chat",
-      messages: cached ?? [],
-      messagesLoading: !cached,
-    });
-    try {
-      const messages = await telegramMessagesFn({ data: { chatId: id } });
-      if (get().selectedChatId !== id) return;
-      const chats = (get().snapshot?.chats ?? []).map((chat) =>
-        chat.id === id ? { ...chat, unread: 0 } : chat,
-      );
-      const snapshot = get().snapshot;
+    enterPreview: async (displayName) => {
+      const gen = get().generation + 1;
       set({
-        messages,
-        messageCache: { ...get().messageCache, [id]: messages },
-        messagesLoading: false,
-        snapshot: snapshot ? { ...snapshot, chats } : snapshot,
+        ...dropCaches(gen),
+        loading: true,
+        snapshot: get().snapshot,
       });
-    } catch (err) {
-      if (get().selectedChatId !== id) return;
-      set({
-        messagesLoading: false,
-        error: err instanceof Error ? err.message : "Could not load messages.",
-      });
-    }
-  },
+      const started = { generation: gen, chatId: null as string | null };
+      try {
+        const snapshot = await telegramEnterPreviewFn({ data: { displayName } });
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({ snapshot, loading: false, view: "list" });
+      } catch (err) {
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({
+          loading: false,
+          error: providerMessage(err, "Could not open preview."),
+          errorSource: "provider",
+        });
+        throw err;
+      }
+    },
 
-  saveProfile: async (input) => {
-    set({ saving: true, error: null });
-    try {
-      const account = await telegramUpdateProfileFn({ data: input });
-      const snapshot = get().snapshot;
+    selectChat: async (id) => {
+      if (!id) {
+        set({ selectedChatId: null, view: "list", messagesLoading: false });
+        return;
+      }
+      const started = { generation: get().generation, chatId: id };
+      const cached = get().messageCache[id];
       set({
-        saving: false,
-        snapshot: snapshot ? { ...snapshot, account } : snapshot,
-        view: "profile",
+        selectedChatId: id,
+        view: "chat",
+        messages: cached ?? [],
+        messagesLoading: !cached,
+        error: null,
+        errorSource: null,
       });
-    } catch (err) {
-      set({
-        saving: false,
-        error: err instanceof Error ? err.message : "Could not save profile.",
-      });
-    }
-  },
+      try {
+        const messages = await telegramMessagesFn({ data: { chatId: id } });
+        if (!shouldApplyTelegram(started, epoch())) return;
+        const cache = { ...get().messageCache, [id]: messages };
+        if (!shouldApplyTelegram(started, epoch(), { requireSameChat: true })) {
+          set({ messageCache: cache });
+          return;
+        }
+        const chats = (get().snapshot?.chats ?? []).map((chat) =>
+          chat.id === id ? { ...chat, unread: 0 } : chat,
+        );
+        const snapshot = get().snapshot;
+        set({
+          messages,
+          messageCache: cache,
+          messagesLoading: false,
+          snapshot: snapshot ? { ...snapshot, chats } : snapshot,
+        });
+      } catch (err) {
+        if (!shouldApplyTelegram(started, epoch(), { requireSameChat: true })) return;
+        set({
+          messagesLoading: false,
+          error: providerMessage(err, "Could not load messages."),
+          errorSource: "provider",
+        });
+      }
+    },
 
-  send: async (body) => {
-    const chatId = get().selectedChatId;
-    if (!chatId) return;
-    const account = get().snapshot?.account;
-    const temp: TelegramMessage = {
-      id: `tmp_${Date.now()}`,
-      chatId,
-      fromSelf: true,
-      authorName: account?.displayName ?? "You",
-      body: body.trim(),
-      createdAt: new Date().toISOString(),
-      status: "sending",
-    };
-    const cached = get().messageCache[chatId] ?? get().messages;
-    set({
-      sending: true,
-      error: null,
-      messages: get().selectedChatId === chatId ? [...cached, temp] : get().messages,
-      messageCache: { ...get().messageCache, [chatId]: [...cached, temp] },
-    });
-    try {
-      const message = await telegramSendFn({ data: { chatId, body } });
-      const chats = (get().snapshot?.chats ?? []).map((chat) =>
-        chat.id === chatId
-          ? { ...chat, lastPreview: message.body.slice(0, 140), lastAt: message.createdAt }
-          : chat,
-      );
-      const snapshot = get().snapshot;
-      const thread = (get().messageCache[chatId] ?? []).filter((m) => m.id !== temp.id).concat(message);
-      set({
-        sending: false,
-        messages: get().selectedChatId === chatId ? thread : get().messages,
-        messageCache: { ...get().messageCache, [chatId]: thread },
-        snapshot: snapshot ? { ...snapshot, chats } : snapshot,
-      });
-    } catch (err) {
-      const thread = (get().messageCache[chatId] ?? get().messages).filter((m) => m.id !== temp.id);
-      set({
-        sending: false,
-        messages: get().selectedChatId === chatId ? thread : get().messages,
-        messageCache: { ...get().messageCache, [chatId]: thread },
-        error: err instanceof Error ? err.message : "Could not send.",
-      });
-    }
-  },
+    saveProfile: async (input) => {
+      const started = { generation: get().generation, chatId: get().selectedChatId };
+      set({ saving: true, error: null, errorSource: null });
+      try {
+        const account = await telegramUpdateProfileFn({ data: input });
+        if (!shouldApplyTelegram(started, epoch())) return;
+        const snapshot = get().snapshot;
+        set({
+          saving: false,
+          snapshot: snapshot ? { ...snapshot, account } : snapshot,
+          view: "profile",
+        });
+      } catch (err) {
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({
+          saving: false,
+          error: providerMessage(err, "Could not save profile."),
+          errorSource: "provider",
+        });
+      }
+    },
 
-  unlink: async () => {
-    set({ loading: true, error: null });
-    try {
-      await telegramUnlinkFn();
+    send: async (body) => {
+      const chatId = get().selectedChatId;
+      const text = body.trim();
+      if (!chatId) {
+        set({ error: "Select a chat first.", errorSource: "local" });
+        return false;
+      }
+      if (!text) {
+        set({ error: "Message is empty.", errorSource: "local" });
+        return false;
+      }
+      const started = { generation: get().generation, chatId };
+      const account = get().snapshot?.account;
+      const temp: TelegramMessage = {
+        id: `tmp_${Date.now()}`,
+        chatId,
+        fromSelf: true,
+        authorName: account?.displayName ?? "You",
+        body: text,
+        createdAt: new Date().toISOString(),
+        status: "sending",
+      };
+      const cached = get().messageCache[chatId] ?? get().messages;
+      const drafts = { ...get().drafts };
+      delete drafts[chatId];
       set({
-        loading: false,
-        snapshot: {
-          configured: get().snapshot?.configured ?? false,
-          mtprotoEnabled: false,
-          onboarded: false,
-          account: null,
-          chats: [],
-          credential: null,
-          watch: null,
-        },
-        view: "list",
-        selectedChatId: null,
-        messages: [],
-        messageCache: {},
+        sending: true,
+        sendingChatId: chatId,
+        error: null,
+        errorSource: null,
+        drafts,
+        messages: get().selectedChatId === chatId ? [...cached, temp] : get().messages,
+        messageCache: { ...get().messageCache, [chatId]: [...cached, temp] },
       });
-    } catch (err) {
+      try {
+        const message = await telegramSendFn({ data: { chatId, body: text } });
+        if (!shouldApplyTelegram(started, epoch())) return false;
+        const chats = (get().snapshot?.chats ?? []).map((chat) =>
+          chat.id === chatId
+            ? { ...chat, lastPreview: message.body.slice(0, 140), lastAt: message.createdAt }
+            : chat,
+        );
+        const snapshot = get().snapshot;
+        const thread = (get().messageCache[chatId] ?? []).filter((m) => m.id !== temp.id).concat(message);
+        const nextDrafts = { ...get().drafts };
+        delete nextDrafts[chatId];
+        set({
+          sending: get().selectedChatId === chatId ? false : get().sending,
+          sendingChatId: get().sendingChatId === chatId ? null : get().sendingChatId,
+          drafts: nextDrafts,
+          messages: get().selectedChatId === chatId ? thread : get().messages,
+          messageCache: { ...get().messageCache, [chatId]: thread },
+          snapshot: snapshot ? { ...snapshot, chats } : snapshot,
+        });
+        return true;
+      } catch (err) {
+        if (!shouldApplyTelegram(started, epoch())) return false;
+        const thread = (get().messageCache[chatId] ?? []).filter((m) => m.id !== temp.id);
+        const restored = { ...get().drafts, [chatId]: text };
+        set({
+          sending: get().selectedChatId === chatId ? false : get().sending,
+          sendingChatId: get().sendingChatId === chatId ? null : get().sendingChatId,
+          drafts: restored,
+          messages: get().selectedChatId === chatId ? thread : get().messages,
+          messageCache: { ...get().messageCache, [chatId]: thread },
+          error: providerMessage(err, "Telegram did not accept that message."),
+          errorSource: "provider",
+        });
+        return false;
+      }
+    },
+
+    unlink: async () => {
+      const gen = get().generation + 1;
+      const configured = get().snapshot?.configured ?? false;
       set({
-        loading: false,
-        error: err instanceof Error ? err.message : "Could not disconnect.",
+        ...dropCaches(gen),
+        loading: true,
+        snapshot: get().snapshot,
       });
-      throw err;
-    }
-  },
+      const started = { generation: gen, chatId: null as string | null };
+      try {
+        await telegramUnlinkFn();
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({
+          loading: false,
+          snapshot: emptyLinkedSnapshot(configured, (get().snapshot?.generation ?? 0) + 1),
+        });
+      } catch (err) {
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({
+          loading: false,
+          error: providerMessage(err, "Could not disconnect."),
+          errorSource: "provider",
+        });
+        throw err;
+      }
+    },
 
-  setWatching: async (watching) => {
-    set({ error: null });
-    try {
-      const snapshot = await telegramSetWatchingFn({ data: { watching } });
-      set({ snapshot });
-    } catch (err) {
-      set({ error: err instanceof Error ? err.message : "Could not change watching." });
-    }
-  },
+    setWatching: async (watching) => {
+      const started = { generation: get().generation, chatId: get().selectedChatId };
+      set({ error: null, errorSource: null });
+      try {
+        const snapshot = await telegramSetWatchingFn({ data: { watching } });
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({ snapshot });
+      } catch (err) {
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({
+          error: providerMessage(err, "Could not change watching."),
+          errorSource: "provider",
+        });
+      }
+    },
 
-  setAutomationArmed: async (armed) => {
-    set({ error: null });
-    try {
-      const snapshot = await telegramSetAutomationFn({ data: { armed } });
-      set({ snapshot });
-    } catch (err) {
-      set({ error: err instanceof Error ? err.message : "Could not change AI processing." });
-    }
-  },
-}));
+    setAutomationArmed: async (armed) => {
+      const started = { generation: get().generation, chatId: get().selectedChatId };
+      set({ error: null, errorSource: null });
+      try {
+        const snapshot = await telegramSetAutomationFn({ data: { armed } });
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({ snapshot });
+      } catch (err) {
+        if (!shouldApplyTelegram(started, epoch())) return;
+        set({
+          error: providerMessage(err, "Could not change AI processing."),
+          errorSource: "provider",
+        });
+      }
+    },
+  };
+});
 
 export function accountOf(state: TelegramState): TelegramAccount | null {
   return state.snapshot?.account ?? null;

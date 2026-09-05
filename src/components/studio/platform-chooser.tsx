@@ -1,6 +1,7 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Logo } from "@/components/logo";
+import { BuySheet } from "@/components/desk/buy-sheet";
 import { UserButton } from "@/lib/auth/gates";
 import { formatDeskNumber, normalizeDeskNumber } from "@/lib/desk/number";
 import { cn } from "@/lib/utils";
@@ -32,7 +33,10 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
       <div className="page-enter w-full max-w-4xl">
         <div className="flex items-start justify-between gap-4">
           <Logo />
-          <UserButton />
+          <div className="flex items-center gap-2">
+            <BuySheet compact />
+            <UserButton />
+          </div>
         </div>
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">
           Your account with us
@@ -41,9 +45,9 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
         <DeskNumberLockup deskNumber={deskNumber} />
         <h1 className="mt-6 text-3xl font-medium tracking-tight">Pick a platform.</h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
-          That number is the only login we keep. Telegram is the live inbox — you read and send.
-          Drafts only appear if you turn on drafting in Settings. X and Reddit stay their own
-          accounts.
+          That number is the only login we keep. Telegram is the live inbox — you read and send
+          yourself. Auto-send lives on the Agents floor and in Settings. X and Reddit stay their
+          own accounts.
         </p>
 
         <div className="mt-8 grid grid-cols-1 gap-3 min-[520px]:grid-cols-2">
@@ -51,8 +55,15 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
             to="/telegram"
             label="Telegram"
             kicker="Live inbox"
-            description="Your real chats. You send. Catalog, rails, and checkout are not in Settings yet."
+            description="Your real chats. You read and send from this inbox. Auto-send is on the Agents floor and in Settings."
             icon={<TelegramTile />}
+          />
+          <PlatformCard
+            to="/agents"
+            label="Agents"
+            kicker="Live floor"
+            description="Named AI on the floor. Auto-send, and it keeps running when you leave."
+            icon={<AgentsTile />}
           />
           <PlatformCard
             to="/x"
@@ -83,7 +94,7 @@ function PlatformCard({
   icon,
   accent,
 }: {
-  to: "/x" | "/telegram" | "/reddit";
+  to: "/x" | "/telegram" | "/reddit" | "/agents";
   label: string;
   kicker: string;
   description: string;
@@ -108,6 +119,19 @@ function PlatformCard({
       <h2 className="mt-2 text-xl font-medium tracking-tight">{label}</h2>
       <p className="mt-2 text-sm leading-relaxed text-muted">{description}</p>
     </Link>
+  );
+}
+
+function AgentsTile() {
+  return (
+    <span className="grid size-16 place-items-center rounded-lg bg-surface-2 text-fg" aria-hidden="true">
+      <svg viewBox="0 0 24 24" className="size-8" fill="none" stroke="currentColor" strokeWidth="1.75">
+        <circle cx="7" cy="13" r="2.25" />
+        <circle cx="12" cy="7" r="2.25" />
+        <circle cx="17" cy="13" r="2.25" />
+        <path d="M8.7 11.4 10.5 8.9M13.5 8.9l1.8 2.5" strokeLinecap="round" />
+      </svg>
+    </span>
   );
 }
 

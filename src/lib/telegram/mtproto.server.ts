@@ -1,5 +1,6 @@
 /** Server-only Telegram user client. Never import from client code. */
 import { TelegramError } from "./errors";
+import { mapRpc, redactRpcMessage } from "./map-rpc";
 import {
   isAccountFrozen,
   isAuthKeyDuplicated,
@@ -8,7 +9,15 @@ import {
   mtprotoClientOpts,
   type MtprotoTransport,
 } from "./mtproto-policy.server";
-import { mapRpc } from "./map-rpc";
+import {
+  assertPrivatePeerHash,
+  historyFailureKind,
+  isCollapsedHistoryMiss,
+  parseAccessHash,
+  peerKindFromEntity,
+  peerKindFromId,
+  type TelegramPeerKind,
+} from "./peer";
 
 export { mapRpc } from "./map-rpc";
 
@@ -101,7 +110,7 @@ async function openClient(creds: Creds): Promise<Opened> {
       console.info("[telegram]", {
         event: canFallback ? "mtproto_transport_fallback" : "mtproto_connect_failed",
         transport,
-        message: raw.slice(0, 160),
+        message: redactRpcMessage(raw),
       });
       if (!canFallback) throw mapRpc(err);
     }
@@ -138,6 +147,47 @@ function readMe(me: unknown): {
     lastName: raw.lastName ?? null,
     username: raw.username ?? null,
   };
+}
+
+function numericPeerId(peerId: string): bigint {
+  const stripped = String(peerId).replace(/^-100/, "").replace(/^-/, "");
+  try {
+    return BigInt(stripped);
+  } catch {
+    return BigInt(0);
+  }
+}
+
+function inputPeer(
+  lib: Teleproto,
+  opts: { peerId: string; accessHash?: string | null; peerKind?: TelegramPeerKind | null },
+) {
+  const kind = opts.peerKind ?? peerKindFromId(opts.peerId);
+  const id = numericPeerId(opts.peerId);
+  // teleproto constructors take gramjs BigInteger; native bigint is the runtime value.
+  const chatId = id as never;
+  if (kind === "chat") {
+    return new lib.Api.InputPeerChat({ chatId });
+  }
+  const parsedHash = parseAccessHash(opts.accessHash ?? null);
+  assertPrivatePeerHash(kind, parsedHash);
+  const accessHash = BigInt(parsedHash as string) as never;
+  if (kind === "channel") {
+    return new lib.Api.InputPeerChannel({ channelId: chatId, accessHash });
+  }
+  return new lib.Api.InputPeerUser({ userId: chatId, accessHash });
+}
+
+function resolvePeerTarget(opts: {
+  peerId: string;
+  accessHash?: string | null;
+  peerKind?: TelegramPeerKind | null;
+  lib: Teleproto;
+}): { entity: unknown; kind: TelegramPeerKind; accessHash: string | null } {
+  const kind = opts.peerKind ?? peerKindFromId(opts.peerId);
+  const accessHash = parseAccessHash(opts.accessHash ?? null);
+  assertPrivatePeerHash(kind, accessHash);
+  return { entity: inputPeer(opts.lib, { peerId: opts.peerId, accessHash, peerKind: kind }), kind, accessHash };
 }
 
 export async function sendLoginCode(opts: {
@@ -238,6 +288,7 @@ export type InboxDialog = {
   title: string;
   peerId: string;
   accessHash: string | null;
+  peerKind: TelegramPeerKind;
   unread: number;
   pinned: boolean;
   muted: boolean;
@@ -273,8 +324,10 @@ export async function pullInbox(opts: Creds & {
   photoLimit?: number;
   focusChatId?: string | null;
   skipDialogs?: boolean;
+  focusAccessHash?: string | null;
+  focusPeerKind?: TelegramPeerKind | null;
 }): Promise<{ dialogs: InboxDialog[]; histories: { chatId: string; messages: InboxMessage[] }[]; session: string }> {
-  return withClient(opts, async ({ client, save }) => {
+  return withClient(opts, async ({ lib, client, save }) => {
     const dialogs: InboxDialog[] = [];
     const histories: { chatId: string; messages: InboxMessage[] }[] = [];
     if (!opts.skipDialogs) {
@@ -288,6 +341,7 @@ export async function pullInbox(opts: Creds & {
         const entity = (d as {
           entity?: {
             id?: number | string;
+            className?: string;
             title?: string;
             firstName?: string;
             username?: string;
@@ -307,11 +361,13 @@ export async function pullInbox(opts: Creds & {
         const pinned = Boolean((d as { pinned?: boolean }).pinned);
         const message = (d as { message?: { message?: string; date?: number } }).message;
         const hash = entity?.accessHash ?? entity?.access_hash ?? null;
+        const peerKind = peerKindFromEntity(entity, id);
         dialogs.push({
           chatId: id,
           title,
           peerId: id,
           accessHash: hash == null ? null : String(hash),
+          peerKind,
           unread,
           pinned,
           muted: Boolean((d as { muted?: boolean }).muted),
@@ -325,14 +381,29 @@ export async function pullInbox(opts: Creds & {
     const targets = focus
       ? (dialogs.filter((d) => d.chatId === focus || d.peerId === focus).length
           ? dialogs.filter((d) => d.chatId === focus || d.peerId === focus)
-          : [{ chatId: focus, peerId: focus, title: "Chat" } as InboxDialog])
+          : [
+              {
+                chatId: focus,
+                peerId: focus,
+                title: "Chat",
+                accessHash: opts.focusAccessHash ?? null,
+                peerKind: opts.focusPeerKind ?? peerKindFromId(focus),
+              } as InboxDialog,
+            ])
       : dialogs.slice(0, Math.max(0, opts.historyChats ?? 1));
 
     for (const t of targets) {
       if (!t.peerId) continue;
       try {
+        const kind = t.peerKind ?? peerKindFromId(t.peerId);
+        const resolved = resolvePeerTarget({
+          lib,
+          peerId: t.peerId,
+          accessHash: t.accessHash ?? opts.focusAccessHash ?? null,
+          peerKind: kind,
+        });
         const msgs = await withTimeout(
-          client.getMessages(t.peerId, { limit: opts.historyLimit ?? 40 }),
+          client.getMessages(resolved.entity as never, { limit: opts.historyLimit ?? 40 }),
           18_000,
           "history",
         );
@@ -354,7 +425,12 @@ export async function pullInbox(opts: Creds & {
         }
         histories.push({ chatId: t.chatId, messages: mapped.reverse() });
       } catch (err) {
-        console.info("[telegram]", { event: "history_miss", chatId: t.chatId, err: String(err).slice(0, 80) });
+        const kind = historyFailureKind(err);
+        if (!isCollapsedHistoryMiss(kind)) throw mapRpc(err);
+        console.info("[telegram]", {
+          event: kind === "need_hash" ? "history_need_hash" : "history_miss",
+          chatId: t.chatId,
+        });
       }
     }
     return { dialogs, histories, session: save() };
@@ -364,9 +440,21 @@ export async function pullInbox(opts: Creds & {
 export async function sendAsUser(opts: Creds & {
   peerId: string;
   body: string;
+  accessHash?: string | null;
+  peerKind?: TelegramPeerKind | null;
 }): Promise<{ session: string; telegramMessageId: number }> {
-  return withClient(opts, async ({ client, save }) => {
-    const sent = await withTimeout(client.sendMessage(opts.peerId, { message: opts.body }), 15_000, "send");
+  return withClient(opts, async ({ lib, client, save }) => {
+    const resolved = resolvePeerTarget({
+      lib,
+      peerId: opts.peerId,
+      accessHash: opts.accessHash ?? null,
+      peerKind: opts.peerKind ?? peerKindFromId(opts.peerId),
+    });
+    const sent = await withTimeout(
+      client.sendMessage(resolved.entity as never, { message: opts.body }),
+      15_000,
+      "send",
+    );
     const id = Number((sent as { id?: number }).id ?? 0);
     return { session: save(), telegramMessageId: id };
   });

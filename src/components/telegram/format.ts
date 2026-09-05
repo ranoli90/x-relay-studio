@@ -1,3 +1,6 @@
+export const tgFocusClass =
+  "outline-none focus-visible:ring-2 focus-visible:ring-[var(--tg-primary)]";
+
 export function formatChatTime(iso: string | null): string {
   if (!iso) return "";
   const d = new Date(iso);

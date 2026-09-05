@@ -10,6 +10,41 @@ import {
 
 type Step = "packs" | "coin" | "pay" | "done";
 
+const TAP = "min-h-11 min-w-11";
+
+function threadsLabel(wallet: WalletPublic | null): string {
+  if (!wallet) return "—";
+  return String(wallet.threads);
+}
+
+function invoiceNotice(invoice: InvoicePublic): { tone: "wait" | "fail" | "ok"; text: string } {
+  if (invoice.status === "paid") {
+    return { tone: "ok", text: "Paid. Threads are on the desk." };
+  }
+  if (invoice.status === "underpay") {
+    return {
+      tone: "fail",
+      text: "Underpaid. This invoice is not credited. Open a new one and send the exact amount.",
+    };
+  }
+  if (invoice.status === "expired") {
+    return {
+      tone: "fail",
+      text: "Invoice expired. Late payment is not credited. Open a new invoice.",
+    };
+  }
+  if (invoice.status === "cancelled") {
+    return { tone: "fail", text: "Invoice cancelled. Open a new one to pay." };
+  }
+  if (invoice.status === "uncertain") {
+    return {
+      tone: "fail",
+      text: "Payment status is uncertain. Do not send again until this invoice settles.",
+    };
+  }
+  return { tone: "wait", text: "Waiting for payment. A screenshot is not paid." };
+}
+
 export function BuySheet({ compact = false }: { compact?: boolean }) {
   const [open, setOpen] = useState(false);
   const [wallet, setWallet] = useState<WalletPublic | null>(null);
@@ -32,7 +67,9 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
   }, []);
 
   useEffect(() => {
-    if (!open || step !== "pay" || !invoice || invoice.status === "paid") return;
+    if (!open || step !== "pay" || !invoice) return;
+    if (invoice.status === "paid") return;
+    if (invoice.status === "expired" || invoice.status === "cancelled") return;
     const tick = window.setInterval(() => setNow(Date.now()), 1000);
     const poll = window.setInterval(() => {
       void pollInvoice({ data: { invoiceId: invoice.id } })
@@ -40,7 +77,9 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
           setInvoice(row);
           if (row.status === "paid") {
             setStep("done");
-            void getWallet().then(setWallet).catch(() => undefined);
+            void getWallet()
+              .then(setWallet)
+              .catch(() => undefined);
           }
         })
         .catch(() => undefined);
@@ -59,16 +98,19 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
   const remain = invoice?.expiresAt ? Math.max(0, Date.parse(invoice.expiresAt) - now) : 0;
   const mm = String(Math.floor(remain / 60000)).padStart(2, "0");
   const ss = String(Math.floor((remain % 60000) / 1000)).padStart(2, "0");
+  const notice = invoice ? invoiceNotice(invoice) : null;
+  const paid = invoice?.status === "paid";
 
   async function pay() {
     setBusy(true);
     setError(null);
     try {
       const row = await createThreadInvoice({
-        data: { skuId, coinId, multiples: 1, followsVerified: false },
+        data: { skuId, coinId, multiples: 1 },
       });
       setInvoice(row);
-      setStep("pay");
+      if (row.status === "paid") setStep("done");
+      else setStep("pay");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Could not open invoice.");
     } finally {
@@ -95,19 +137,19 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
     <button
       type="button"
       onClick={openSheet}
-      className="shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-left"
+      className={`${TAP} shrink-0 rounded-md border border-border bg-surface px-2.5 py-1 text-left`}
     >
       <span className="block font-mono text-[10px] uppercase tracking-[0.14em] text-muted">Threads</span>
-      <span className="block font-mono text-xs text-fg">{wallet?.threads ?? "0"}</span>
+      <span className="block font-mono text-xs text-fg">{threadsLabel(wallet)}</span>
     </button>
   ) : (
     <button
       type="button"
       onClick={openSheet}
-      className="fixed bottom-[max(16px,env(safe-area-inset-bottom))] right-[max(16px,env(safe-area-inset-right))] z-40 rounded-full border border-border bg-surface px-4 py-3 text-sm text-fg shadow-[0_12px_40px_rgb(0_0_0/0.45)]"
+      className={`${TAP} fixed bottom-[max(16px,env(safe-area-inset-bottom))] right-[max(16px,env(safe-area-inset-right))] z-40 rounded-full border border-border bg-surface px-4 py-3 text-sm text-fg shadow-[0_12px_40px_rgb(0_0_0/0.45)]`}
     >
       <span className="block font-mono text-[11px] uppercase tracking-[0.14em] text-muted">Threads</span>
-      <span className="block text-left text-base">{wallet?.threads ?? "0"}</span>
+      <span className="block text-left text-base">{threadsLabel(wallet)}</span>
     </button>
   );
 
@@ -122,24 +164,36 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
             <header className="mb-4 flex items-start justify-between gap-3">
               <div>
                 <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-muted">Buy threads</p>
-                <h2 className="text-lg text-fg">{wallet?.threads ?? 0} left</h2>
+                <h2 className="text-lg text-fg">
+                  {wallet ? `${wallet.threads} left` : "Balance unknown"}
+                </h2>
               </div>
-              <button type="button" className="text-sm text-muted" onClick={() => setOpen(false)}>
+              <button type="button" className={`${TAP} px-3 text-sm text-muted`} onClick={() => setOpen(false)}>
                 Close
               </button>
             </header>
 
             {wallet?.followDiscountAvailable ? (
               <div className="mb-4 rounded-md border border-border bg-surface px-3 py-3 text-sm text-muted">
-                First payment: follow Telegram and Discord for $5 off.
+                First payment: follow Telegram and Discord for $5 off. Membership is checked on the server when you open an invoice.
                 <div className="mt-2 flex flex-wrap gap-2">
                   {wallet.telegramUrl ? (
-                    <a className="text-fg underline decoration-border underline-offset-4" href={wallet.telegramUrl} target="_blank" rel="noreferrer">
+                    <a
+                      className={`${TAP} inline-flex items-center text-fg underline decoration-border underline-offset-4`}
+                      href={wallet.telegramUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       Telegram
                     </a>
                   ) : null}
                   {wallet.discordUrl ? (
-                    <a className="text-fg underline decoration-border underline-offset-4" href={wallet.discordUrl} target="_blank" rel="noreferrer">
+                    <a
+                      className={`${TAP} inline-flex items-center text-fg underline decoration-border underline-offset-4`}
+                      href={wallet.discordUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
                       Discord
                     </a>
                   ) : null}
@@ -154,7 +208,7 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
                     key={pack.id}
                     type="button"
                     onClick={() => setSkuId(pack.id)}
-                    className={`rounded-md border px-3 py-3 text-left ${
+                    className={`${TAP} rounded-md border px-3 py-3 text-left ${
                       skuId === pack.id ? "border-accent bg-surface-2" : "border-border bg-surface"
                     }`}
                   >
@@ -165,7 +219,7 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
                 ))}
                 <button
                   type="button"
-                  className="col-span-2 mt-2 h-11 rounded-md bg-accent text-sm text-accent-fg disabled:opacity-40"
+                  className={`${TAP} col-span-2 mt-2 rounded-md bg-accent text-sm text-accent-fg disabled:opacity-40`}
                   disabled={!selected}
                   onClick={() => setStep("coin")}
                 >
@@ -185,7 +239,7 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
                       key={coin.id}
                       type="button"
                       onClick={() => setCoinId(coin.id)}
-                      className={`rounded-md border px-3 py-3 text-left ${
+                      className={`${TAP} rounded-md border px-3 py-3 text-left ${
                         coinId === coin.id ? "border-accent bg-surface-2" : "border-border bg-surface"
                       }`}
                     >
@@ -196,12 +250,16 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
                 </div>
                 {error ? <p className="mt-3 text-sm text-down">{error}</p> : null}
                 <div className="mt-3 flex gap-2">
-                  <button type="button" className="h-11 flex-1 rounded-md border border-border text-sm text-muted" onClick={() => setStep("packs")}>
+                  <button
+                    type="button"
+                    className={`${TAP} flex-1 rounded-md border border-border text-sm text-muted`}
+                    onClick={() => setStep("packs")}
+                  >
                     Back
                   </button>
                   <button
                     type="button"
-                    className="h-11 flex-1 rounded-md bg-accent text-sm text-accent-fg disabled:opacity-40"
+                    className={`${TAP} flex-1 rounded-md bg-accent text-sm text-accent-fg disabled:opacity-40`}
                     disabled={busy}
                     onClick={() => void pay()}
                   >
@@ -214,7 +272,8 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
             {step === "pay" && invoice ? (
               <div>
                 <p className="text-sm text-muted">
-                  Send exactly {invoice.amountCrypto ?? invoice.amountLabel} in {invoice.coinLabel}. Expires {mm}:{ss}.
+                  Send exactly {invoice.amountCrypto ?? invoice.amountLabel} in {invoice.coinLabel}.
+                  {invoice.expiresAt ? ` Expires ${mm}:${ss}.` : ""}
                 </p>
                 {invoice.qrCode ? (
                   <img src={invoice.qrCode} alt="Payment QR" className="mx-auto my-4 h-44 w-44 rounded-md bg-fg p-2" />
@@ -223,7 +282,7 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
                   <button
                     type="button"
                     onClick={() => void copyAddr()}
-                    className="w-full break-all rounded-md border border-border bg-surface px-3 py-3 text-left font-mono text-xs text-fg"
+                    className={`${TAP} w-full break-all rounded-md border border-border bg-surface px-3 py-3 text-left font-mono text-xs text-fg`}
                   >
                     {invoice.walletHash}
                     <span className="mt-1 block text-[11px] uppercase tracking-[0.14em] text-muted">
@@ -235,20 +294,32 @@ export function BuySheet({ compact = false }: { compact?: boolean }) {
                     href={invoice.invoiceUrl ?? "#"}
                     target="_blank"
                     rel="noreferrer"
-                    className="mt-3 block rounded-md border border-border bg-surface px-3 py-3 text-sm text-fg"
+                    className={`${TAP} mt-3 flex items-center rounded-md border border-border bg-surface px-3 py-3 text-sm text-fg`}
                   >
                     Open payment page
                   </a>
                 )}
-                <p className="mt-3 font-mono text-xs uppercase tracking-[0.14em] text-muted">Waiting for payment</p>
+                <p
+                  className={`mt-3 font-mono text-xs uppercase tracking-[0.14em] ${
+                    notice?.tone === "fail" ? "text-down" : notice?.tone === "ok" ? "text-ok" : "text-muted"
+                  }`}
+                >
+                  {notice?.text}
+                </p>
               </div>
             ) : null}
 
-            {step === "done" ? (
+            {step === "done" && paid ? (
               <div className="py-6 text-center">
                 <p className="text-ok">Paid. Threads are on the desk.</p>
-                <p className="mt-2 font-mono text-sm text-muted">{wallet?.threads ?? 0} available</p>
-                <button type="button" className="mt-4 h-11 w-full rounded-md bg-accent text-sm text-accent-fg" onClick={() => setOpen(false)}>
+                <p className="mt-2 font-mono text-sm text-muted">
+                  {wallet ? `${wallet.threads} available` : "Balance unknown"}
+                </p>
+                <button
+                  type="button"
+                  className={`${TAP} mt-4 w-full rounded-md bg-accent text-sm text-accent-fg`}
+                  onClick={() => setOpen(false)}
+                >
                   Done
                 </button>
               </div>

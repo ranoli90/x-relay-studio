@@ -11,6 +11,7 @@ import {
   emptyCheckResults,
   parseChecksJson,
   requiredChecksPassed,
+  stampCheck,
   TELEGRAM_CHECKS,
 } from "./checks.ts";
 import { decryptSecret, encryptSecret } from "./crypto.server.ts";
@@ -45,15 +46,37 @@ describe("bot token", () => {
 });
 
 describe("checks catalog", () => {
-  it("has four required checks and one optional OpenRouter check", () => {
-    assert.equal(TELEGRAM_CHECKS.filter((c) => c.required).length, 4);
-    assert.equal(TELEGRAM_CHECKS.filter((c) => !c.required).length, 1);
+  it("has three required checks; watching is optional so it is not a gate", () => {
+    assert.equal(TELEGRAM_CHECKS.filter((c) => c.required).length, 3);
+    assert.equal(TELEGRAM_CHECKS.filter((c) => !c.required).length, 2);
+    assert.equal(TELEGRAM_CHECKS.find((c) => c.id === "watching_on")?.required, false);
     assert.equal(requiredChecksPassed(emptyCheckResults()), false);
     const passed = emptyCheckResults().map((row) =>
       TELEGRAM_CHECKS.find((m) => m.id === row.id)?.required ? { ...row, ok: true } : row,
     );
     assert.equal(requiredChecksPassed(passed), true);
     assert.equal(parseChecksJson("{}").length, TELEGRAM_CHECKS.length);
+  });
+
+  it("treats an empty account as a valid chats/messages capability", () => {
+    const listed = stampCheck(undefined, {
+      ok: true,
+      detail: "No chats on this account yet.",
+    });
+    assert.equal(listed.ok, true);
+    assert.ok(listed.lastSuccessAt);
+    const flood = stampCheck(
+      { id: "chats_visible", ok: true, detail: listed.detail, ranAt: listed.ranAt, lastSuccessAt: listed.lastSuccessAt },
+      {
+        ok: false,
+        detail: "Telegram asked us to wait 17 seconds.",
+        terminal: false,
+        at: new Date(Date.parse(listed.lastSuccessAt ?? listed.ranAt ?? 0) + 1000).toISOString(),
+      },
+    );
+    assert.equal(flood.ok, true);
+    assert.equal(flood.lastSuccessAt, listed.lastSuccessAt);
+    assert.notEqual(flood.lastAttemptAt, flood.lastSuccessAt);
   });
 });
 

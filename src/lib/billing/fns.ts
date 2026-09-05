@@ -1,15 +1,21 @@
+import { z } from "zod";
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
 import { newId } from "@/lib/agent/ids";
 import { PACKS, PLANS, TOPUP, formatUsd } from "./catalog.ts";
 import { COINS, DEFAULT_COIN, assertCoin } from "./coins.ts";
-import { bothFollowsLive } from "./follows.ts";
+import { verifyFollowMembership } from "./follows.ts";
 import {
   availableThreads,
+  followIdsForUser,
   invoiceForUser,
-  insertOpenInvoice,
   loadBilling,
-  quoteForUser,
+  markInvoiceCancelled,
+  markInvoiceOpened,
+  markInvoiceUncertain,
+  openInvoiceIntent,
+  recordFollow,
+  verifyDeskFollowsLive,
 } from "./ledger.server.ts";
 import { createPlisioInvoice, publicOrigin } from "./plisio.ts";
 
@@ -50,6 +56,13 @@ function followUrls() {
   };
 }
 
+/** Client `followsVerified` is stripped. Membership is re-checked server-side. */
+const CreateInvoiceSchema = z.object({
+  skuId: z.string().trim().min(3).max(40),
+  multiples: z.number().int().min(1).max(40).optional(),
+  coinId: z.string().trim().min(2).max(40),
+});
+
 export const getWallet = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<WalletPublic> => {
@@ -88,57 +101,70 @@ export const getWallet = createServerFn({ method: "GET" })
 
 export const createThreadInvoice = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { skuId: string; multiples?: number; coinId: string; followsVerified?: boolean }) => d)
+  .validator((d: unknown) => CreateInvoiceSchema.parse(d))
   .handler(async ({ context, data }): Promise<InvoicePublic> => {
     const coin = assertCoin(data.coinId);
-    const followsVerified = Boolean(data.followsVerified);
-    const quoted = await quoteForUser(
-      context.userId,
-      data.skuId,
-      data.multiples ?? 1,
-      followsVerified,
-    );
     const origin = publicOrigin();
     if (!origin) throw new Error("BETTER_AUTH_URL is not set.");
     const invoiceId = newId("inv");
-    const created = await createPlisioInvoice({
-      orderNumber: invoiceId,
-      orderName: `${quoted.threads} threads`,
-      amountCents: quoted.amountCents,
-      coinId: coin.id,
-      callbackUrl: `${origin}/api/payments/plisio?json=true`,
-    });
-    const expiresAt = created.expireUtc ? new Date(created.expireUtc * 1000) : new Date(Date.now() + 60 * 60 * 1000);
-    await insertOpenInvoice({
+    const followsLive = await verifyDeskFollowsLive(context.userId);
+    const quoted = await openInvoiceIntent({
       id: invoiceId,
       userId: context.userId,
-      quoted,
-      externalId: created.txnId,
-      expiresAt,
-      payload: {
+      skuId: data.skuId,
+      multiples: data.multiples ?? 1,
+      payload: { coinId: coin.id },
+      followsLive,
+    });
+    try {
+      const created = await createPlisioInvoice({
+        orderNumber: invoiceId,
+        orderName: `${quoted.threads} threads`,
+        amountCents: quoted.amountCents,
+        coinId: coin.id,
+        callbackUrl: `${origin}/api/payments/plisio?json=true`,
+      });
+      const expiresAt = created.expireUtc
+        ? new Date(created.expireUtc * 1000)
+        : new Date(Date.now() + 60 * 60 * 1000);
+      const payload = {
         coinId: coin.id,
         walletHash: created.walletHash,
         qrCode: created.qrCode,
         amountCrypto: created.amountCrypto,
         invoiceUrl: created.invoiceUrl,
         txnId: created.txnId,
-      },
-    });
-    return {
-      id: invoiceId,
-      status: "pending",
-      threads: quoted.threads,
-      amountCents: quoted.amountCents,
-      amountLabel: formatUsd(quoted.amountCents),
-      discountCents: quoted.discountCents,
-      coinId: coin.id,
-      coinLabel: `${coin.ticker} · ${coin.network}`,
-      walletHash: created.walletHash,
-      qrCode: created.qrCode,
-      amountCrypto: created.amountCrypto,
-      invoiceUrl: created.invoiceUrl,
-      expiresAt: expiresAt.toISOString(),
-    };
+      };
+      await markInvoiceOpened({
+        id: invoiceId,
+        userId: context.userId,
+        externalId: created.txnId,
+        payload,
+        expiresAt,
+      });
+      return {
+        id: invoiceId,
+        status: "pending",
+        threads: quoted.threads,
+        amountCents: quoted.amountCents,
+        amountLabel: formatUsd(quoted.amountCents),
+        discountCents: quoted.discountCents,
+        coinId: coin.id,
+        coinLabel: `${coin.ticker} · ${coin.network}`,
+        walletHash: created.walletHash,
+        qrCode: created.qrCode,
+        amountCrypto: created.amountCrypto,
+        invoiceUrl: created.invoiceUrl,
+        expiresAt: expiresAt.toISOString(),
+      };
+    } catch (err) {
+      const network =
+        err instanceof TypeError ||
+        (err instanceof Error && /fetch|network|abort|timeout/i.test(err.message));
+      if (network) await markInvoiceUncertain(invoiceId, context.userId);
+      else await markInvoiceCancelled(invoiceId, context.userId);
+      throw err;
+    }
   });
 
 export const pollInvoice = createServerFn({ method: "POST" })
@@ -172,51 +198,37 @@ export const pollInvoice = createServerFn({ method: "POST" })
     };
   });
 
+const CheckFollowsSchema = z.object({
+  telegramUserId: z.string().trim().min(1).max(80).optional(),
+  discordUserId: z.string().trim().min(1).max(80).optional(),
+});
+
 export const checkFollows = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { telegramUserId?: string; discordUserId?: string }) => d)
-  .handler(async ({ data }): Promise<{ verified: boolean; telegram: boolean; discord: boolean }> => {
-    const chatId = process.env.FOLLOW_TELEGRAM_CHAT_ID?.trim();
-    const bot = process.env.TELEGRAM_BOT_TOKEN?.trim();
-    const guildId = process.env.FOLLOW_DISCORD_GUILD_ID?.trim();
-    const discordToken = process.env.DISCORD_BOT_TOKEN?.trim();
-
-    let telegram = false;
-    if (chatId && bot && data.telegramUserId) {
-      try {
-        const res = await fetch(
-          `https://api.telegram.org/bot${bot}/getChatMember?chat_id=${encodeURIComponent(chatId)}&user_id=${encodeURIComponent(data.telegramUserId)}`,
-        );
-        const body = (await res.json()) as { ok?: boolean; result?: { status?: string } };
-        telegram = Boolean(body.ok && body.result?.status);
-        telegram = bothFollowsLive({
-          telegramStatus: body.result?.status ?? null,
-          discordGuilds: [],
-          requiredGuildId: "skip",
-        })
-          ? telegramMemberOnly(body.result?.status ?? null)
-          : telegramMemberOnly(body.result?.status ?? null);
-      } catch {
-        telegram = false;
-      }
+  .validator((d: unknown) => CheckFollowsSchema.parse(d ?? {}))
+  .handler(async ({ context, data }): Promise<{ verified: boolean; telegram: boolean; discord: boolean }> => {
+    const stored = await followIdsForUser(context.userId);
+    const telegramUserId = data.telegramUserId || stored.telegram;
+    const discordUserId = data.discordUserId || stored.discord;
+    const result = await verifyFollowMembership({
+      telegramUserId,
+      discordUserId,
+    });
+    if (result.telegram && telegramUserId) {
+      await recordFollow({
+        userId: context.userId,
+        network: "telegram",
+        externalId: telegramUserId,
+        verified: true,
+      });
     }
-
-    let discord = false;
-    if (guildId && discordToken && data.discordUserId) {
-      try {
-        const res = await fetch(
-          `https://discord.com/api/v10/guilds/${guildId}/members/${data.discordUserId}`,
-          { headers: { authorization: `Bot ${discordToken}` } },
-        );
-        discord = res.ok;
-      } catch {
-        discord = false;
-      }
+    if (result.discord && discordUserId) {
+      await recordFollow({
+        userId: context.userId,
+        network: "discord",
+        externalId: discordUserId,
+        verified: true,
+      });
     }
-
-    return { verified: telegram && discord, telegram, discord };
+    return result;
   });
-
-function telegramMemberOnly(status: string | null): boolean {
-  return status === "member" || status === "administrator" || status === "creator";
-}

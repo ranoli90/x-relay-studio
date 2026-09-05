@@ -1,4 +1,5 @@
 import type { TelegramCheckResult } from "./checks";
+import type { TelegramPeerKind } from "./peer";
 
 export type TelegramPath = "oidc" | "mtproto";
 
@@ -51,6 +52,7 @@ export type TelegramChat = {
   muted: boolean;
   peerId: string | null;
   accessHash?: string | null;
+  peerKind?: TelegramPeerKind | null;
 };
 
 export type TelegramMessage = {
@@ -77,9 +79,11 @@ export type TelegramCredentialPublic = {
   step: TelegramOnboardingStep;
 };
 
+/** Desk watch snapshot. `background_run` lives on `agent_personas`, not this row. */
 export type TelegramWatch = {
   watching: boolean;
   lastSyncAt: string | null;
+  lastSyncOkAt?: string | null;
   lastError: string | null;
   chatsWatched: number;
   messagesIngested: number;
@@ -91,6 +95,7 @@ export type TelegramWatch = {
   hasSession: boolean;
   floodUntil?: string | null;
   authDead?: boolean;
+  generation?: number;
 };
 
 export type TelegramSnapshot = {
@@ -101,6 +106,7 @@ export type TelegramSnapshot = {
   chats: TelegramChat[];
   credential: TelegramCredentialPublic | null;
   watch: TelegramWatch | null;
+  generation: number;
 };
 
 export type TelegramStatus = {

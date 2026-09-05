@@ -6,6 +6,8 @@ import { Textarea } from "@/components/ui/textarea";
 import type { TelegramAccount } from "@/lib/telegram/types";
 import { BIO_GRAPHEME_LIMIT } from "@/lib/telegram/types";
 import { graphemeCount, sliceGraphemes } from "@/lib/telegram/graphemes";
+import { cn } from "@/lib/utils";
+import { tgFocusClass } from "./format";
 
 export function ProfileEdit({
   account,
@@ -27,7 +29,12 @@ export function ProfileEdit({
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg-secondary)] text-[var(--tg-text)]">
       <header className="flex h-14 shrink-0 items-center gap-1 px-2">
-        <button type="button" onClick={onBack} className="grid size-11 place-items-center" aria-label="Back">
+        <button
+          type="button"
+          onClick={onBack}
+          className={cn("grid size-11 min-h-[44px] min-w-[44px] place-items-center", tgFocusClass)}
+          aria-label="Back"
+        >
           <ChevronLeft className="size-5" />
         </button>
         <h2 className="text-sm font-medium">Edit profile</h2>

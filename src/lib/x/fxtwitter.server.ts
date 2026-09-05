@@ -1,3 +1,4 @@
+import { unofficialXLookupEnabled } from "@/lib/flags";
 import type { Author, MediaItem, MediaKind, Tweet, UserProfile } from "./types";
 
 const UA =
@@ -7,12 +8,6 @@ type CacheEntry<T> = { at: number; value: T };
 const tweetCache = new Map<string, CacheEntry<Tweet>>();
 const profileCache = new Map<string, CacheEntry<UserProfile>>();
 const TTL_MS = 90_000;
-
-export function unofficialXLookupEnabled(): boolean {
-  const raw = process.env.FXTWITTER_ENABLED?.trim().toLowerCase();
-  if (raw === "false" || raw === "0" || raw === "off") return false;
-  return true;
-}
 
 function fromCache<T>(map: Map<string, CacheEntry<T>>, key: string): T | null {
   const hit = map.get(key);

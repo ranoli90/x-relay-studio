@@ -160,5 +160,12 @@ export function runGold(cases: GoldCase[] = GOLD): GoldResult[] {
 
 export function goldSummary(results = runGold()) {
   const passed = results.filter((r) => r.ok).length;
-  return { passed, total: results.length, autoSendAllowed: passed === results.length, results };
+  const hasKill = results.some((r) => r.ok && r.safety === "kill");
+  const hasHandoff = results.some((r) => r.ok && r.safety === "handoff");
+  return {
+    passed,
+    total: results.length,
+    autoSendAllowed: results.length > 0 && passed === results.length && hasKill && hasHandoff,
+    results,
+  };
 }

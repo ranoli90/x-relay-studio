@@ -1,5 +1,7 @@
 import { getSql, type Sql } from "@/lib/db";
+import { openRouterEnabled, studioTickEnabled } from "@/lib/flags";
 import { chatOpenRouter, extractJson } from "@/lib/openrouter.server";
+import { archiveIsPartial, fairSelect } from "@/lib/studio/integrity";
 import { fetchProfile, hydrateTweets } from "@/lib/x/fxtwitter.server";
 import { searchAccountWindow } from "@/lib/x/search.server";
 import type { MediaItem, Metrics, Tweet } from "@/lib/x/types";
@@ -129,6 +131,12 @@ function mapSource(row: SourceDb): SourceRow {
     lastSyncedAt: row.last_synced_at,
     backfillDone: Boolean(row.backfill_done),
     windowsRun: Number(row.windows_run) || 0,
+    archivePartial: archiveIsPartial({
+      tweetsClaimed: Number(row.tweets_claimed) || 0,
+      tweetsSynced: Number(row.tweets_synced) || 0,
+      backfillDone: Boolean(row.backfill_done),
+      status: row.status,
+    }),
   };
 }
 
@@ -437,14 +445,24 @@ export async function exportPublisher(userId: string, publisherId: string) {
       handle: source.handle,
       name: source.name,
       stored: Number(source.tweets_synced) || 0,
+      claimed: Number(source.tweets_claimed) || 0,
       rewritten: Number(source.rewritten) || 0,
+      partial: archiveIsPartial({
+        tweetsClaimed: Number(source.tweets_claimed) || 0,
+        tweetsSynced: Number(source.tweets_synced) || 0,
+        backfillDone: Boolean(source.backfill_done),
+        status: source.status,
+      }),
       posts: posts.map((row) => compactPost(mapPost(row))),
     });
   }
+  const partial = packs.some((p) => p.partial);
   return {
     schema: "x-relay/studio@1",
     generatedAt: new Date().toISOString(),
     publisher: { handle: pub[0].handle, name: pub[0].name },
+    partial,
+    archive: partial ? "partial" : "complete",
     sources: packs,
   };
 }
@@ -698,6 +716,16 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
   const source = await loadSource(sql, userId, sourceId);
   if (!source) throw new Error("Source not found.");
 
+  if (!studioTickEnabled()) {
+    return {
+      source: mapSource(source),
+      addedPosts: 0,
+      rewrittenNow: 0,
+      done: source.status === "ready" || source.status === "error",
+      skipped: "flag",
+    };
+  }
+
   const pub = await sql<PublisherRow>`
     select id, handle, name, avatar, banner, bio, source, kit, created_at
     from publishers where id = ${source.publisher_id} and user_id = ${userId} limit 1
@@ -728,25 +756,38 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
     }
 
     if (source.status === "ready") {
-      addedPosts = await catchUpNewer(sql, userId, source);
-      const leftover = await sql<{ n: number }>`
-        select count(*)::int as n from posts
-        where source_id = ${source.id} and rewrite_status = 'pending'
-      `;
-      if ((leftover[0]?.n ?? 0) > 0) {
-        await sql`
-          update sources set status = 'rewriting', stage = 'rewrite', error = null where id = ${source.id}
+      if (openRouterEnabled()) {
+        addedPosts = await catchUpNewer(sql, userId, source);
+        const leftover = await sql<{ n: number }>`
+          select count(*)::int as n from posts
+          where source_id = ${source.id} and rewrite_status = 'pending'
         `;
-        source.status = "rewriting";
-      } else {
-        await sql`
-          update sources set status = 'ready', stage = 'monitor', error = null where id = ${source.id}
-        `;
-        await refreshCounts(sql, source.id);
+        if ((leftover[0]?.n ?? 0) > 0) {
+          await sql`
+            update sources set status = 'rewriting', stage = 'rewrite', error = null where id = ${source.id}
+          `;
+          source.status = "rewriting";
+        } else {
+          await sql`
+            update sources set status = 'ready', stage = 'monitor', error = null where id = ${source.id}
+          `;
+          await refreshCounts(sql, source.id);
+        }
       }
     }
 
     if (source.status === "syncing") {
+      if (!openRouterEnabled()) {
+        const latest = await loadSource(sql, userId, sourceId);
+        if (!latest) throw new Error("Source disappeared.");
+        return {
+          source: mapSource(latest),
+          addedPosts,
+          rewrittenNow,
+          done: false,
+          skipped: "flag",
+        };
+      }
       const emptyStreak = Number(source.empty_windows) || 0;
       const until =
         day(source.cursor_until) ??
@@ -761,7 +802,12 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
         from posts where source_id = ${source.id}
       `;
 
-      const empty = found.tweets.length === 0 ? emptyStreak + 1 : 0;
+      const empty =
+        found.tweets.length === 0
+          ? found.partial
+            ? emptyStreak
+            : emptyStreak + 1
+          : 0;
       const cursorUntil = found.tweets.length === 0 ? until : nextCursor(until, found.tweets);
       const backfillDone = empty >= EMPTY_WINDOWS_STOP;
       const windowsRun = (Number(source.windows_run) || 0) + 1;
@@ -797,6 +843,17 @@ export async function tickSource(userId: string, sourceId: string): Promise<Tick
     }
 
     if (source.status === "rewriting") {
+      if (!openRouterEnabled()) {
+        const latest = await loadSource(sql, userId, sourceId);
+        if (!latest) throw new Error("Source disappeared.");
+        return {
+          source: mapSource(latest),
+          addedPosts,
+          rewrittenNow,
+          done: false,
+          skipped: "flag",
+        };
+      }
       const fresh = await loadSource(sql, userId, sourceId);
       if (fresh && !fresh.voice) {
         const samples = await sql<{ text: string }>`
@@ -949,7 +1006,9 @@ export function sourceNeedsWork(source: {
 }
 
 export async function tickDueSources(limit = 4): Promise<{ ticked: number }> {
+  if (!studioTickEnabled()) return { ticked: 0 };
   const sql = await getSql();
+  const cap = Math.max(1, Math.min(limit, 16));
   const rows = await sql<SourceDb>`
     select * from sources
     where status in ('pending', 'syncing', 'rewriting')
@@ -970,10 +1029,11 @@ export async function tickDueSources(limit = 4): Promise<{ ticked: number }> {
         else 4
       end,
       last_synced_at asc nulls first
-    limit ${limit}
+    limit ${cap * 8}
   `;
+  const fair = fairSelect(rows, cap);
   let ticked = 0;
-  for (const row of rows) {
+  for (const row of fair) {
     await tickSource(row.user_id, row.id);
     ticked += 1;
   }
@@ -981,6 +1041,7 @@ export async function tickDueSources(limit = 4): Promise<{ ticked: number }> {
 }
 
 export async function tickDueForUser(userId: string, limit = 2): Promise<{ ticked: number }> {
+  if (!studioTickEnabled()) return { ticked: 0 };
   const sql = await getSql();
   const rows = await sql<SourceDb>`
     select * from sources

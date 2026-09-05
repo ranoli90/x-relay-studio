@@ -43,6 +43,17 @@ function signedMeOf(signed: object): SignedMe | null {
   return me ?? null;
 }
 
+function kickAgentLoop(userId?: string): void {
+  void import("@/lib/agent/loop.server")
+    .then((m) => {
+      if (userId) m.markDeskPresent(userId);
+      m.ensureAgentLoop();
+    })
+    .catch(() => {
+      /* in-process loop is best-effort */
+    });
+}
+
 async function buildStatus(userId: string): Promise<TelegramStatus> {
   const { telegramConfigured, telegramMtprotoEnabled, telegramUserApp } = await import(
     "./config.server"
@@ -102,21 +113,28 @@ async function buildSnapshot(userId: string): Promise<TelegramSnapshot> {
   return {
     configured: Boolean(session?.session_enc) || Boolean(publicCred?.hasToken) || telegramConfigured(),
     mtprotoEnabled: telegramMtprotoEnabled(),
-    onboarded: Boolean(session?.onboarded_at) || Boolean(publicCred?.onboarded),
+    onboarded:
+      (Boolean(session?.onboarded_at) && Boolean(session?.session_enc)) ||
+      Boolean(publicCred?.onboarded),
     account,
     chats,
     credential: publicCred,
     watch: toWatch(session, await pendingForAiCount(userId).catch(() => 0)),
+    generation: Number(session?.account_generation) || 1,
   };
 }
 
 export const telegramStatusFn = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
-  .handler(async ({ context }): Promise<TelegramStatus> => buildStatus(context.userId));
+  .handler(async ({ context }): Promise<TelegramStatus> => {
+    kickAgentLoop(context.userId);
+    return buildStatus(context.userId);
+  });
 
 export const telegramMeFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<TelegramSnapshot> => {
+    kickAgentLoop(context.userId);
     console.info("[telegram]", { event: "me", userId: context.userId });
     return buildSnapshot(context.userId);
   });
@@ -374,7 +392,7 @@ export const telegramSendFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(SendSchema, input))
   .handler(async ({ context, data }): Promise<TelegramMessage> => {
-    const { sendNote, getAccount, getChatKind, getChatPeer, appendMessage } = await import(
+    const { sendNote, getAccount, getChatKind, getChatPeer, appendMessage, findRecentOutbound } = await import(
       "./snapshot.server"
     );
     const { takeRate, takeUserSend } = await import("./rate.server");
@@ -402,32 +420,74 @@ export const telegramSendFn = createServerFn({ method: "POST" })
         persistMappedError,
       } = await import("./session.server");
       const { sendAsUser } = await import("./mtproto.server");
+      const { assertPrivatePeerHash } = await import("./peer");
       const row = await getUserSession(context.userId);
       const session = assertSessionLive(row);
-      const peerId = peer?.peerId;
+      const peerId = peer.peerId;
       if (!session.session_enc || !peerId) {
         throw new TelegramError("invalid", "Connect your Telegram account first.", 400);
+      }
+      assertPrivatePeerHash(peer.peerKind ?? "user", peer.accessHash);
+      const material = await decryptSessionMaterial(session);
+      const generation = Number(session.account_generation) || 1;
+      const { withMtprotoLease } = await import("./lease.server");
+      const { beginSendIntent, completeSendIntent, failSendIntent, sendOutcomeFromError } =
+        await import("./send-intent.server");
+      // Human send only — agent jobs must never call telegramSendFn (use agentSendToPeer).
+      const started = await beginSendIntent({
+        userId: context.userId,
+        chatId: data.chatId,
+        peerId,
+        body: data.body,
+      });
+      if (started.reuse?.status === "sent") {
+        const existing = await findRecentOutbound(
+          context.userId,
+          data.chatId,
+          data.body,
+          started.reuse.telegramMessageId,
+        );
+        if (existing) return existing;
+        return appendMessage({
+          userId: context.userId,
+          chatId: data.chatId,
+          fromSelf: true,
+          authorName: account.displayName,
+          body: data.body,
+          telegramMessageId: started.reuse.telegramMessageId
+            ? Number(started.reuse.telegramMessageId)
+            : undefined,
+          aiStatus: "outbound",
+        });
       }
       try {
         await takeUserSend(context.userId);
       } catch (err) {
-        if (err && typeof err === "object" && "code" in err) throw err;
+        await failSendIntent(
+          started.intentId,
+          context.userId,
+          "failed",
+          err instanceof Error ? err.message : "send rate limited",
+        );
+        throw err;
       }
-      const material = await decryptSessionMaterial(session);
-      const { withMtprotoLease } = await import("./lease.server");
       try {
-        const sent = await withMtprotoLease(context.userId, () =>
-          sendAsUser({
+        const sent = await withMtprotoLease(context.userId, async () => {
+          const result = await sendAsUser({
             apiId: material.apiId,
             apiHash: material.apiHash,
             session: material.session,
             peerId,
+            accessHash: peer.accessHash,
+            peerKind: peer.peerKind,
             body: data.body,
-          }),
-        );
-        if (sent.session !== material.session) {
-          await saveSignedIn({ userId: context.userId, session: sent.session });
-        }
+          });
+          await completeSendIntent(started.intentId, context.userId, result.telegramMessageId);
+          if (result.session !== material.session) {
+            await saveSignedIn({ userId: context.userId, session: result.session, generation });
+          }
+          return result;
+        });
         return appendMessage({
           userId: context.userId,
           chatId: data.chatId,
@@ -438,6 +498,12 @@ export const telegramSendFn = createServerFn({ method: "POST" })
           aiStatus: "outbound",
         });
       } catch (err) {
+        await failSendIntent(
+          started.intentId,
+          context.userId,
+          sendOutcomeFromError(err),
+          err instanceof Error ? err.message : "send failed",
+        );
         await persistMappedError(context.userId, err);
         throw err;
       }
@@ -476,22 +542,34 @@ export const telegramUnlinkFn = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     const { unlinkAccount } = await import("./snapshot.server");
     const { deleteCredentials } = await import("./credentials.server");
-    const { deleteUserSession, getUserSession, decryptSessionMaterial } = await import(
-      "./session.server"
-    );
+    const {
+      getUserSession,
+      decryptSessionMaterial,
+      invalidateUserSession,
+      wipeUserSession,
+    } = await import("./session.server");
+    let material: { apiId: number; apiHash: string; session: string } | null = null;
     try {
       const row = await getUserSession(context.userId);
       if (row?.session_enc) {
-        const material = await decryptSessionMaterial(row);
-        const { revokeSession } = await import("./mtproto.server");
-        await revokeSession(material);
+        material = await decryptSessionMaterial(row);
       }
     } catch {
-      /* still delete local copy */
+      /* still disconnect local copy — never log session material */
     }
-    await deleteUserSession(context.userId);
+    await invalidateUserSession(context.userId);
+    if (material) {
+      try {
+        const { revokeSession } = await import("./mtproto.server");
+        await revokeSession(material);
+      } catch {
+        /* still wipe local copy — never log session material */
+      }
+    }
+    await wipeUserSession(context.userId);
     await deleteCredentials(context.userId);
     await unlinkAccount(context.userId);
+    console.info("[telegram]", { event: "disconnect", userId: context.userId });
     return { ok: true as const };
   });
 

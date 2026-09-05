@@ -8,13 +8,13 @@ export type DbSource = "neon" | "pglite";
 export { isProductionRuntime };
 
 // An empty/whitespace DATABASE_URL (an easy misconfig in deploy UIs) must mean
-// "unset" — otherwise production would silently run on the PGLite fallback.
+// "unset" — otherwise Vercel would silently run on the PGLite fallback.
 const rawDatabaseUrl =
   typeof process !== "undefined" ? process.env.DATABASE_URL : undefined;
 const databaseUrl =
   rawDatabaseUrl && rawDatabaseUrl.trim() ? rawDatabaseUrl : undefined;
 
-if (isProductionRuntime() && !databaseUrl) {
+if (process.env.VERCEL && !databaseUrl) {
   throw new Error(
     "DATABASE_URL is required in production. The live site cannot run on a throwaway in-memory database.",
   );
@@ -122,6 +122,30 @@ async function applyNeonMigrations(pool: import("pg").Pool): Promise<void> {
   }
 }
 
+/** Read-only: production requests do not apply DDL. `scripts/migrate.mjs` is the release path. */
+async function assertNeonSchema(pool: import("pg").Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    const exists = await client.query(
+      `select 1 from information_schema.tables where table_name = '_migrations' limit 1`,
+    );
+    if (!exists.rows[0]) {
+      throw new Error("Schema is missing _migrations. Run npm run db:migrate before serving traffic.");
+    }
+    const applied = (await client.query("SELECT name FROM _migrations")).rows.map(
+      (r: { name: string }) => r.name,
+    );
+    const next = pendingMigrations(Object.keys(migrationFiles), applied)[0];
+    if (next) {
+      throw new Error(
+        `Schema is behind (${next.name} not applied). Run npm run db:migrate with a release credential.`,
+      );
+    }
+  } finally {
+    client.release();
+  }
+}
+
 function createNeonSql(): Promise<Sql> {
   globalRef.__pgSqlPromise__ ??= (async () => {
     const { Pool, types } = await import("pg");
@@ -141,7 +165,10 @@ function createNeonSql(): Promise<Sql> {
       void client.query("set lock_timeout = 8000");
     });
     try {
-      await applyNeonMigrations(pool);
+      const migrateHere =
+        process.env.XRELAY_MIGRATE_ON_START === "1" || !isProductionRuntime();
+      if (migrateHere) await applyNeonMigrations(pool);
+      else await assertNeonSchema(pool);
     } catch (err) {
       globalRef.__pgPool__ = undefined;
       await pool.end().catch(() => undefined);
@@ -297,7 +324,6 @@ export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite
 }
 
 export function ensureDbReady(): Promise<void> {
-  if (dbSource !== "pglite") return Promise.resolve();
   return getSql().then(() => undefined);
 }
 

@@ -3,32 +3,56 @@ import { ensureSeed } from "./seed.server.ts";
 import { processInbound } from "./brain.server.ts";
 import { newId } from "./ids.ts";
 import { isNonProcessableInbound, redactForModel } from "./consent.ts";
+import { availableThreads, burnThreadIfBillable } from "@/lib/billing/ledger.server.ts";
 
 /**
  * Drain Telegram messages marked ai_status=queued into the conversation brain.
  * Watching is not consent. automation_armed is the processing gate.
  * Failures stay retry_wait — they are not "held" as if the operator chose that.
  */
-export async function drainQueuedTelegram(limit = 8): Promise<number> {
+export async function drainQueuedTelegram(limit = 8, userIds?: string[]): Promise<number> {
+  if (userIds && userIds.length === 0) return 0;
   const sql = await getSql();
-  const rows = await sql.query<{
-    id: string;
-    user_id: string;
-    chat_id: string;
-    body: string;
-    author_name: string;
-    automation_armed: boolean | null;
-    auth_dead: boolean | null;
-  }>(
-    `select m.id, m.user_id, m.chat_id, m.body, m.author_name,
-            s.automation_armed, s.auth_dead
-       from telegram_messages m
-       left join telegram_user_sessions s on s.user_id = m.user_id
-      where m.ai_status = 'queued' and m.from_self = false
-      order by m.created_at asc
-      limit $1`,
-    [limit],
-  );
+  const cap = Math.max(1, Math.min(Math.floor(limit) || 8, 32));
+  const rows = userIds
+    ? await sql.query<{
+        id: string;
+        user_id: string;
+        chat_id: string;
+        body: string;
+        author_name: string;
+        automation_armed: boolean | null;
+        auth_dead: boolean | null;
+      }>(
+        `select m.id, m.user_id, m.chat_id, m.body, m.author_name,
+                s.automation_armed, s.auth_dead
+           from telegram_messages m
+           left join telegram_user_sessions s on s.user_id = m.user_id
+          where m.ai_status = 'queued' and m.from_self = false
+            and m.user_id = any($2::text[])
+          order by m.created_at asc
+          limit $1`,
+        [cap, userIds],
+      )
+    : await sql.query<{
+        id: string;
+        user_id: string;
+        chat_id: string;
+        body: string;
+        author_name: string;
+        automation_armed: boolean | null;
+        auth_dead: boolean | null;
+      }>(
+        `select m.id, m.user_id, m.chat_id, m.body, m.author_name,
+                s.automation_armed, s.auth_dead
+           from telegram_messages m
+           left join telegram_user_sessions s on s.user_id = m.user_id
+          where m.ai_status = 'queued' and m.from_self = false
+          order by m.created_at asc
+          limit $1`,
+        [cap],
+      );
+
   let n = 0;
   for (const row of rows) {
     try {
@@ -72,7 +96,7 @@ export async function drainQueuedTelegram(limit = 8): Promise<number> {
         )
       )[0];
       if (!thread) continue;
-      await processInbound({
+      const result = await processInbound({
         userId: row.user_id,
         threadId: thread.id,
         fanId: fan.id,
@@ -80,7 +104,21 @@ export async function drainQueuedTelegram(limit = 8): Promise<number> {
         source: "telegram",
         idempotencyKey: `tg:${row.id}`,
       });
-      await sql.query(`update telegram_messages set ai_status = 'held' where id = $1`, [row.id]);
+      const credits = await availableThreads(row.user_id);
+      await burnThreadIfBillable(row.user_id, thread.id, {
+        safetyKilled: result.killed,
+        parked: false,
+        takeoverNoModel: false,
+        alreadyBilled: false,
+        aftercare: false,
+        failedModel: false,
+        humanOnly: !result.auto,
+        availableCredits: credits,
+      });
+      await sql.query(`update telegram_messages set ai_status = $1 where id = $2`, [
+        result.auto ? "outbound" : "held",
+        row.id,
+      ]);
       n += 1;
     } catch {
       await sql.query(

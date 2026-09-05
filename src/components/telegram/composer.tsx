@@ -2,19 +2,23 @@ import { Send } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import type { TelegramChatKind } from "@/lib/telegram/types";
 import { cn } from "@/lib/utils";
+import { tgFocusClass } from "./format";
 
 export function Composer({
   disabled,
   kind,
+  draft,
+  onDraft,
   onSend,
 }: {
   disabled: boolean;
   kind: TelegramChatKind;
-  onSend: (body: string) => void;
+  draft: string;
+  onDraft: (value: string) => void;
+  onSend: (body: string) => void | Promise<boolean | void>;
 }) {
-  const [value, setValue] = useState("");
-  const [vv, setVv] = useState(0);
   const area = useRef<HTMLTextAreaElement>(null);
+  const [vv, setVv] = useState(0);
 
   useEffect(() => {
     const viewport = window.visualViewport;
@@ -32,19 +36,22 @@ export function Composer({
     };
   }, []);
 
-  function submit() {
-    const text = value.trim();
-    if (!text || disabled) return;
-    onSend(text);
-    setValue("");
-    if (area.current) area.current.style.height = "auto";
-  }
+  useEffect(() => {
+    const el = area.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 128)}px`;
+  }, [draft]);
 
-  const placeholder = "Message";
+  function submit() {
+    const text = draft.trim();
+    if (!text || disabled) return;
+    void onSend(text);
+  }
 
   return (
     <form
-      className="shrink-0 border-t border-white/5 bg-[var(--tg-bg-secondary)] px-3 pt-2"
+      className="min-w-0 shrink-0 overflow-x-hidden border-t border-white/5 bg-[var(--tg-bg-secondary)] px-3 pt-2"
       style={{
         paddingBottom:
           vv > 0 ? `${vv + 8}px` : "max(0.5rem, env(safe-area-inset-bottom))",
@@ -54,17 +61,22 @@ export function Composer({
         submit();
       }}
     >
-      <div className="flex items-end gap-2">
+      <div className="flex min-w-0 items-end gap-2">
         <textarea
           ref={area}
-          value={value}
+          value={draft}
           disabled={disabled}
           rows={1}
-          placeholder={placeholder}
-          className="max-h-32 min-h-11 w-full resize-none rounded-xl bg-[var(--tg-item-hover)] px-3 py-2.5 text-base text-[var(--tg-text)] outline-none placeholder:text-[var(--tg-text-secondary)] disabled:opacity-50"
+          placeholder="Message"
+          aria-label={kind === "notes" ? "Studio note" : "Message"}
+          className={cn(
+            "max-h-32 min-h-[44px] min-w-0 w-full resize-none rounded-xl bg-[var(--tg-item-hover)] px-3 py-2.5 text-base text-[var(--tg-text)] placeholder:text-[var(--tg-text-secondary)] disabled:opacity-50",
+            tgFocusClass,
+          )}
           enterKeyHint="send"
+          autoComplete="off"
           onChange={(e) => {
-            setValue(e.target.value);
+            onDraft(e.target.value);
             e.currentTarget.style.height = "auto";
             e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 128)}px`;
           }}
@@ -77,10 +89,11 @@ export function Composer({
         />
         <button
           type="submit"
-          disabled={disabled || !value.trim()}
+          disabled={disabled || !draft.trim()}
           className={cn(
-            "grid size-11 shrink-0 place-items-center rounded-full bg-[var(--tg-primary)] text-[var(--tg-own-text)]",
+            "grid size-11 min-h-[44px] min-w-[44px] shrink-0 place-items-center rounded-full bg-[var(--tg-primary)] text-[var(--tg-own-text)]",
             "disabled:opacity-40",
+            tgFocusClass,
           )}
           aria-label="Send"
         >

@@ -43,6 +43,7 @@ export type Intent =
   | "crisis"
   | "age_probe"
   | "time_waste"
+  | "menu"
   | "other";
 
 export type Archetype =
@@ -163,6 +164,7 @@ export type OperatorThread = {
   lastAt: string | null;
   lifetimeCents: number;
   trust: number;
+  agentName: string | null;
 };
 
 export type OperatorMessage = {
@@ -173,6 +175,7 @@ export type OperatorMessage = {
   status: string;
   auto: boolean;
   createdAt: string;
+  agentName: string | null;
 };
 
 export type OperatorThought = {
@@ -224,6 +227,31 @@ export type TicketRow = {
   createdAt: string;
 };
 
+export type ActivityKind =
+  | "inbound"
+  | "typing"
+  | "sent"
+  | "held"
+  | "handoff"
+  | "killed"
+  | "failed";
+
+export type DeskRosterEntry = {
+  name: string;
+  tone: string;
+  live: boolean;
+  threadCount: number;
+};
+
+export type DeskActivity = {
+  id: string;
+  agentName: string;
+  kind: ActivityKind | string;
+  body: string;
+  threadId: string | null;
+  createdAt: string;
+};
+
 export type DeskSnapshot = {
   persona: {
     id: string;
@@ -234,6 +262,8 @@ export type DeskSnapshot = {
     hour: number;
     clockLabel: string;
     quiet: boolean;
+    backgroundRun: boolean;
+    agentName: string;
   };
   seats: SeatRow[];
   catalog: CatalogRow[];
@@ -241,6 +271,8 @@ export type DeskSnapshot = {
   tickets: TicketRow[];
   calls: ModelCallRow[];
   eval: { passed: number; total: number; autoSendAllowed: boolean };
+  roster: DeskRosterEntry[];
+  activity: DeskActivity[];
 };
 
 export type ThreadSnapshot = {

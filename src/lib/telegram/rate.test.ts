@@ -5,7 +5,7 @@ import {
   USER_SEND_BURST_MS,
   USER_SEND_DAY,
   USER_SEND_PER_MIN,
-} from "./rate.server.ts";
+} from "./rate.ts";
 
 describe("telegram user send caps", () => {
   it("stays under freeze-safe user send limits", () => {

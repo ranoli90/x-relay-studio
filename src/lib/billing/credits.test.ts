@@ -1,6 +1,17 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { availableCredits, burnOrder, decideBurn, expireRefills, takeOne, type Lot } from "./credits.ts";
+import {
+  availableCredits,
+  burnOrder,
+  decideBurn,
+  expireRefills,
+  release,
+  reserveAndCommit,
+  reserveOne,
+  takeOne,
+  type BurnEvent,
+  type Lot,
+} from "./credits.ts";
 
 const now = Date.parse("2026-09-05T16:00:00.000Z");
 
@@ -13,18 +24,18 @@ function lot(partial: Partial<Lot> & { id: string }): Lot {
   };
 }
 
-describe("decideBurn", () => {
-  const work = {
-    safetyKilled: false,
-    parked: false,
-    takeoverNoModel: false,
-    alreadyBilled: false,
-    aftercare: false,
-    failedModel: false,
-    humanOnly: false,
-    availableCredits: 3,
-  };
+const work: BurnEvent = {
+  safetyKilled: false,
+  parked: false,
+  takeoverNoModel: false,
+  alreadyBilled: false,
+  aftercare: false,
+  failedModel: false,
+  humanOnly: false,
+  availableCredits: 3,
+};
 
+describe("decideBurn", () => {
   it("burns exactly once on first write after safety and triage", () => {
     assert.deepEqual(decideBurn(work), { burn: true });
   });
@@ -90,5 +101,65 @@ describe("lots", () => {
     const empty = takeOne([], now);
     assert.equal(empty.took, null);
     assert.deepEqual(empty.lots, []);
+  });
+});
+
+describe("F09 reserveAndCommit / release", () => {
+  const lots = [
+    lot({ id: "r1", kind: "refill", remaining: 5, expiresAt: "2026-09-20T00:00:00.000Z" }),
+    lot({ id: "t1", kind: "topup", remaining: 4 }),
+  ];
+
+  it("failed model work does not reserve or burn a lot", () => {
+    const result = reserveAndCommit(lots, { ...work, failedModel: true }, now);
+    assert.equal(result.hold, null);
+    assert.equal(result.decision.burn, false);
+    if (!result.decision.burn) assert.equal(result.decision.reason, "failed_model");
+    assert.equal(result.lots.find((l) => l.id === "r1")?.remaining, 5);
+    assert.equal(result.lots.find((l) => l.id === "t1")?.remaining, 4);
+  });
+
+  it("killed / parked / human-only / aftercare never hold a lot", () => {
+    for (const event of [
+      { ...work, safetyKilled: true },
+      { ...work, parked: true },
+      { ...work, humanOnly: true },
+      { ...work, aftercare: true },
+    ] satisfies BurnEvent[]) {
+      const result = reserveAndCommit(lots, event, now);
+      assert.equal(result.hold, null);
+      assert.equal(result.lots.find((l) => l.id === "r1")?.remaining, 5);
+    }
+  });
+
+  it("reserved lots release on failure and restore remaining", () => {
+    const reserved = reserveOne(lots, now);
+    assert.ok(reserved.hold);
+    assert.equal(reserved.hold?.lotId, "r1");
+    assert.equal(reserved.lots.find((l) => l.id === "r1")?.remaining, 4);
+    const restored = release(reserved.lots, reserved.hold!);
+    assert.equal(restored.find((l) => l.id === "r1")?.remaining, 5);
+    assert.equal(restored.find((l) => l.id === "t1")?.remaining, 4);
+  });
+
+  it("commit keeps the decrement after successful model work", () => {
+    const result = reserveAndCommit(lots, work, now);
+    assert.equal(result.decision.burn, true);
+    assert.equal(result.hold?.lotId, "r1");
+    assert.equal(result.lots.find((l) => l.id === "r1")?.remaining, 4);
+  });
+
+  it("failed model still does not burn even when the event claims zero credits", () => {
+    const result = reserveAndCommit(lots, { ...work, failedModel: true, availableCredits: 0 }, now);
+    assert.equal(result.hold, null);
+    if (!result.decision.burn) assert.equal(result.decision.reason, "failed_model");
+    assert.equal(result.lots.find((l) => l.id === "r1")?.remaining, 5);
+  });
+
+  it("uses live lot remaining, not a stale event.availableCredits of 0", () => {
+    const result = reserveAndCommit(lots, { ...work, availableCredits: 0 }, now);
+    assert.equal(result.decision.burn, true);
+    assert.equal(result.hold?.lotId, "r1");
+    assert.equal(result.lots.find((l) => l.id === "r1")?.remaining, 4);
   });
 });

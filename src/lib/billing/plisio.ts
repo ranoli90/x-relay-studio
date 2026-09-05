@@ -79,8 +79,9 @@ export async function createPlisioInvoice(input: {
   };
 }
 
+/** Fiat cents only. Never treat the crypto `amount` field as USD. */
 export function fiatCentsFromPlisio(payload: Record<string, unknown>): number {
-  const raw = payload.source_amount ?? payload.invoice_total_sum ?? payload.amount;
+  const raw = payload.source_amount ?? payload.invoice_total_sum;
   const n = typeof raw === "number" ? raw : Number(String(raw ?? ""));
   if (!Number.isFinite(n) || n <= 0) return 0;
   return Math.round(n * 100);
@@ -94,4 +95,22 @@ export function plisioOrderNumber(payload: Record<string, unknown>): string | nu
 export function plisioTxnId(payload: Record<string, unknown>): string | null {
   const n = payload.txn_id;
   return typeof n === "string" && n.length > 4 ? n : null;
+}
+
+/** JSON (`?json=true`) first; form-encoded callbacks as fallback. Never logs the body. */
+export function parsePlisioCallbackBody(raw: string): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+  } catch {
+    /* form-encoded */
+  }
+  if (!raw.includes("=")) return null;
+  const payload: Record<string, unknown> = {};
+  for (const [key, value] of new URLSearchParams(raw).entries()) {
+    payload[key] = value;
+  }
+  return Object.keys(payload).length ? payload : null;
 }

@@ -31,8 +31,8 @@ export function TelegramLoginScreen({
           Open a desk, then connect your Telegram.
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-muted">
-          You’ll sign in as yourself — the account you already use. We watch your real chats so
-          later you can start automation. This is not a bot.
+          You’ll sign in as yourself — the account you already use. We watch your real chats so they
+          show up in this inbox. You send. This is not a bot.
         </p>
 
         {message ? (
@@ -49,7 +49,7 @@ export function TelegramLoginScreen({
         ) : (
           <Link
             to="/"
-            className="mt-8 flex h-12 w-full items-center justify-center rounded-md bg-accent text-base font-medium text-accent-fg"
+            className="mt-8 flex h-12 w-full items-center justify-center rounded-md bg-accent text-base font-medium text-accent-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
           >
             Open a desk
           </Link>

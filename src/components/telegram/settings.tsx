@@ -1,7 +1,18 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { Link } from "@tanstack/react-router";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  asFloorDesk,
+  backgroundRunOf,
+  persistBackgroundRun,
+  personaName,
+  type FloorDesk,
+} from "@/components/agents/model";
+import { loadDesk, setAutoSend } from "@/lib/agent/fns";
 import type { TelegramAccount, TelegramWatch } from "@/lib/telegram/types";
+import { cn } from "@/lib/utils";
+import { tgFocusClass } from "./format";
 
 export function SettingsPane({
   account,
@@ -23,9 +34,14 @@ export function SettingsPane({
   onUnlink: () => void;
 }) {
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg-secondary)] text-[var(--tg-text)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden bg-[var(--tg-bg-secondary)] text-[var(--tg-text)]">
       <header className="flex h-14 shrink-0 items-center gap-1 px-2">
-        <button type="button" onClick={onBack} className="grid size-11 place-items-center" aria-label="Back">
+        <button
+          type="button"
+          onClick={onBack}
+          className={cn("grid size-11 min-h-[44px] min-w-[44px] place-items-center", tgFocusClass)}
+          aria-label="Back"
+        >
           <ChevronLeft className="size-5" />
         </button>
         <h2 className="text-sm font-medium">Settings</h2>
@@ -35,21 +51,11 @@ export function SettingsPane({
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-medium">Watching</h3>
             {account.preview ? null : (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={Boolean(watch?.watching)}
-                onClick={() => onWatching(!watch?.watching)}
-                className={`h-7 w-12 rounded-full p-0.5 transition-colors ${
-                  watch?.watching ? "bg-[var(--tg-primary)]" : "bg-[var(--tg-item-active)]"
-                }`}
-              >
-                <span
-                  className={`block size-6 rounded-full bg-[var(--tg-own-text)] transition-transform ${
-                    watch?.watching ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
+              <TgSwitch
+                label="Watching"
+                checked={Boolean(watch?.watching)}
+                onChange={onWatching}
+              />
             )}
           </div>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
@@ -71,44 +77,30 @@ export function SettingsPane({
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-medium">Draft replies</h3>
             {account.preview ? null : (
-              <button
-                type="button"
-                role="switch"
-                aria-checked={Boolean(watch?.automationArmed)}
-                onClick={() => onAutomation(!watch?.automationArmed)}
-                className={`h-7 w-12 rounded-full p-0.5 transition-colors ${
-                  watch?.automationArmed ? "bg-[var(--tg-primary)]" : "bg-[var(--tg-item-active)]"
-                }`}
-              >
-                <span
-                  className={`block size-6 rounded-full bg-[var(--tg-own-text)] transition-transform ${
-                    watch?.automationArmed ? "translate-x-5" : "translate-x-0"
-                  }`}
-                />
-              </button>
+              <TgSwitch
+                label="Draft replies"
+                checked={Boolean(watch?.automationArmed)}
+                onChange={onAutomation}
+              />
             )}
           </div>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
             {account.preview
               ? "Preview is local. Nothing is sent to a model."
               : watch?.automationArmed
-                ? "On. Stored chats can be drafted locally. You still send every message yourself. Watching is not this switch."
-                : "Off. Watching stores chats. This switch is the consent to draft. Nothing is auto-sent."}
+                ? "On. Stored chats can be drafted locally. Watching is not this switch."
+                : "Off. Watching stores chats. This switch is the consent to draft."}
           </p>
           <p className="mt-2 font-mono text-xs text-[var(--tg-text-secondary)]">
             {watch?.pendingForAi ?? 0} queued for drafting
           </p>
         </section>
+        <AgentConsent preview={account.preview} watching={Boolean(watch?.watching)} />
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
           <h3 className="text-sm font-medium">Catalog and checkout</h3>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
-            Not in this screen yet. Payments stay off until the settlement path is verified.
-          </p>
-        </section>
-        <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
-          <h3 className="text-sm font-medium">OpenRouter</h3>
-          <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
-            Used only when Draft replies is on. Still never auto-sends.
+            Not on this screen. Thread packs and Plisio checkout are on the desk home under
+            Threads. This is inbox settings — you read and send yourself.
           </p>
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
@@ -125,21 +117,7 @@ export function SettingsPane({
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-sm font-medium">Notifications</h3>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={notify}
-              onClick={() => onNotify(!notify)}
-              className={`h-7 w-12 rounded-full p-0.5 transition-colors ${
-                notify ? "bg-[var(--tg-primary)]" : "bg-[var(--tg-item-active)]"
-              }`}
-            >
-              <span
-                className={`block size-6 rounded-full bg-[var(--tg-own-text)] transition-transform ${
-                  notify ? "translate-x-5" : "translate-x-0"
-                }`}
-              />
-            </button>
+            <TgSwitch label="Notifications" checked={notify} onChange={onNotify} />
           </div>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
             Alerts stay in this browser. We do not change Telegram notification settings.
@@ -165,6 +143,162 @@ export function SettingsPane({
         </p>
       </div>
     </div>
+  );
+}
+
+function AgentConsent({ preview, watching }: { preview: boolean; watching: boolean }) {
+  const [desk, setDesk] = useState<FloorDesk | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [localAuto, setLocalAuto] = useState<boolean | null>(null);
+  const [localBg, setLocalBg] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void loadDesk()
+      .then((d) => {
+        if (!cancelled) setDesk(asFloorDesk(d));
+      })
+      .catch((e: unknown) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : "Could not load agent settings.");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const autoSend = localAuto ?? Boolean(desk?.persona.autoSend);
+  const backgroundRun = localBg ?? backgroundRunOf(desk);
+  const allowed = Boolean(desk?.eval.autoSendAllowed);
+  const name = personaName(desk);
+
+  async function toggleAuto(on: boolean) {
+    setBusy(true);
+    setLocalAuto(on);
+    setError(null);
+    try {
+      await setAutoSend({ data: { on } });
+      setDesk(asFloorDesk(await loadDesk()));
+      setLocalAuto(null);
+    } catch (e) {
+      setLocalAuto(null);
+      setError(e instanceof Error ? e.message : "Could not change auto-send.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleBg(on: boolean) {
+    setBusy(true);
+    setLocalBg(on);
+    setError(null);
+    try {
+      const result = await persistBackgroundRun(on);
+      if (result === "ok") {
+        setDesk(asFloorDesk(await loadDesk()));
+        setLocalBg(null);
+      }
+    } catch (e) {
+      setLocalBg(null);
+      setError(e instanceof Error ? e.message : "Could not change background run.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-medium">Auto-send</h3>
+          {preview ? null : (
+            <TgSwitch
+              label="Auto-send"
+              checked={autoSend}
+              disabled={busy || !desk || (!allowed && !autoSend)}
+              onChange={(on) => void toggleAuto(on)}
+            />
+          )}
+        </div>
+        <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
+          {preview
+            ? "Preview is local. Nothing is auto-sent."
+            : "Rapport, aftercare, and check-ins send themselves. Price, GFE, proof, and safety still hold for you."}
+        </p>
+        {!preview && desk && !allowed ? (
+          <p className="mt-2 text-sm text-[var(--tg-text-secondary)]">
+            Gold eval {desk.eval.passed}/{desk.eval.total} has to pass before this turns on.
+          </p>
+        ) : null}
+      </section>
+      <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-sm font-medium">Keep running when I leave</h3>
+          {preview ? null : (
+            <TgSwitch
+              label="Keep running when I leave"
+              checked={backgroundRun}
+              disabled={busy || !desk || (!watching && !backgroundRun)}
+              onChange={(on) => void toggleBg(on)}
+            />
+          )}
+        </div>
+        <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
+          {preview
+            ? "Preview is local. The desk does not run in the background."
+            : "The desk keeps pulling and sending after you close this tab. Requires watching."}
+        </p>
+        <p className="mt-3 text-sm text-[var(--tg-text-secondary)]">
+          <Link
+            to="/agents"
+            className={cn("underline underline-offset-4 hover:text-[var(--tg-text)]", tgFocusClass)}
+          >
+            Open {name === "Agent" ? "the Agents floor" : `${name}'s floor`}
+          </Link>
+        </p>
+        {error ? <p className="mt-2 text-sm text-down">{error}</p> : null}
+      </section>
+    </>
+  );
+}
+
+function TgSwitch({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: (on: boolean) => void;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-label={label}
+      aria-checked={checked}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={cn(
+        "grid h-11 min-h-[44px] w-12 place-items-center disabled:opacity-40",
+        tgFocusClass,
+      )}
+    >
+      <span
+        className={cn(
+          "relative h-7 w-12 rounded-full p-0.5 transition-colors",
+          checked ? "bg-[var(--tg-primary)]" : "bg-[var(--tg-item-active)]",
+        )}
+      >
+        <span
+          className={`block size-6 rounded-full bg-[var(--tg-own-text)] transition-transform ${
+            checked ? "translate-x-5" : "translate-x-0"
+          }`}
+        />
+      </span>
+    </button>
   );
 }
 

@@ -7,6 +7,14 @@ import {
   isPeerFlood,
 } from "./mtproto-policy.server.ts";
 
+export function redactRpcMessage(raw: string): string {
+  return raw
+    .replace(/session[=:]\s*\S+/gi, "session=[redacted]")
+    .replace(/\+?\d{10,15}/g, "[phone]")
+    .replace(/[0-9a-f]{32,}/gi, "[hex]")
+    .slice(0, 160);
+}
+
 export function mapRpc(err: unknown): TelegramError {
   if (err instanceof TelegramError) return err;
   const raw = err instanceof Error ? err.message : String(err);
@@ -49,6 +57,9 @@ export function mapRpc(err: unknown): TelegramError {
       3600,
     );
   }
+  if (msg.includes("SESSION_REVOKED") || msg.includes("SESSION_EXPIRED")) {
+    return new TelegramError("auth_dead", "Telegram revoked this session. Connect again.", 401);
+  }
   if (isAccountFrozen(raw) || isAuthKeyDuplicated(raw)) {
     return new TelegramError("auth_dead", "Telegram signed this desk out. Connect again.", 401);
   }
@@ -64,8 +75,21 @@ export function mapRpc(err: unknown): TelegramError {
   if (msg.includes("FLOOD") || (msg.includes("WAIT") && msg.includes("SECOND"))) {
     return new TelegramError("flood", "Telegram asked us to wait. Try again in a few minutes.", 429, 120);
   }
-  if (msg.includes("AUTH_KEY") || msg.includes("SESSION_REVOKED") || msg.includes("SESSION_EXPIRED")) {
+  if (msg.includes("AUTH_KEY")) {
     return new TelegramError("unlinked", "Telegram signed this desk out. Connect again.", 401);
+  }
+  if (
+    msg.includes("PEER_ID_INVALID") ||
+    msg.includes("CHAT_ID_INVALID") ||
+    msg.includes("CHANNEL_INVALID") ||
+    msg.includes("CHANNEL_PRIVATE") ||
+    msg.includes("USER_ID_INVALID")
+  ) {
+    return new TelegramError(
+      "invalid",
+      "This private chat needs a refresh before we can open it.",
+      400,
+    );
   }
   if (isDcConnectFailure(raw)) {
     return new TelegramError(
@@ -91,6 +115,6 @@ export function mapRpc(err: unknown): TelegramError {
   if (msg.includes("CANNOT FIND PACKAGE") || msg.includes("CANNOT FIND MODULE")) {
     return new TelegramError("not_configured", "Telegram client failed to load on this server. Try again in a minute.", 500);
   }
-  console.info("[telegram]", { event: "mtproto_error", message: raw.slice(0, 180) });
+  console.info("[telegram]", { event: "mtproto_error", code: "invalid" });
   return new TelegramError("invalid", "Telegram didn’t accept that. Try again.", 400);
 }
