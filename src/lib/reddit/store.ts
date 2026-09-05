@@ -7,6 +7,9 @@ type AppRow = {
   client_secret: string;
   user_agent_name: string;
   redirect_uri: string;
+  app_label: string | null;
+  app_id: string | null;
+  terms_at: string | Date | null;
 };
 
 type AccountRow = {
@@ -78,8 +81,7 @@ export function toPublicAccount(row: AccountRow): RedditAccountPublic {
 export async function getApp(userId: string) {
   const sql = await getSql();
   const rows = await sql<AppRow>`
-    select user_id, client_id, client_secret, user_agent_name, redirect_uri
-    from reddit_apps where user_id = ${userId} limit 1
+    select * from reddit_apps where user_id = ${userId} limit 1
   `;
   return rows[0] ?? null;
 }
@@ -93,6 +95,8 @@ export function toPublicApp(
     configured: true,
     clientId: app.client_id,
     userAgentName: app.user_agent_name,
+    appLabel: app.app_label ?? undefined,
+    appId: app.app_id ?? undefined,
     redirectUri: app.redirect_uri || redirectUri,
   };
 }
@@ -103,16 +107,29 @@ export async function upsertApp(opts: {
   clientSecret: string;
   userAgentName: string;
   redirectUri: string;
+  appLabel: string;
+  appId: string;
+  termsAt?: Date | null;
 }) {
   const sql = await getSql();
+  const terms = (opts.termsAt ?? new Date()).toISOString();
   await sql`
-    insert into reddit_apps (user_id, client_id, client_secret, user_agent_name, redirect_uri, updated_at)
-    values (${opts.userId}, ${opts.clientId}, ${opts.clientSecret}, ${opts.userAgentName}, ${opts.redirectUri}, now())
+    insert into reddit_apps (
+      user_id, client_id, client_secret, user_agent_name, redirect_uri,
+      app_label, app_id, terms_at, updated_at
+    )
+    values (
+      ${opts.userId}, ${opts.clientId}, ${opts.clientSecret}, ${opts.userAgentName},
+      ${opts.redirectUri}, ${opts.appLabel}, ${opts.appId}, ${terms}, now()
+    )
     on conflict (user_id) do update set
       client_id = excluded.client_id,
       client_secret = excluded.client_secret,
       user_agent_name = excluded.user_agent_name,
       redirect_uri = excluded.redirect_uri,
+      app_label = excluded.app_label,
+      app_id = excluded.app_id,
+      terms_at = excluded.terms_at,
       updated_at = now()
   `;
 }

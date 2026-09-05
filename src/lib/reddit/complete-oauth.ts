@@ -1,7 +1,7 @@
 import { fetchMe, iconFromMe } from "./client";
 import { buildHealthReport, probePublicProfile } from "./health";
 import { exchangeCode } from "./oauth";
-import { userAgentFor } from "./types";
+import { userAgentFor } from "./naming";
 import {
   getApp,
   getAccountByRedditId,
@@ -16,7 +16,7 @@ export async function completeRedditOAuth(opts: {
 }) {
   const app = await getApp(opts.userId);
   if (!app) throw new Error("Reddit app is not configured.");
-  const ua = userAgentFor(app.user_agent_name);
+  const ua = userAgentFor(app.user_agent_name, app.app_id || "desk.mail");
   const tokens = await exchangeCode({
     clientId: app.client_id,
     clientSecret: app.client_secret,

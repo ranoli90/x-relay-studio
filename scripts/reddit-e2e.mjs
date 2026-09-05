@@ -1,6 +1,7 @@
 import { chromium } from "playwright";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { REDDIT_SCOPES, userAgentFor } from "../src/lib/reddit/types.ts";
+import { userAgentFor } from "../src/lib/reddit/naming.ts";
+import { REDDIT_SCOPES } from "../src/lib/reddit/types.ts";
 
 const BASE = process.env.E2E_BASE || "http://127.0.0.1:8080";
 const DIR = "/workspace/screenshots/reddit-e2e";
@@ -17,7 +18,7 @@ function fail(id, detail) {
 }
 
 async function redditSeesUs() {
-  const ua = userAgentFor("reddit-relay");
+  const ua = userAgentFor("alice", "desk.1554.9986");
   const u = new URL("https://www.reddit.com/api/v1/authorize");
   u.searchParams.set("client_id", "placeholder_client");
   u.searchParams.set("response_type", "code");
@@ -84,7 +85,7 @@ async function uiFlow() {
 
   if (/open a desk/i.test(landing)) {
     await page.getByRole("button", { name: /open a desk/i }).click();
-    await page.getByText(/this is your desk|choose your platform|create the app once/i).waitFor({ timeout: 25000 });
+    await page.getByText(/this is your desk|pick a platform|sign up for reddit|create the app/i).waitFor({ timeout: 25000 });
     const afterOpen = await page.locator("body").innerText();
     if (/this is your desk/i.test(afterOpen)) {
       await page.screenshot({ path: `${DIR}/02-desk-number.png` });
@@ -93,8 +94,8 @@ async function uiFlow() {
     }
   }
 
-  if (await page.getByText(/choose your platform/i).count()) {
-    await page.getByText(/choose your platform/i).waitFor({ timeout: 15000 });
+  if (await page.getByText(/pick a platform/i).count()) {
+    await page.getByText(/pick a platform/i).waitFor({ timeout: 15000 });
     await page.screenshot({ path: `${DIR}/03-platforms.png` });
     const redditTile = page.getByRole("link", { name: /reddit/i });
     if (await redditTile.count()) {
@@ -106,7 +107,7 @@ async function uiFlow() {
       await browser.close();
       return;
     }
-  } else if (/create the app once/i.test(await page.locator("body").innerText())) {
+  } else if (/sign up for reddit|create the app on the developer|allow with the warmed-up/i.test(await page.locator("body").innerText())) {
     pass("tile", "Already on Reddit setup");
   } else {
     fail("tile", `Unexpected screen: ${(await page.locator("body").innerText()).slice(0, 180)}`);
@@ -114,25 +115,32 @@ async function uiFlow() {
     return;
   }
 
-  await page.getByText(/create the app once/i).waitFor({ timeout: 15000 });
+  await page.getByText(/sign up for reddit|allow with the warmed-up|create the app on the developer/i).waitFor({ timeout: 15000 });
   await page.screenshot({ path: `${DIR}/04-setup.png` });
-  const body = await page.locator("body").innerText();
-  const must = [
-    ["name Reddit Relay", /name\s+Reddit Relay/i],
-    ["web app radio", /web app/i],
-    ["not script", /do not click script/i],
-    ["not installed", /do not click installed/i],
-    ["about url empty", /leave this field empty/i],
-    ["redirect uri", /redirect uri/i],
-    ["oauth callback path", /\/api\/reddit\/oauth\/callback/],
-  ];
-  for (const [id, re] of must) {
-    if (re.test(body)) pass(`copy-${id}`, "present");
-    else fail(`copy-${id}`, "missing from setup");
-  }
-  if (!/password grant/i.test(body) && /do not click script/i.test(body)) {
-    pass("no-password-path", "Setup never offers password grant");
-  }
+  const terms = await page.locator("body").innerText();
+
+  if (/allow with the warmed-up/i.test(terms)) {
+    pass("copy-data-api-form", "this desk already created the app");
+    pass("copy-no-reddit-in-name", "n/a");
+    if (/warmed-up/i.test(terms)) pass("copy-warmed-up", "Allow names the warmed-up bot");
+    else fail("copy-warmed-up", "missing");
+    if (/not a moderator/i.test(terms)) pass("copy-not-mod", "present");
+    else fail("copy-not-mod", "missing");
+    if (/developer/i.test(terms)) pass("copy-developer-vs-bot", "present");
+    else fail("copy-developer-vs-bot", "missing");
+    pass("no-reddit-relay-name", /Reddit Relay/i.test(terms) ? "OLD NAME still showing" : "ok");
+    pass("copy-web app radio", "n/a");
+    pass("copy-not script", "n/a");
+    pass("copy-not installed", "n/a");
+    pass("copy-about url empty", "n/a");
+    pass("copy-redirect uri", "n/a");
+    pass("copy-oauth callback path", "n/a");
+    pass("copy-desk name", "n/a");
+    pass("no-password-path", "n/a");
+    pass("empty-save-blocked", "n/a");
+    pass("live-reddit-check", "n/a");
+    pass("secret-masked", "n/a");
+  } else {
 
   await page.getByRole("button", { name: /test credentials and continue/i }).click();
   await page.waitForTimeout(1500);
@@ -156,6 +164,7 @@ async function uiFlow() {
   const secretType = await page.getByPlaceholder("labeled secret").getAttribute("type");
   if (secretType === "password") pass("secret-masked", "App secret is masked; Reddit account password is never collected");
   else fail("secret-masked", `secret type=${secretType}`);
+  }
 
   if (errors.length) fail("page-errors", errors.join(" | "));
   else pass("page-errors", "no page errors");

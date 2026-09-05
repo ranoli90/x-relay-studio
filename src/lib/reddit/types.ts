@@ -1,13 +1,5 @@
 export const REDDIT_SCOPES = ["identity", "read", "privatemessages"].join(" ");
 
-export const APP_VERSION = "v1.0.0";
-export const APP_ID = "reddit-relay";
-
-export function userAgentFor(redditUsername: string) {
-  const handle = redditUsername.replace(/^u\//, "").trim() || "unknown";
-  return `web:${APP_ID}:${APP_VERSION} (by /u/${handle})`;
-}
-
 export type HealthStatus = "pass" | "fail" | "warn" | "unknown";
 export type HealthSeverity = "hard" | "soft" | "info";
 
@@ -31,6 +23,8 @@ export type RedditAppPublic = {
   configured: boolean;
   clientId?: string;
   userAgentName?: string;
+  appLabel?: string;
+  appId?: string;
   redirectUri: string;
 };
 

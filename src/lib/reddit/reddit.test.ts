@@ -3,7 +3,30 @@ import { describe, it } from "node:test";
 import { escapeHtml, decodeAmp } from "./html.ts";
 import { isPlausibleOrigin, redirectUriFromOrigin } from "./origin.ts";
 import { asMessage, redditPermalink } from "./parse.ts";
+import {
+  appIdForDesk,
+  appNameForDesk,
+  apiSignupBlurb,
+  assertSafeAppName,
+  userAgentFor,
+} from "./naming.ts";
 import { REDDIT_SCOPES } from "./types.ts";
+
+describe("app naming", () => {
+  it("is unique per desk and never includes reddit", () => {
+    const a = appNameForDesk("1554477288539986");
+    const b = appNameForDesk("9999000011112222");
+    assert.notEqual(a, b);
+    assert.equal(/\breddit\b/i.test(a), false);
+    assert.equal(/\breddit\b/i.test(appIdForDesk("1554477288539986")), false);
+    assert.throws(() => assertSafeAppName("Reddit Relay"));
+    const ua = userAgentFor("alice", appIdForDesk("1554477288539986"));
+    assert.match(ua, /^web:desk\.1554\.9986:v1\.0\.0 \(by \/u\/alice\)$/);
+    assert.equal(/\breddit\b/i.test(ua), false);
+    assert.match(apiSignupBlurb("1554477288539986"), /warmed-up/);
+    assert.match(apiSignupBlurb("1554477288539986"), /not a moderator/i);
+  });
+});
 
 describe("oauth safety", () => {
   it("does not request write scopes", () => {

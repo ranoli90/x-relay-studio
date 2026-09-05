@@ -30,10 +30,33 @@ import {
   toPublicApp,
   upsertApp,
 } from "./store";
-import { userAgentFor } from "./types";
+import { getSql } from "@/lib/db";
+import { appIdForDesk, appNameForDesk, appDescriptionForDesk, apiSignupBlurb, assertSafeAppName, userAgentFor } from "./naming";
+
+function ua(app: { user_agent_name: string; app_id: string | null }, accountName?: string) {
+  return userAgentFor(accountName || app.user_agent_name, app.app_id || "desk.mail");
+}
 
 function cleanUsername(raw: string) {
   return raw.replace(/^u\//i, "").trim();
+}
+
+async function identityForUser(userId: string) {
+  const sql = await getSql();
+  const rows = await sql<{ desk_number: string }>`
+    select desk_number from desks where user_id = ${userId} limit 1
+  `;
+  const deskNumber = rows[0]?.desk_number;
+  if (!deskNumber) throw new Error("Open a desk before connecting Reddit.");
+  const appLabel = assertSafeAppName(appNameForDesk(deskNumber));
+  const appId = appIdForDesk(deskNumber);
+  return {
+    deskNumber,
+    appLabel,
+    appId,
+    description: appDescriptionForDesk(deskNumber),
+    signupBlurb: apiSignupBlurb(deskNumber),
+  };
 }
 
 export const getBootstrap = createServerFn({ method: "GET" })
@@ -51,8 +74,17 @@ export const getBootstrap = createServerFn({ method: "GET" })
 
 export const saveRedditApp = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { clientId: string; clientSecret: string; userAgentName: string; origin: string }) => d)
+  .validator((d: {
+    clientId: string;
+    clientSecret: string;
+    userAgentName: string;
+    origin: string;
+    acceptedTerms: boolean;
+  }) => d)
   .handler(async ({ context, data }) => {
+    if (!data.acceptedTerms) {
+      throw new Error("Read the Data API terms and submit Reddit’s request form first.");
+    }
     const clientId = data.clientId.trim();
     const clientSecret = data.clientSecret.trim();
     const userAgentName = cleanUsername(data.userAgentName);
@@ -65,8 +97,9 @@ export const saveRedditApp = createServerFn({ method: "POST" })
     if (!isPlausibleOrigin(data.origin)) {
       throw new Error("Could not read this page’s address for the redirect uri.");
     }
+    const id = await identityForUser(context.userId);
     const redirectUri = redirectUriFromOrigin(data.origin);
-    const ua = userAgentFor(userAgentName);
+    const ua = userAgentFor(userAgentName, id.appId);
     try {
       await clientCredentials({ clientId, clientSecret, userAgent: ua });
     } catch (err) {
@@ -75,7 +108,7 @@ export const saveRedditApp = createServerFn({ method: "POST" })
           throw new Error("Reddit rejected those credentials. Check client id and secret. Client id is the string under the app name, not the word “personal use script”.");
         }
         if (err.status === 403) {
-          throw new Error("Reddit blocked this app. Do not create a second app for the same use. Request access via Reddit’s developer form if this keeps happening.");
+          throw new Error("Reddit blocked this app. Do not create a second app. Finish the Data API request at reddithelp, then wait for approval.");
         }
         throw new Error(`Reddit said ${err.message}`);
       }
@@ -87,18 +120,23 @@ export const saveRedditApp = createServerFn({ method: "POST" })
       clientSecret,
       userAgentName,
       redirectUri,
+      appLabel: id.appLabel,
+      appId: id.appId,
+      termsAt: new Date(),
     });
-    return { ok: true as const, redirectUri, clientId };
+    return { ok: true as const, redirectUri, clientId, appLabel: id.appLabel };
   });
 
-export const getRedirectUri = createServerFn({ method: "POST" })
+export const getSetupCopy = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((d: { origin: string }) => d)
-  .handler(async ({ data }) => {
-    if (!isPlausibleOrigin(data.origin)) {
-      throw new Error("Bad origin");
-    }
-    return { redirectUri: redirectUriFromOrigin(data.origin) };
+  .handler(async ({ context, data }) => {
+    if (!isPlausibleOrigin(data.origin)) throw new Error("Bad origin");
+    const id = await identityForUser(context.userId);
+    return {
+      ...id,
+      redirectUri: redirectUriFromOrigin(data.origin),
+    };
   });
 
 export const startRedditOAuth = createServerFn({ method: "POST" })
@@ -120,6 +158,8 @@ export const startRedditOAuth = createServerFn({ method: "POST" })
         clientSecret: app.client_secret,
         userAgentName: app.user_agent_name,
         redirectUri,
+        appLabel: app.app_label || appIdForDesk("1000000000000001"),
+        appId: app.app_id || "desk.mail",
       });
     }
     await purgeExpiredTickets();
@@ -150,6 +190,7 @@ async function liveToken(userId: string, accountId: string) {
     clientId: app.client_id,
     clientSecret: app.client_secret,
     userAgentName: app.user_agent_name,
+    appId: app.app_id || "desk.mail",
     refreshToken: account.refresh_token,
     accessToken: account.access_token,
     accessExpiresAt: expiresAtToDate(account.access_expires_at),
@@ -166,7 +207,7 @@ async function liveToken(userId: string, accountId: string) {
     app,
     account,
     accessToken: token.accessToken,
-    userAgent: userAgentFor(account.name || app.user_agent_name),
+    userAgent: ua(app, account.name),
   };
 }
 
@@ -266,7 +307,7 @@ export const disconnectAccount = createServerFn({ method: "POST" })
         await revokeToken({
           clientId: app.client_id,
           clientSecret: app.client_secret,
-          userAgent: userAgentFor(app.user_agent_name),
+          userAgent: ua(app),
           token: removed.refresh_token,
         });
       } catch {

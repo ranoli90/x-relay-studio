@@ -71,7 +71,7 @@ export function HealthConfirm({
       <AppHeader />
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">
-        Step 3 of 3 · Health
+        Step 4 of 4 · Health
       </p>
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">
         Last screen. We will not open the inbox until this is honest.

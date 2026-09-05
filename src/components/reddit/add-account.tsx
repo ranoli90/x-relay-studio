@@ -52,22 +52,23 @@ export function AddAccount({
       {additional ? null : <AppHeader />}
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">
-        {additional ? "Add account" : "Step 2 of 3 · Allow"}
+        {additional ? "Add account" : "Step 3 of 4 · Allow"}
       </p>
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">
         {additional
           ? "Add another Reddit account the same way."
-          : "Sign in the Reddit account you’ll use here."}
+          : "Allow with the warmed-up bot. Not the developer."}
       </h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        Reddit confirms. We never see your password. A popup opens Reddit’s
-        Allow screen. Use the account you want in the inbox — you can add a
-        second, third, and fourth the same way after this.
+        {additional
+          ? "Allow with the next warmed-up account. Not the developer account that owns the app."
+          : "A popup opens Reddit’s Allow screen. Sign in the warmed-up bot account — not the developer account you used for the Data API form and prefs/apps."}
       </p>
       <ul className="mt-6 space-y-2 text-sm text-muted">
-        <li>Permissions: identity, inbox, and read only.</li>
-        <li>Not requested: post, comment, vote, or send mail in bulk.</li>
-        <li>Revoke anytime at reddit.com/prefs/apps → authorized applications.</li>
+        <li>Bot account ≠ developer account.</li>
+        <li>Use the warmed-up account you will actually post from later.</li>
+        <li>Regular public subreddits only. You are not a moderator here.</li>
+        <li>Permissions: identity, inbox, and read only. No post, vote, or send.</li>
       </ul>
       {error ? (
         <p className="mt-4 text-sm leading-relaxed text-bad">{error}</p>

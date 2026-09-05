@@ -1,6 +1,6 @@
 import { decodeAmp } from "./html";
+import { userAgentFor } from "./naming";
 import { refreshAccessToken } from "./oauth";
-import { userAgentFor } from "./types";
 
 export type RedditMe = {
   id: string;
@@ -88,11 +88,12 @@ export async function ensureAccessToken(opts: {
   clientId: string;
   clientSecret: string;
   userAgentName: string;
+  appId: string;
   refreshToken: string;
   accessToken: string | null;
   accessExpiresAt: Date | null;
 }): Promise<{ accessToken: string; expiresAt: Date; refreshed: boolean }> {
-  const ua = userAgentFor(opts.userAgentName);
+  const ua = userAgentFor(opts.userAgentName, opts.appId);
   const skewMs = 5 * 60 * 1000;
   if (
     opts.accessToken &&
