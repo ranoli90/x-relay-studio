@@ -1,10 +1,4 @@
-export const REDDIT_SCOPES = [
-  "identity",
-  "read",
-  "history",
-  "mysubreddits",
-  "privatemessages",
-].join(" ");
+export const REDDIT_SCOPES = ["identity", "read", "privatemessages"].join(" ");
 
 export const APP_VERSION = "v1.0.0";
 export const APP_ID = "reddit-relay";

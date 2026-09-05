@@ -86,6 +86,12 @@ export function SetupApp({ onSaved }: { onSaved: () => void }) {
             label="description"
             value="Sign in the Reddit account you’ll use in Reddit Relay. Inbox and health only. Not an official Reddit client."
           />
+          <p className="rounded-md border border-line bg-lift p-4 text-xs leading-relaxed text-muted">
+            <span className="font-mono text-[11px] tracking-[0.14em] text-muted uppercase">
+              about url
+            </span>
+            <span className="mt-2 block">Leave this field empty on Reddit. Do not paste a site.</span>
+          </p>
           <CopyRow
             label="redirect uri"
             value={redirectUri || "Loading this page’s address…"}

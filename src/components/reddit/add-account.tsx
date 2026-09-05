@@ -15,6 +15,7 @@ export function AddAccount({
 
   useEffect(() => {
     function onMsg(ev: MessageEvent) {
+      if (ev.origin !== window.location.origin) return;
       const data = ev.data as { type?: string; ok?: boolean; error?: string };
       if (data?.type !== "reddit-oauth") return;
       if (data.ok) onConnected();

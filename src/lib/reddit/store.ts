@@ -32,6 +32,14 @@ type AccountRow = {
   onboarded_at: string | Date | null;
 };
 
+type TicketRow = {
+  ticket: string;
+  user_id: string;
+  state: string;
+  redirect_uri: string;
+  expires_at: string | Date;
+};
+
 function parseHealth(raw: string | null): HealthReport | null {
   if (!raw) return null;
   try {
@@ -117,6 +125,14 @@ export async function listAccounts(userId: string) {
     order by created_at asc
   `;
   return rows;
+}
+
+export async function countAccounts(userId: string) {
+  const sql = await getSql();
+  const rows = await sql<{ n: number }>`
+    select count(*)::int as n from reddit_accounts where user_id = ${userId}
+  `;
+  return Number(rows[0]?.n ?? 0);
 }
 
 export async function getAccount(userId: string, accountId: string) {
@@ -299,36 +315,30 @@ export async function insertTicket(opts: {
   `;
 }
 
-export async function takeTicket(ticket: string) {
+export async function getTicket(ticket: string) {
   const sql = await getSql();
-  const rows = await sql<{
-    ticket: string;
-    user_id: string;
-    state: string;
-    redirect_uri: string;
-    expires_at: string | Date;
-  }>`
-    delete from reddit_oauth_tickets
+  const rows = await sql<TicketRow>`
+    select ticket, user_id, state, redirect_uri, expires_at
+    from reddit_oauth_tickets
     where ticket = ${ticket}
-    returning ticket, user_id, state, redirect_uri, expires_at
+    limit 1
   `;
   return rows[0] ?? null;
 }
 
 export async function takeTicketByState(state: string) {
   const sql = await getSql();
-  const rows = await sql<{
-    ticket: string;
-    user_id: string;
-    state: string;
-    redirect_uri: string;
-    expires_at: string | Date;
-  }>`
+  const rows = await sql<TicketRow>`
     delete from reddit_oauth_tickets
     where state = ${state}
     returning ticket, user_id, state, redirect_uri, expires_at
   `;
   return rows[0] ?? null;
+}
+
+export async function purgeExpiredTickets() {
+  const sql = await getSql();
+  await sql`delete from reddit_oauth_tickets where expires_at < now()`;
 }
 
 export function expiresAtToDate(v: string | Date | null | undefined) {

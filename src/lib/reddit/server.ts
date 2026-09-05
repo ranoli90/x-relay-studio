@@ -15,12 +15,15 @@ import {
 } from "./client";
 import { callbackPath, isPlausibleOrigin, redirectUriFromOrigin } from "./origin";
 import {
+  countAccounts,
   deleteAccount,
   expiresAtToDate,
   getAccount,
   getApp,
+  insertTicket,
   listAccounts,
   markOnboarded,
+  purgeExpiredTickets,
   saveHealth,
   saveTokens,
   toPublicAccount,
@@ -105,6 +108,10 @@ export const startRedditOAuth = createServerFn({ method: "POST" })
     const app = await getApp(context.userId);
     if (!app) throw new Error("Save the Reddit app credentials first.");
     if (!isPlausibleOrigin(data.origin)) throw new Error("Bad origin");
+    const n = await countAccounts(context.userId);
+    if (n >= 8) {
+      throw new Error("Eight Reddit accounts is the cap on one desk. Disconnect one first.");
+    }
     const redirectUri = redirectUriFromOrigin(data.origin);
     if (app.redirect_uri !== redirectUri) {
       await upsertApp({
@@ -115,7 +122,7 @@ export const startRedditOAuth = createServerFn({ method: "POST" })
         redirectUri,
       });
     }
-    const { insertTicket } = await import("./store");
+    await purgeExpiredTickets();
     const { authorizeUrl } = await import("./oauth");
     const ticket = crypto.randomUUID();
     const state = crypto.randomUUID();
@@ -159,7 +166,7 @@ async function liveToken(userId: string, accountId: string) {
     app,
     account,
     accessToken: token.accessToken,
-    userAgent: userAgentFor(app.user_agent_name),
+    userAgent: userAgentFor(account.name || app.user_agent_name),
   };
 }
 

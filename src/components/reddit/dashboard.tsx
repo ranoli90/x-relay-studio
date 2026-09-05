@@ -1,10 +1,10 @@
 import { Link } from "@tanstack/react-router";
 import { formatDistanceToNowStrict } from "date-fns";
 import { Plus, Shield } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { UserButton } from "@/lib/auth/gates";
 import type { RedditAccountPublic } from "@/lib/reddit/types";
-import { disconnectAccount } from "@/lib/reddit/server";
+import { disconnectAccount, runHealthCheck } from "@/lib/reddit/server";
 import { Button } from "@/components/ui/button";
 import { AddAccount } from "./add-account";
 import { InboxView } from "./inbox-view";
@@ -20,7 +20,12 @@ export function Dashboard({
   const ready = accounts.filter((a) => a.onboardedAt);
   const [activeId, setActiveId] = useState(ready[0]?.id ?? "");
   const [adding, setAdding] = useState(false);
+  const [unread, setUnread] = useState(0);
+  const [confirmCut, setConfirmCut] = useState(false);
+  const [healthOpen, setHealthOpen] = useState(false);
+  const [healthBusy, setHealthBusy] = useState(false);
   const account = ready.find((a) => a.id === activeId) ?? ready[0] ?? null;
+  const onUnread = useCallback((n: number) => setUnread(n), []);
 
   const age = useMemo(() => {
     if (!account?.createdUtc) return "—";
@@ -69,12 +74,7 @@ export function Dashboard({
             <p className="font-mono text-[11px] tracking-[0.16em] text-muted uppercase">
               Accounts
             </p>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => setAdding(true)}
-            >
+            <Button type="button" variant="ghost" size="sm" onClick={() => setAdding(true)}>
               <Plus className="size-4" />
               Add
             </Button>
@@ -84,7 +84,11 @@ export function Dashboard({
               <li key={a.id}>
                 <button
                   type="button"
-                  onClick={() => setActiveId(a.id)}
+                  onClick={() => {
+                    setActiveId(a.id);
+                    setConfirmCut(false);
+                    setHealthOpen(false);
+                  }}
                   className={cn(
                     "flex w-full items-center gap-3 px-4 py-3 text-left",
                     a.id === account.id ? "bg-lift" : "hover:bg-lift/50",
@@ -97,12 +101,7 @@ export function Dashboard({
                       {a.healthOk ? "clear" : "watch"}
                     </span>
                   </span>
-                  <span
-                    className={cn(
-                      "size-1.5 rounded-full",
-                      a.healthOk ? "bg-ok" : "bg-warn",
-                    )}
-                  />
+                  <span className={cn("size-1.5 rounded-full", a.healthOk ? "bg-ok" : "bg-warn")} />
                 </button>
               </li>
             ))}
@@ -110,35 +109,80 @@ export function Dashboard({
         </aside>
 
         <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <section className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-4">
+          <section className="grid grid-cols-2 gap-px border-b border-line bg-line sm:grid-cols-5">
             <Stat label="Post karma" value={fmt(account.linkKarma)} />
             <Stat label="Comment karma" value={fmt(account.commentKarma)} />
             <Stat label="Age" value={age} />
+            <Stat label="Unread" value={String(unread)} />
             <Stat
               label="Standing"
               value={account.healthOk ? "Clear" : "Watch"}
               tone={account.healthOk ? "ok" : "warn"}
             />
           </section>
-          <div className="flex items-center justify-between gap-3 border-b border-line px-4 py-2">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-2">
             <p className="flex items-center gap-2 text-xs text-muted">
               <Shield className="size-3.5" />
-              Read-only inbox. Classic messages, comment replies, mentions.
-              Reddit Chat is not in this API.
+              Read-only. Classic inbox only — Reddit Chat is not in this API.
             </p>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                if (!confirm(`Disconnect u/${account.name}? We revoke the token.`)) return;
-                void disconnectAccount({ data: { accountId: account.id } }).then(onChanged);
-              }}
-            >
-              Disconnect
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={() => setHealthOpen((v) => !v)}>
+                Health
+              </Button>
+              {confirmCut ? (
+                <>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => {
+                      void disconnectAccount({ data: { accountId: account.id } }).then(onChanged);
+                    }}
+                  >
+                    Revoke u/{account.name}
+                  </Button>
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmCut(false)}>
+                    Keep
+                  </Button>
+                </>
+              ) : (
+                <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmCut(true)}>
+                  Disconnect
+                </Button>
+              )}
+            </div>
           </div>
-          <InboxView accountId={account.id} />
+          {healthOpen ? (
+            <div className="border-b border-line px-4 py-3">
+              <div className="mb-3 flex items-center justify-between">
+                <p className="font-mono text-[11px] uppercase tracking-widest text-subtle">Last health</p>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  disabled={healthBusy}
+                  onClick={() => {
+                    setHealthBusy(true);
+                    void runHealthCheck({ data: { accountId: account.id } })
+                      .then(() => onChanged())
+                      .finally(() => setHealthBusy(false));
+                  }}
+                >
+                  {healthBusy ? "Checking…" : "Re-run"}
+                </Button>
+              </div>
+              <ul className="space-y-2">
+                {(account.health?.checks ?? []).map((c) => (
+                  <li key={c.id} className="text-xs leading-relaxed">
+                    <span className="font-medium">{c.label}</span>
+                    <span className="mx-2 font-mono uppercase text-subtle">{c.status}</span>
+                    <span className="text-muted">{c.detail}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <InboxView accountId={account.id} onUnread={onUnread} />
         </main>
       </div>
     </div>
@@ -149,13 +193,8 @@ function Topbar() {
   return (
     <header className="flex items-center justify-between border-b border-line px-4 py-3">
       <div>
-        <p className="font-mono text-[11px] tracking-[0.2em] text-muted uppercase">
-          Reddit
-        </p>
-        <Link
-          to="/"
-          className="text-xs text-subtle hover:text-fg"
-        >
+        <p className="font-mono text-[11px] tracking-[0.2em] text-muted uppercase">Reddit</p>
+        <Link to="/" className="text-xs text-subtle hover:text-fg">
           All platforms
         </Link>
       </div>
@@ -175,9 +214,7 @@ function Stat({
 }) {
   return (
     <div className="bg-bg px-4 py-3">
-      <p className="font-mono text-[10px] tracking-[0.16em] text-subtle uppercase">
-        {label}
-      </p>
+      <p className="font-mono text-[10px] tracking-[0.16em] text-subtle uppercase">{label}</p>
       <p
         className={cn(
           "mt-1 font-mono text-lg tabular-nums",

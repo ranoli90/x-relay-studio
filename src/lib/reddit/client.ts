@@ -1,3 +1,4 @@
+import { decodeAmp } from "./html";
 import { refreshAccessToken } from "./oauth";
 import { userAgentFor } from "./types";
 
@@ -79,7 +80,7 @@ export async function fetchMe(accessToken: string, userAgent: string) {
 }
 
 export function iconFromMe(me: RedditMe) {
-  const raw = me.snoovatar_img || me.icon_img || "";
+  const raw = decodeAmp(me.snoovatar_img || me.icon_img || "");
   return raw.split("?")[0] || null;
 }
 
