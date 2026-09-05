@@ -20,17 +20,17 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
           Desk {formatDeskNumber(deskNumber)}. Pick a platform.
         </h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
-          That number is the only login we keep. Desk is chats plus operator in one window.
-          Connect Telegram from inside the desk. X and Reddit stay their own accounts.
+          That number is the only login we keep. Telegram is the live inbox — real chats,
+          drafts, send. X and Reddit stay their own accounts.
         </p>
 
         <div className="mt-8 grid grid-cols-1 gap-3 min-[520px]:grid-cols-2">
           <PlatformCard
-            to="/desk"
-            label="Desk"
-            kicker="Telegram + operator"
-            description="Chats, drafts, catalog, payments, approve or hold. Same window. Connect your Telegram account from the top bar."
-            icon={<DeskTile />}
+            to="/telegram"
+            label="Telegram"
+            kicker="Live inbox"
+            description="Your real chats. Drafts sit here until you approve. Catalog and rails live in Settings."
+            icon={<TelegramTile />}
           />
           <PlatformCard
             to="/x"
@@ -43,7 +43,7 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
             to="/reddit"
             label="Reddit"
             kicker="Connect"
-            description="Create the Reddit app, Allow, health, then inbox. Sugar qualify lives on the desk."
+            description="Create the Reddit app, Allow, health, then inbox."
             icon={<RedditTile />}
             accent
           />
@@ -61,7 +61,7 @@ function PlatformCard({
   icon,
   accent,
 }: {
-  to: "/x" | "/telegram" | "/reddit" | "/desk";
+  to: "/x" | "/telegram" | "/reddit";
   label: string;
   kicker: string;
   description: string;
@@ -89,12 +89,11 @@ function PlatformCard({
   );
 }
 
-function DeskTile() {
+function TelegramTile() {
   return (
-    <span className="grid size-16 place-items-center rounded-lg bg-fg text-bg" aria-hidden="true">
-      <svg viewBox="0 0 24 24" className="size-7" fill="none" stroke="currentColor" strokeWidth="1.7">
-        <rect x="3" y="5" width="18" height="14" rx="2" />
-        <path d="M3 10h18M8 14h4" strokeLinecap="round" />
+    <span className="grid size-16 place-items-center rounded-lg bg-[#229ED9] text-white" aria-hidden="true">
+      <svg viewBox="0 0 24 24" className="size-8" fill="currentColor">
+        <path d="M21.5 4.2 18.6 20c-.2.9-.8 1.1-1.6.7l-4.4-3.2-2.1 2c-.2.2-.5.5-1 .5l.3-4.5 8.2-7.4c.4-.3 0-.5-.5-.2l-10.1 6.4-4.4-1.4c-.9-.3-.9-.9.2-1.3L20.2 3.4c.8-.3 1.5.2 1.3.8Z" />
       </svg>
     </span>
   );
