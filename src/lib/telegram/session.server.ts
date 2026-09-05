@@ -23,6 +23,8 @@ export type UserSessionRow = {
   automation_armed: boolean;
   checks_json: string | null;
   onboarded_at: string | Date | null;
+  flood_until?: string | Date | null;
+  auth_dead?: boolean;
 };
 
 function iso(value: string | Date | null | undefined): string | null {
@@ -43,7 +45,7 @@ export function deriveUserStep(row: UserSessionRow | null): TelegramOnboardingSt
 export function toWatch(row: UserSessionRow | null, pendingForAi = 0): TelegramWatch | null {
   if (!row) return null;
   return {
-    watching: Boolean(row.watching) && Boolean(row.session_enc),
+    watching: Boolean(row.watching) && Boolean(row.session_enc) && !row.auth_dead,
     lastSyncAt: iso(row.last_sync_at),
     lastError: row.last_error,
     chatsWatched: Number(row.chats_watched) || 0,
@@ -53,21 +55,112 @@ export function toWatch(row: UserSessionRow | null, pendingForAi = 0): TelegramW
     automationArmed: Boolean(row.automation_armed),
     phoneHint: maskPhone(row.phone),
     needsPassword: Boolean(row.needs_password),
-    hasSession: Boolean(row.session_enc) && !row.phone_code_hash_enc && !row.needs_password,
+    hasSession: Boolean(row.session_enc) && !row.phone_code_hash_enc && !row.needs_password && !row.auth_dead,
+    floodUntil: iso(row.flood_until ?? null),
+    authDead: Boolean(row.auth_dead),
   };
 }
 
-export async function getUserSession(userId: string): Promise<UserSessionRow | null> {
-  const sql = await getSql();
-  const rows = await sql.query<UserSessionRow>(
-    `select user_id, api_id, api_hash_enc, phone, phone_code_hash_enc, session_enc,
+const SESSION_COLS = `user_id, api_id, api_hash_enc, phone, phone_code_hash_enc, session_enc,
             needs_password, watching, last_sync_at, last_error, chats_watched,
             messages_ingested, openrouter_key_enc, openrouter_ok_at, automation_armed,
-            checks_json, onboarded_at
-       from telegram_user_sessions where user_id = $1`,
-    [userId],
-  );
-  return rows[0] ?? null;
+            checks_json, onboarded_at, flood_until, auth_dead`;
+
+export async function getUserSession(userId: string): Promise<UserSessionRow | null> {
+  const sql = await getSql();
+  try {
+    const rows = await sql.query<UserSessionRow>(
+      `select ${SESSION_COLS} from telegram_user_sessions where user_id = $1`,
+      [userId],
+    );
+    return rows[0] ?? null;
+  } catch {
+    const rows = await sql.query<UserSessionRow>(
+      `select user_id, api_id, api_hash_enc, phone, phone_code_hash_enc, session_enc,
+              needs_password, watching, last_sync_at, last_error, chats_watched,
+              messages_ingested, openrouter_key_enc, openrouter_ok_at, automation_armed,
+              checks_json, onboarded_at
+         from telegram_user_sessions where user_id = $1`,
+      [userId],
+    );
+    return rows[0] ?? null;
+  }
+}
+
+export function floodSecondsRemaining(row: UserSessionRow | null): number {
+  if (!row?.flood_until) return 0;
+  const until = new Date(iso(row.flood_until) ?? 0).getTime();
+  const left = Math.ceil((until - Date.now()) / 1000);
+  return left > 0 ? left : 0;
+}
+
+export function assertSessionLive(row: UserSessionRow | null): UserSessionRow {
+  if (!row) throw new TelegramError("invalid", "Connect Telegram first.", 404);
+  if (row.auth_dead) {
+    throw new TelegramError("auth_dead", "Telegram signed this desk out. Connect again.", 401);
+  }
+  const wait = floodSecondsRemaining(row);
+  if (wait > 0) {
+    throw new TelegramError(
+      "flood",
+      `Telegram asked us to wait ${wait} second${wait === 1 ? "" : "s"}.`,
+      429,
+      wait,
+    );
+  }
+  return row;
+}
+
+export async function markFlood(userId: string, seconds: number, disableWatch = false): Promise<void> {
+  const wait = Math.max(1, Math.min(Math.floor(seconds), 86_400));
+  const sql = await getSql();
+  try {
+    await sql.query(
+      `update telegram_user_sessions
+          set flood_until = greatest(coalesce(flood_until, now()), now() + ($2 || ' seconds')::interval),
+              watching = case when $3 then false else watching end,
+              last_error = $4,
+              updated_at = now()
+        where user_id = $1`,
+      [userId, String(wait), disableWatch || wait >= 300, `Telegram asked us to wait ${wait} seconds.`],
+    );
+  } catch {
+    /* column may not exist yet */
+  }
+}
+
+export async function markAuthDead(userId: string, message: string): Promise<void> {
+  const sql = await getSql();
+  try {
+    await sql.query(
+      `update telegram_user_sessions
+          set auth_dead = true, watching = false, last_error = $2, updated_at = now()
+        where user_id = $1`,
+      [userId, message.slice(0, 180)],
+    );
+  } catch {
+    await sql.query(
+      `update telegram_user_sessions
+          set watching = false, last_error = $2, updated_at = now()
+        where user_id = $1`,
+      [userId, message.slice(0, 180)],
+    );
+  }
+}
+
+export async function persistMappedError(userId: string, err: unknown): Promise<void> {
+  if (!(err instanceof TelegramError)) return;
+  if (err.code === "auth_dead" || err.code === "unlinked") {
+    await markAuthDead(userId, err.message);
+    return;
+  }
+  if (err.code === "peer_flood") {
+    await markFlood(userId, err.floodSeconds ?? 3600, true);
+    return;
+  }
+  if (err.code === "flood") {
+    await markFlood(userId, err.floodSeconds ?? 30, (err.floodSeconds ?? 0) >= 300);
+  }
 }
 
 export async function pendingForAiCount(userId: string): Promise<number> {
@@ -92,7 +185,7 @@ export async function upsertLoginStart(opts: {
     `insert into telegram_user_sessions (
         user_id, api_id, api_hash_enc, phone, phone_code_hash_enc, session_enc,
         needs_password, watching, checks_json, updated_at
-      ) values ($1,$2,$3,$4,$5,$6, false, true, $7, now())
+      ) values ($1,$2,$3,$4,$5,$6, false, false, $7, now())
       on conflict (user_id) do update set
         api_id = excluded.api_id,
         api_hash_enc = excluded.api_hash_enc,
@@ -100,6 +193,9 @@ export async function upsertLoginStart(opts: {
         phone_code_hash_enc = excluded.phone_code_hash_enc,
         session_enc = excluded.session_enc,
         needs_password = false,
+        watching = false,
+        auth_dead = false,
+        flood_until = null,
         last_error = null,
         updated_at = now()`,
     [
@@ -125,7 +221,7 @@ export async function saveSignedIn(opts: {
   await sql.query(
     `update telegram_user_sessions
         set session_enc = $2, phone_code_hash_enc = null, needs_password = false,
-            last_error = null, updated_at = now()
+            last_error = null, auth_dead = false, updated_at = now()
       where user_id = $1`,
     [opts.userId, encryptSecret(opts.session)],
   );
@@ -145,14 +241,16 @@ export async function markNeedsPassword(userId: string, session: string): Promis
 }
 
 export async function setWatching(userId: string, watching: boolean): Promise<UserSessionRow> {
+  const row = await getUserSession(userId);
+  assertSessionLive(row);
   const sql = await getSql();
   await sql.query(
     `update telegram_user_sessions set watching = $2, updated_at = now() where user_id = $1`,
     [userId, watching],
   );
-  const row = await getUserSession(userId);
-  if (!row) throw new TelegramError("invalid", "Connect Telegram first.", 404);
-  return row;
+  const next = await getUserSession(userId);
+  if (!next) throw new TelegramError("invalid", "Connect Telegram first.", 404);
+  return next;
 }
 
 export async function recordSync(opts: {
@@ -183,7 +281,7 @@ export async function finishUserOnboarding(userId: string): Promise<void> {
   const sql = await getSql();
   await sql.query(
     `update telegram_user_sessions set onboarded_at = now(), watching = true, updated_at = now()
-      where user_id = $1`,
+      where user_id = $1 and coalesce(auth_dead, false) = false`,
     [userId],
   );
 }
