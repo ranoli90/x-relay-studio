@@ -1,4 +1,5 @@
 {
   "title": "X Relay",
-  "card": "custom"
+  "card": "custom",
+  "description": "Sign in the posting account, assign public sources, sync full archives, rewrite with OpenRouter."
 }

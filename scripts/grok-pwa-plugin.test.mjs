@@ -250,10 +250,13 @@ test("published grok.me slug is still a title fallback", () => {
   assert.match(out, /property="og:title" content="Wild Race"/);
 });
 
-test("rejects Vercel system hosts as og:image origins", () => {
-  assert.equal(publicAppHost("01a020b6-803a-71a2-bb47-e2bec57eb9a2-662k8x1l1-xai-org.vercel.app"), "");
-  assert.equal(publicAppHost("demo.vercel.app:443"), "");
-  assert.equal(publicAppHost("vercel.app"), "");
+test("allows Vercel system hosts as og:image origins when SSO is off", () => {
+  assert.equal(
+    publicAppHost("01a020b6-803a-71a2-bb47-e2bec57eb9a2-662k8x1l1-xai-org.vercel.app"),
+    "01a020b6-803a-71a2-bb47-e2bec57eb9a2-662k8x1l1-xai-org.vercel.app",
+  );
+  assert.equal(publicAppHost("demo.vercel.app:443"), "demo.vercel.app");
+  assert.equal(publicAppHost("vercel.app"), "vercel.app");
   assert.equal(publicAppHost("wild-race.grok.me"), "wild-race.grok.me");
 });
 
@@ -286,16 +289,18 @@ test("published VITE_PUBLIC_HOSTNAME wins over request Host for og:image", () =>
   }
 });
 
-test("vercel Host without a public hostname emits no og:image", () => {
+test("vercel Host without a public hostname still emits og:image", () => {
   const prev = process.env.VITE_PUBLIC_HOSTNAME;
   delete process.env.VITE_PUBLIC_HOSTNAME;
   try {
     const out = injectGrokPwaHead("<html><head><title>RACK</title></head></html>", {
-      host: "01a020b6-803a-71a2-bb47-e2bec57eb9a2-662k8x1l1-xai-org.vercel.app",
+      host: "x-relay-studio-puce.vercel.app",
       site: { title: "RACK", card: "custom" },
     });
-    assert.doesNotMatch(out, /property="og:image"/);
-    assert.doesNotMatch(out, /vercel\.app/);
+    assert.match(
+      out,
+      /property="og:image" content="https:\/\/x-relay-studio-puce\.vercel\.app\/og\.jpg"/,
+    );
   } finally {
     if (prev === undefined) delete process.env.VITE_PUBLIC_HOSTNAME;
     else process.env.VITE_PUBLIC_HOSTNAME = prev;
