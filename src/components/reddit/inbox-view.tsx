@@ -5,6 +5,7 @@ import type { InboxSnapshot, RedditThread } from "@/lib/reddit/types";
 import { redditPermalink } from "@/lib/reddit/parse";
 import { loadInbox } from "@/lib/reddit/server";
 import { Button } from "@/components/ui/button";
+import { PushScreen } from "@/components/screen-stack";
 import { cn } from "@/lib/utils";
 
 type Filter = "all" | "unread" | "messages" | "replies";
@@ -22,18 +23,26 @@ export function InboxView({
   const [active, setActive] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>("all");
   const [tick, setTick] = useState(0);
+  const [wide, setWide] = useState(false);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const apply = () => setWide(mq.matches);
+    apply();
+    mq.addEventListener("change", apply);
+    return () => mq.removeEventListener("change", apply);
+  }, []);
 
   useEffect(() => {
     let alive = true;
-    setLoading(true);
-    setError(null);
-    setData(null);
     setActive(null);
+    setData(null);
+    setError(null);
+    setLoading(true);
     void loadInbox({ data: { accountId } })
       .then((snap) => {
         if (!alive) return;
         setData(snap);
-        setActive(snap.threads[0]?.id ?? null);
         onUnread?.(snap.unreadCount);
       })
       .catch((e: unknown) => {
@@ -49,6 +58,14 @@ export function InboxView({
     };
   }, [accountId, tick, onUnread]);
 
+  useEffect(() => {
+    if (!data) return;
+    setActive((current) => {
+      if (current && data.threads.some((t) => t.id === current)) return current;
+      return wide ? (data.threads[0]?.id ?? null) : null;
+    });
+  }, [data, wide]);
+
   const threads = useMemo(() => {
     const list = data?.threads ?? [];
     if (filter === "unread") return list.filter((t) => t.unread > 0);
@@ -57,24 +74,24 @@ export function InboxView({
     return list;
   }, [data, filter]);
 
-  const thread = threads.find((t) => t.id === active) ?? threads[0] ?? null;
+  const thread = threads.find((t) => t.id === active) ?? null;
 
-  if (loading) {
+  if (loading && !data) {
     return (
-      <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(16rem,22rem)_1fr]">
+      <div className="grid min-h-0 flex-1 bg-bg md:grid-cols-[minmax(16rem,22rem)_1fr]">
         <div className="space-y-2 border-b border-line p-4 md:border-r md:border-b-0">
           {Array.from({ length: 7 }).map((_, i) => (
             <div key={i} className="h-16 animate-pulse rounded-md bg-lift" />
           ))}
         </div>
-        <div className="hidden md:block" />
+        <div className="hidden bg-bg md:block" />
       </div>
     );
   }
 
-  if (error) {
+  if (error && !data) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+      <div className="flex flex-1 flex-col items-center justify-center gap-3 bg-bg p-8 text-center">
         <p className="text-sm text-bad">{error}</p>
         <Button variant="secondary" type="button" onClick={() => setTick((n) => n + 1)}>
           Try again
@@ -84,7 +101,7 @@ export function InboxView({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col bg-bg">
       <div className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2">
         {(["all", "unread", "messages", "replies"] as const).map((key) => (
           <button
@@ -92,7 +109,7 @@ export function InboxView({
             type="button"
             onClick={() => setFilter(key)}
             className={cn(
-              "rounded-md px-2 py-1 font-mono text-[11px] uppercase tracking-wider",
+              "h-11 rounded-md px-3 font-mono text-[11px] uppercase tracking-wider",
               filter === key ? "bg-lift text-fg" : "text-subtle hover:text-fg",
             )}
           >
@@ -113,8 +130,8 @@ export function InboxView({
           </p>
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 md:grid-cols-[minmax(16rem,22rem)_1fr]">
-          <ul className={cn("min-h-0 overflow-y-auto border-line md:border-r", thread ? "hidden md:block" : "block")}>
+        <div className="relative min-h-0 flex-1 overflow-hidden md:grid md:grid-cols-[minmax(16rem,22rem)_1fr]">
+          <ul className="h-full min-h-0 overflow-y-auto border-line bg-bg md:border-r">
             {threads.map((t) => (
               <li key={t.id}>
                 <button
@@ -142,27 +159,40 @@ export function InboxView({
               </li>
             ))}
           </ul>
-          <article className={cn("min-h-0 overflow-y-auto", thread ? "block" : "hidden md:block")}>
+          <article className="hidden min-h-0 overflow-y-auto bg-bg md:block">
             {thread ? (
-              <Thread thread={thread} onBack={() => setActive(null)} />
+              <Thread thread={thread} onBack={() => setActive(null)} showBack={false} />
             ) : (
               <div className="grid h-full place-items-center text-sm text-subtle">Choose a thread</div>
             )}
           </article>
+          <PushScreen open={Boolean(thread) && !wide} className="bg-bg md:hidden">
+            {thread ? <Thread thread={thread} onBack={() => setActive(null)} showBack /> : null}
+          </PushScreen>
         </div>
       )}
     </div>
   );
 }
 
-function Thread({ thread, onBack }: { thread: RedditThread; onBack: () => void }) {
+function Thread({
+  thread,
+  onBack,
+  showBack,
+}: {
+  thread: RedditThread;
+  onBack: () => void;
+  showBack: boolean;
+}) {
   const link = redditPermalink(thread.messages.find((m) => m.context)?.context ?? null);
   return (
-    <div className="flex min-h-full flex-col">
-      <header className="sticky top-0 z-10 border-b border-line bg-bg/90 px-4 py-3 backdrop-blur-sm">
-        <button type="button" className="mb-2 text-xs text-muted md:hidden" onClick={onBack}>
-          Back to inbox
-        </button>
+    <div className="flex h-full min-h-full flex-col bg-bg">
+      <header className="sticky top-0 z-10 border-b border-line bg-bg px-4 py-3">
+        {showBack ? (
+          <button type="button" className="mb-2 h-11 text-xs text-muted" onClick={onBack}>
+            Back to inbox
+          </button>
+        ) : null}
         <h2 className="text-base font-medium tracking-tight">{thread.subject}</h2>
         <p className="mt-1 font-mono text-[11px] text-subtle">
           {thread.wasComment ? "Comment replies" : "Private messages"}

@@ -1,6 +1,7 @@
 import { Link, Navigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { Logo } from "@/components/logo";
+import { PushScreen } from "@/components/screen-stack";
 import { UserButton } from "@/lib/auth/gates";
 import { useTelegram } from "@/lib/telegram/store";
 import { ChatList, useChatQuery } from "./chat-list";
@@ -97,43 +98,20 @@ export function ReplicaShell() {
     />
   ) : null;
 
-  const mobileMain =
-    view === "edit" && account ? (
-      <ProfileEdit account={account} saving={saving} onBack={() => setView("profile")} onSave={(d) => void saveProfile(d)} />
-    ) : view === "settings" && account ? (
-      settings
-    ) : view === "profile" && account ? (
-      <ProfilePane
-        account={account}
-        showBack
-        onBack={() => setView(selectedChatId ? "chat" : "list")}
-        onEdit={() => setView("edit")}
-        onSettings={() => setView("settings")}
-        onUnlink={requestUnlink}
-      />
-    ) : view === "peer" && selected ? (
-      <PeerProfile
-        chat={selected}
-        credential={credential}
-        showBack
-        onBack={() => setView("chat")}
-      />
-    ) : view === "chat" ? (
-      <Conversation
-        chat={selected}
-        messages={messages}
-        loading={messagesLoading}
-        sending={sending}
-        showBack
-        onBack={() => {
-          void selectChat(null);
-        }}
-        onProfile={() => setView("peer")}
-        onSend={(body) => void send(body)}
-      />
-    ) : (
-      list
-    );
+  const conversation = (
+    <Conversation
+      chat={selected}
+      messages={messages}
+      loading={messagesLoading}
+      sending={sending}
+      showBack={narrow}
+      onBack={() => {
+        void selectChat(null);
+      }}
+      onProfile={() => setView("peer")}
+      onSend={(body) => void send(body)}
+    />
+  );
 
   if (!loading && snapshot && !snapshot.account) {
     return <Navigate to="/telegram" />;
@@ -141,7 +119,7 @@ export function ReplicaShell() {
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden bg-bg text-fg">
-      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border px-4">
+      <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-bg px-4">
         <Link
           to="/"
           className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
@@ -186,17 +164,62 @@ export function ReplicaShell() {
         </div>
       ) : null}
 
-      <div className="relative min-h-0 flex-1">
+      <div className="relative min-h-0 flex-1 bg-bg">
         {loading && !account ? (
-          <div className="grid h-full place-items-center text-sm text-muted">Loading…</div>
+          <div className="grid h-full place-items-center bg-bg px-4">
+            <div className="w-full max-w-md">
+              <p className="font-mono text-xs uppercase tracking-widest text-subtle">X Relay</p>
+              <div className="skeleton-shimmer mt-4 h-8 w-56 rounded-md" />
+              <div className="skeleton-shimmer mt-4 h-20 w-full rounded-md" />
+            </div>
+          </div>
         ) : !account ? (
-          <div className="grid h-full place-items-center px-4 text-sm text-muted">
+          <div className="grid h-full place-items-center bg-bg px-4 text-sm text-muted">
             Connect Telegram first.
           </div>
         ) : (
           <div className="tg-replica h-full min-h-0">
             {narrow ? (
-              mobileMain
+              <div className="relative h-full min-h-0 overflow-hidden">
+                {list}
+                <PushScreen open={view === "chat" || view === "peer"} className="bg-[var(--tg-bg)]">
+                  {conversation}
+                </PushScreen>
+                <PushScreen
+                  open={view === "profile" || view === "edit" || view === "settings"}
+                  className="bg-[var(--tg-bg-secondary)]"
+                >
+                  <ProfilePane
+                    account={account}
+                    showBack
+                    onBack={() => setView(selectedChatId ? "chat" : "list")}
+                    onEdit={() => setView("edit")}
+                    onSettings={() => setView("settings")}
+                    onUnlink={requestUnlink}
+                  />
+                </PushScreen>
+                <PushScreen open={view === "peer"} className="bg-[var(--tg-bg-secondary)]" z={20}>
+                  {selected ? (
+                    <PeerProfile
+                      chat={selected}
+                      credential={credential}
+                      showBack
+                      onBack={() => setView("chat")}
+                    />
+                  ) : null}
+                </PushScreen>
+                <PushScreen open={view === "edit"} className="bg-[var(--tg-bg-secondary)]" z={20}>
+                  <ProfileEdit
+                    account={account}
+                    saving={saving}
+                    onBack={() => setView("profile")}
+                    onSave={(d) => void saveProfile(d)}
+                  />
+                </PushScreen>
+                <PushScreen open={view === "settings"} className="bg-[var(--tg-bg-secondary)]" z={20}>
+                  {settings}
+                </PushScreen>
+              </div>
             ) : (
               <div className="grid h-full min-h-0 grid-cols-[minmax(0,420px)_minmax(0,1fr)_minmax(0,360px)]">
                 {list}
@@ -219,16 +242,7 @@ export function ReplicaShell() {
                     onUnlink={requestUnlink}
                   />
                 ) : (
-                  <Conversation
-                    chat={selected}
-                    messages={messages}
-                    loading={messagesLoading}
-                    sending={sending}
-                    showBack={false}
-                    onBack={() => undefined}
-                    onProfile={() => setView("peer")}
-                    onSend={(body) => void send(body)}
-                  />
+                  conversation
                 )}
                 {view === "edit" || view === "settings" || view === "profile" ? (
                   <div className="grid place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)]">
@@ -266,8 +280,7 @@ export function ReplicaShell() {
           busy={loading}
           onCancel={() => setConfirmUnlink(false)}
           onConfirm={() => {
-            setConfirmUnlink(false);
-            void unlink();
+            void unlink().finally(() => setConfirmUnlink(false));
           }}
         />
       </div>

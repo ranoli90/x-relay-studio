@@ -451,11 +451,17 @@ export const useStudio = create<StudioState>()(
       },
     }),
     {
-      name: "x-relay-studio-v1",
+      name: "x-relay-studio-v2",
       partialize: (s) => ({
         selectedPublisherId: s.selectedPublisherId,
-        tab: s.tab,
       }),
+      merge: (persisted, current) => {
+        const p = persisted as { selectedPublisherId?: string | null } | undefined;
+        return {
+          ...current,
+          selectedPublisherId: p?.selectedPublisherId ?? current.selectedPublisherId,
+        };
+      },
     },
   ),
 );

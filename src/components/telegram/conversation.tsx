@@ -69,7 +69,7 @@ export function Conversation({
         </button>
       </header>
       <div ref={scroller} className="tg-thread min-h-0 flex-1 overflow-y-auto px-3 py-3">
-        {loading ? (
+        {loading && messages.length === 0 ? (
           <p className="py-8 text-center text-sm text-[var(--tg-text-secondary)]">Loading…</p>
         ) : messages.length === 0 ? (
           <p className="py-8 text-center text-sm text-[var(--tg-text-secondary)]">

@@ -154,15 +154,15 @@ export function UnlinkDialog({
   useEffect(() => {
     if (!open) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
+      if (e.key === "Escape" && !busy) onCancel();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [open, onCancel]);
+  }, [open, busy, onCancel]);
 
   if (!open) return null;
   return (
-    <div className="absolute inset-0 z-20 grid place-items-center bg-black/60 p-4">
+    <div className="absolute inset-0 z-40 grid place-items-center bg-bg p-4">
       <div
         role="dialog"
         aria-modal="true"
@@ -184,6 +184,7 @@ export function UnlinkDialog({
             type="button"
             variant="secondary"
             className="h-12 w-full justify-center"
+            disabled={busy}
             onClick={onCancel}
           >
             Cancel

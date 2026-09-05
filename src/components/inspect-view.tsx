@@ -90,7 +90,7 @@ export function InspectView() {
   const hasResults = Boolean(result) && !error;
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto">
+    <div className="min-h-0 flex-1 overflow-y-auto bg-bg">
       <div className="mx-auto max-w-6xl px-4 pb-24 pt-6">
         <div className="mb-6 flex flex-wrap items-center gap-2">
           <NavTab icon={Search} label="Search" active={tab === "search"} onClick={() => setTab("search")} />
@@ -167,7 +167,7 @@ export function InspectView() {
       {hasResults && result && result.kind !== "trends" && (
         <div className="fixed inset-x-0 bottom-16 z-20 px-4 lg:hidden">
           {mobileBrief ? (
-            <div className="max-h-[70dvh] overflow-y-auto rounded-xl border border-border shadow-2xl">
+            <div className="max-h-[70dvh] overflow-y-auto rounded-xl border border-border bg-surface shadow-2xl">
               <BriefPanel />
               <div className="border-t border-border bg-surface p-3">
                 <Button variant="secondary" className="w-full" onClick={() => setMobileBrief(false)}>
@@ -391,7 +391,7 @@ function AssignChip({ handle }: { handle: string }) {
         e.stopPropagation();
         void addHandles([handle]);
       }}
-      className="absolute right-3 top-3 rounded-full border border-border bg-bg/90 px-2.5 py-1 text-xs text-muted hover:text-fg"
+      className="absolute right-3 top-3 rounded-full border border-border bg-bg px-2.5 py-1 text-xs text-muted hover:text-fg"
     >
       Assign
     </button>

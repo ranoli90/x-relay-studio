@@ -58,10 +58,10 @@ export function SourceWorkspace() {
     void addHandles(parsed).then(() => setDraft(""));
   }
 
-  if (!publisher) return null;
+  if (!publisher) return <div className="min-h-0 flex-1 bg-bg" />;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col bg-bg">
       <div className="border-b border-border px-4 py-4 sm:px-6">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>

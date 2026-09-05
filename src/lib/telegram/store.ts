@@ -28,6 +28,7 @@ type TelegramState = {
   view: View;
   selectedChatId: string | null;
   messages: TelegramMessage[];
+  messageCache: Record<string, TelegramMessage[]>;
   messagesLoading: boolean;
   profileOpen: boolean;
   folder: TelegramFolder;
@@ -69,6 +70,7 @@ export const useTelegram = create<TelegramState>((set, get) => ({
   view: "list",
   selectedChatId: null,
   messages: [],
+  messageCache: {},
   messagesLoading: false,
   profileOpen: false,
   folder: "all",
@@ -113,13 +115,17 @@ export const useTelegram = create<TelegramState>((set, get) => ({
       const next = await telegramSyncFn({ data: { chatId: selectedChatId } });
       const prevUnread = (snapshot.chats ?? []).reduce((n, c) => n + (c.unread ?? 0), 0);
       const nextUnread = next.chats.reduce((n, c) => n + (c.unread ?? 0), 0);
+      const nextMessages = selectedChatId ? next.messages : messages;
       set({
         snapshot: {
           ...snapshot,
           chats: next.chats,
           watch: next.watch ?? snapshot.watch,
         },
-        messages: selectedChatId ? next.messages : messages,
+        messages: nextMessages,
+        messageCache: selectedChatId
+          ? { ...get().messageCache, [selectedChatId]: next.messages }
+          : get().messageCache,
       });
       if (
         notify &&
@@ -153,21 +159,32 @@ export const useTelegram = create<TelegramState>((set, get) => ({
   },
 
   selectChat: async (id) => {
-    set({ selectedChatId: id, view: id ? "chat" : "list", messages: [] });
-    if (!id) return;
-    set({ messagesLoading: true });
+    if (!id) {
+      set({ selectedChatId: null, view: "list" });
+      return;
+    }
+    const cached = get().messageCache[id];
+    set({
+      selectedChatId: id,
+      view: "chat",
+      messages: cached ?? [],
+      messagesLoading: !cached,
+    });
     try {
       const messages = await telegramMessagesFn({ data: { chatId: id } });
+      if (get().selectedChatId !== id) return;
       const chats = (get().snapshot?.chats ?? []).map((chat) =>
         chat.id === id ? { ...chat, unread: 0 } : chat,
       );
       const snapshot = get().snapshot;
       set({
         messages,
+        messageCache: { ...get().messageCache, [id]: messages },
         messagesLoading: false,
         snapshot: snapshot ? { ...snapshot, chats } : snapshot,
       });
     } catch (err) {
+      if (get().selectedChatId !== id) return;
       set({
         messagesLoading: false,
         error: err instanceof Error ? err.message : "Could not load messages.",
@@ -215,9 +232,11 @@ export const useTelegram = create<TelegramState>((set, get) => ({
           : chat,
       );
       const snapshot = get().snapshot;
+      const nextMessages = [...get().messages.filter((m) => m.id !== temp.id), message];
       set({
         sending: false,
-        messages: [...get().messages.filter((m) => m.id !== temp.id), message],
+        messages: nextMessages,
+        messageCache: { ...get().messageCache, [chatId]: nextMessages },
         snapshot: snapshot ? { ...snapshot, chats } : snapshot,
       });
     } catch (err) {
@@ -247,6 +266,7 @@ export const useTelegram = create<TelegramState>((set, get) => ({
         view: "list",
         selectedChatId: null,
         messages: [],
+        messageCache: {},
       });
     } catch (err) {
       set({
