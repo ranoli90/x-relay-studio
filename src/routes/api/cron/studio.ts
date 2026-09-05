@@ -1,10 +1,15 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { timingSafeEqual } from "node:crypto";
 
 function allowed(request: Request): boolean {
-  if (request.headers.get("x-vercel-cron") === "1") return true;
-  const secret = process.env.CRON_SECRET;
-  if (secret && request.headers.get("authorization") === `Bearer ${secret}`) return true;
-  return false;
+  const secret = process.env.CRON_SECRET?.trim();
+  if (!secret) return false;
+  const header = request.headers.get("authorization") ?? "";
+  const expected = `Bearer ${secret}`;
+  const a = Buffer.from(header);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
 
 export const Route = createFileRoute("/api/cron/studio")({
@@ -12,18 +17,32 @@ export const Route = createFileRoute("/api/cron/studio")({
     handlers: {
       GET: async ({ request }) => {
         if (!allowed(request)) {
-          return new Response(JSON.stringify({ ok: false }), {
+          return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
             status: 401,
             headers: { "content-type": "application/json" },
           });
         }
+        const { withCronLock } = await import("@/lib/jobs/lock");
         const { tickDueSources } = await import("@/lib/studio/sync.server");
         const { tickLiveAll } = await import("@/lib/studio/drip.server");
-        const scrape = await tickDueSources(6);
-        const live = await tickLiveAll(4);
-        return new Response(JSON.stringify({ ok: true, ...scrape, ...live }), {
-          headers: { "content-type": "application/json" },
+        const lease = await withCronLock(async () => {
+          const scrape = await tickDueSources(6);
+          const live = await tickLiveAll(4);
+          return { scrape, live };
         });
+        if (!lease.ran) {
+          return new Response(JSON.stringify({ ok: true, skipped: "lock" }), {
+            headers: { "content-type": "application/json" },
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            ok: true,
+            scrape: lease.result?.scrape ?? null,
+            live: lease.result?.live ?? null,
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
       },
     },
   },
