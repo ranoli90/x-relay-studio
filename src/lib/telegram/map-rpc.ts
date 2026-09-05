@@ -14,6 +14,14 @@ export function mapRpc(err: unknown): TelegramError {
   if (msg.includes("PHONE_NUMBER_INVALID") || msg.includes("PHONE_NUMBER_BANNED")) {
     return new TelegramError("invalid", "That phone number didn’t work. Check the country code.", 400);
   }
+  if (msg.includes("PHONE_NUMBER_FLOODED") || msg.includes("PHONE_PASSWORD_FLOOD") || msg.includes("PHONE_NUMBER_UNOCCUPIED")) {
+    return new TelegramError(
+      "flood",
+      "Telegram is blocking login codes for this app right now. Wait, then use a new Web api_id from my.telegram.org.",
+      429,
+      3600,
+    );
+  }
   if (msg.includes("PHONE_CODE_INVALID") || msg.includes("PHONE_CODE_EMPTY")) {
     return new TelegramError("invalid", "That login code didn’t match. Try again.", 400);
   }

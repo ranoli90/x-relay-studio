@@ -84,6 +84,14 @@ export function clearOnboardingDraft(): void {
   if (typeof window === "undefined") return;
   try {
     window.localStorage.removeItem(ONBOARDING_DRAFT_KEY);
+    // Older builds used the same key for every desk. Drop anything nearby
+    // so a signed-out visitor cannot reopen the previous phone / api_id.
+    const stale: string[] = [];
+    for (let i = 0; i < window.localStorage.length; i += 1) {
+      const key = window.localStorage.key(i);
+      if (key && key.startsWith(ONBOARDING_DRAFT_KEY)) stale.push(key);
+    }
+    for (const key of stale) window.localStorage.removeItem(key);
   } catch {
     /* ignore */
   }

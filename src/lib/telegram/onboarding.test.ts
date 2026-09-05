@@ -83,7 +83,7 @@ describe("phone and app numbers", () => {
 });
 
 describe("login key precedence", () => {
-  const platform = {
+  const deskStored = {
     apiId: 111111,
     apiHash: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   };
@@ -94,19 +94,26 @@ describe("login key precedence", () => {
   };
 
   it("uses the desk's own api_id when posted", () => {
-    const parsed = parsedStartLogin(desk, platform);
+    const parsed = parsedStartLogin(desk, deskStored);
     assert.equal(parsed.apiId, 222222);
     assert.equal(parsed.apiHash, "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
     assert.equal(parsed.phone, "+15551234567");
   });
 
-  it("falls back to platform keys only when the desk omits them", () => {
-    const parsed = parsedStartLogin({ phone: "+15551234567" }, platform);
+  it("falls back only to keys already stored on this desk", () => {
+    const parsed = parsedStartLogin({ phone: "+15551234567" }, deskStored);
     assert.equal(parsed.apiId, 111111);
     assert.equal(parsed.apiHash, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
   });
 
-  it("rejects a login with neither desk nor platform keys", () => {
+  it("does not silently reuse another desk's numbers when this desk has none", () => {
+    assert.throws(
+      () => parsedStartLogin({ phone: "+19998887766" }, null),
+      (err: Error) => err.name === "TelegramError",
+    );
+  });
+
+  it("rejects a login with neither posted nor stored desk keys", () => {
     assert.throws(
       () => parsedStartLogin({ phone: "+15551234567" }, null),
       (err: Error) => err.name === "TelegramError",
