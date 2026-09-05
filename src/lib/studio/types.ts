@@ -50,6 +50,8 @@ export type OutboxItem = {
   dueAt: string;
   sentAt: string | null;
   readyNow: boolean;
+  /** Present when status is sent — operator marked after a manual X draft, not an API post. */
+  ack?: "operator";
 };
 
 export type LiveSnapshot = {
@@ -82,6 +84,8 @@ export type SourceRow = {
   lastSyncedAt: string | null;
   backfillDone: boolean;
   windowsRun: number;
+  /** True until backfill finishes and stored count matches the claimed archive. */
+  archivePartial: boolean;
 };
 
 export type StoredPost = {
@@ -127,4 +131,5 @@ export type TickResult = {
   addedPosts: number;
   rewrittenNow: number;
   done: boolean;
+  skipped?: "flag";
 };

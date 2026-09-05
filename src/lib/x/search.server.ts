@@ -1,4 +1,6 @@
 import { chatOpenRouter, extractJson } from "../openrouter.server";
+import { openRouterEnabled } from "../flags";
+import { filterArchiveWindow } from "./archive";
 import { sortByEngagement, sortByNewest, uniqueTweets } from "./format";
 import { fetchProfile, fetchTweet, hydrateProfiles, hydrateTweets } from "./fxtwitter.server";
 import { detectIntent, extractHandle, extractTweetId } from "./ids";
@@ -117,6 +119,9 @@ async function grokJson(
   xFilter?: ChatOptionsXFilter,
   maxTokens?: number,
 ) {
+  if (!openRouterEnabled()) {
+    throw new Error("OpenRouter is disabled.");
+  }
   const result = await chatOpenRouter({
     messages: [
       { role: "system", content: system },
@@ -471,8 +476,16 @@ Rules:
 export async function searchAccountWindow(
   handle: string,
   opts: { since?: string; until?: string } = {},
-): Promise<{ tweets: Tweet[]; note?: string; live: boolean }> {
+): Promise<{ tweets: Tweet[]; note?: string; live: boolean; partial: boolean }> {
   const from = handle.replace(/^@/, "");
+  if (!openRouterEnabled()) {
+    return {
+      tweets: [],
+      note: "Search is disabled.",
+      live: false,
+      partial: true,
+    };
+  }
   const windowHint = opts.until
     ? `Posts FROM @${from} only, strictly older than ${opts.until}. Return the next-oldest slice (the posts just before that date), newest-first within the slice. Do not include posts from ${opts.until} or later.${opts.since ? ` Stay on or after ${opts.since} if you can.` : ""}`
     : `Collect the latest posts FROM @${from} only. No date cap.`;
@@ -488,21 +501,19 @@ export async function searchAccountWindow(
     3500,
   );
   const rec = asRecord(data) ?? {};
-  const tweets = uniqueTweets(
+  const raw = uniqueTweets(
     asArray(rec.tweets)
       .map(tweetFromModel)
-      .filter((t): t is Tweet => t !== null)
-      .filter((t) => tweetBelongsTo(t, from)),
+      .filter((t): t is Tweet => t !== null),
   );
+  const filtered = filterArchiveWindow(raw, from, { since: opts.since, until: opts.until });
   // Hydrate later, and only for tweets we have not stored — catch-up must not
   // re-fetch 20 fxtwitter payloads we already have.
-  return { tweets: sortByNewest(tweets), note: asString(rec.note), live };
-}
-
-function tweetBelongsTo(tweet: Tweet, handle: string): boolean {
-  const want = handle.replace(/^@/, "").toLowerCase();
-  const got = tweet.author.handle.replace(/^@/, "").toLowerCase();
-  if (got && got !== "unknown") return got === want;
-  return (tweet.url || "").toLowerCase().includes(`/${want}/`);
+  return {
+    tweets: sortByNewest(filtered.tweets),
+    note: asString(rec.note),
+    live,
+    partial: !live || filtered.partial,
+  };
 }
 

@@ -1,25 +1,26 @@
-import { getSql, type Sql } from "@/lib/db";
+import { getSql, withTransaction, type Sql } from "@/lib/db";
+import { openRouterEnabled, studioTickEnabled, unofficialXLookupEnabled } from "@/lib/flags";
 import { chatOpenRouter, extractJson } from "@/lib/openrouter.server";
 import { STARTER_WATCH } from "@/lib/studio/handles";
+import {
+  MAX_AHEAD,
+  ORIGINAL_GAP_MIN,
+  QUOTE_GAP_MIN,
+  REPLY_GAP_MIN,
+  assertManualQueueOnly,
+  fairSelect,
+  mapOutboxStatus,
+} from "@/lib/studio/integrity";
+import { enqueueOriginalAtomic, enqueueWatchAtomic } from "@/lib/studio/queue";
 import { fetchProfile } from "@/lib/x/fxtwitter.server";
 import { searchAccountWindow } from "@/lib/x/search.server";
-import type { MediaItem } from "@/lib/x/types";
-import type { LiveSnapshot, OutboxItem, OutboxKind, OutboxStatus, WatchHandle } from "./types";
+import type { LiveSnapshot, OutboxItem, OutboxKind, WatchHandle } from "./types";
 
-const ORIGINAL_GAP_MIN = 150; // ~10 originals / day
-const REPLY_GAP_MIN = 60; // ~24 replies / day
-const QUOTE_GAP_MIN = 180; // ~8 quotes / day
 const WATCH_CATCHUP_MIN = 12;
 const MAX_WATCH_NEW = 3;
-const MAX_AHEAD = 8;
 const PUBS_PER_TICK = 2;
 const ORIGINALS_PER_TICK = 12;
 const WATCHES_PER_TICK = 4;
-const STOP = new Set(
-  "the a an of to in for on with and or is it this that you we they i me my at as be by from not but if so just".split(
-    " ",
-  ),
-);
 
 type WatchRow = {
   id: string;
@@ -79,27 +80,20 @@ function mapWatch(row: WatchRow): WatchHandle {
 
 function mapOutbox(row: OutboxRow): OutboxItem {
   const dueMs = Date.parse(row.due_at);
+  const status = mapOutboxStatus(row.status);
   return {
     id: row.id,
     publisherId: row.publisher_id,
     kind: mapKind(row.kind),
-    status: row.status === "sent" || row.status === "skipped" ? (row.status as OutboxStatus) : "due",
+    status,
     body: row.body,
     mediaUrl: row.media_url,
     replyToUrl: row.reply_to_url,
     dueAt: row.due_at,
     sentAt: row.sent_at,
-    readyNow: row.status === "due" && Number.isFinite(dueMs) && dueMs <= Date.now(),
+    readyNow: status === "due" && Number.isFinite(dueMs) && dueMs <= Date.now(),
+    ack: status === "sent" ? "operator" : undefined,
   };
-}
-
-function tokens(text: string): Set<string> {
-  const out = new Set<string>();
-  for (const raw of text.toLowerCase().split(/[^a-z0-9_]+/g)) {
-    if (raw.length < 4 || STOP.has(raw)) continue;
-    out.add(raw);
-  }
-  return out;
 }
 
 function isSafeWatchText(text: string): boolean {
@@ -110,36 +104,10 @@ function isSafeWatchText(text: string): boolean {
   return true;
 }
 
-function pickPhoto(pool: { text: string; urls: string[] }[], needle: string): string | null {
-  const withUrls = pool.filter((p) => p.urls.length > 0);
-  if (!withUrls.length) return null;
-  const want = tokens(needle);
-  const matched = want.size
-    ? withUrls.filter((p) => {
-        const have = tokens(p.text);
-        for (const w of want) if (have.has(w)) return true;
-        return false;
-      })
-    : [];
-  const pick = (matched.length ? matched : withUrls)[
-    Math.floor(Math.random() * (matched.length ? matched.length : withUrls.length))
-  ];
-  if (!pick) return null;
-  return pick.urls[Math.floor(Math.random() * pick.urls.length)] ?? null;
-}
-
 function dayStartIso(): string {
   const d = new Date();
   d.setUTCHours(0, 0, 0, 0);
   return d.toISOString();
-}
-
-function nextDue(lastIso: string | null | undefined, gapMin: number): string {
-  const gap = gapMin * 60 * 1000;
-  const last = lastIso ? Date.parse(lastIso) : 0;
-  const minStart = Number.isFinite(last) ? last + gap : Date.now();
-  const due = Math.max(Date.now(), minStart);
-  return new Date(due).toISOString();
 }
 
 export async function listLive(userId: string, publisherId: string | null): Promise<LiveSnapshot> {
@@ -190,6 +158,7 @@ export async function listLive(userId: string, publisherId: string | null): Prom
 }
 
 export async function addWatchHandles(userId: string, handles: string[]): Promise<{ added: number; missing: string[] }> {
+  if (!unofficialXLookupEnabled()) return { added: 0, missing: [...new Set(handles)] };
   const sql = await getSql();
   const unique = [...new Set(handles.map((h) => h.replace(/^@/, "").trim()).filter(Boolean))];
   let added = 0;
@@ -214,6 +183,7 @@ export async function addWatchHandles(userId: string, handles: string[]): Promis
 }
 
 export async function seedStarterWatch(userId: string): Promise<{ added: number; missing: string[] }> {
+  if (!unofficialXLookupEnabled()) return { added: 0, missing: [] };
   const sql = await getSql();
   const existing = await sql<{ n: number }>`
     select count(*)::int as n from watch_handles where user_id = ${userId}
@@ -238,11 +208,13 @@ export async function setDripEnabled(userId: string, publisherId: string, enable
   `;
 }
 
+/** Operator ack only. Does not post to X. */
 export async function markOutbox(
   userId: string,
   ids: string[],
   status: "sent" | "skipped",
 ): Promise<void> {
+  assertManualQueueOnly();
   const sql = await getSql();
   for (const id of ids) {
     await sql`
@@ -250,25 +222,6 @@ export async function markOutbox(
       where id = ${id} and user_id = ${userId} and status = 'due'
     `;
   }
-}
-
-async function mediaPool(sql: Sql, userId: string, publisherId: string): Promise<{ text: string; urls: string[] }[]> {
-  const rows = await sql<{ text: string; media: unknown; rewrite_text: string | null }>`
-    select text, media, rewrite_text from posts
-    where user_id = ${userId}
-      and source_id in (select id from sources where publisher_id = ${publisherId} and user_id = ${userId})
-      and media is not null
-    order by created_at desc nulls last
-    limit 400
-  `;
-  const pool: { text: string; urls: string[] }[] = [];
-  for (const row of rows) {
-    const media = asJson<MediaItem[]>(row.media, []);
-    const urls = media.filter((m) => m.type === "photo" && m.url).map((m) => m.url);
-    if (!urls.length) continue;
-    pool.push({ text: `${row.rewrite_text ?? ""} ${row.text}`, urls });
-  }
-  return pool;
 }
 
 async function loadVoice(sql: Sql, userId: string, publisherId: string): Promise<VoicePack | null> {
@@ -320,52 +273,11 @@ async function unusedWatchPost(
   return target.find((t) => isSafeWatchText(t.text)) ?? null;
 }
 
-async function waitingKind(sql: Sql, publisherId: string, kind: OutboxKind): Promise<number> {
-  const waiting = await sql<{ n: number }>`
-    select count(*)::int as n from outbox
-    where publisher_id = ${publisherId} and status = 'due' and kind = ${kind}
-  `;
-  return waiting[0]?.n ?? 0;
-}
-
-async function enqueueOriginal(sql: Sql, userId: string, publisherId: string): Promise<boolean> {
-  if ((await waitingKind(sql, publisherId, "original")) >= MAX_AHEAD) return false;
-
-  const next = await sql<{ id: string; rewrite_text: string; text: string }>`
-    select p.id, p.rewrite_text, p.text
-    from posts p
-    join sources s on s.id = p.source_id
-    where s.publisher_id = ${publisherId}
-      and s.user_id = ${userId}
-      and p.rewrite_status = 'done'
-      and coalesce(p.rewrite_text, '') <> ''
-      and not exists (
-        select 1 from outbox o where o.publisher_id = ${publisherId} and o.source_post_id = p.id
-      )
-    order by p.created_at asc nulls last
-    limit 1
-  `;
-  if (!next[0]) return false;
-  const pool = await mediaPool(sql, userId, publisherId);
-  const mediaUrl = pickPhoto(pool, next[0].rewrite_text || next[0].text);
-  const last = await sql<{ due_at: string | null }>`
-    select max(due_at) as due_at from outbox
-    where publisher_id = ${publisherId} and kind = 'original'
-  `;
-  const due = nextDue(last[0]?.due_at, ORIGINAL_GAP_MIN);
-  try {
-    await sql`
-      insert into outbox (id, user_id, publisher_id, kind, status, body, media_url, source_post_id, due_at)
-      values (
-        ${crypto.randomUUID()}, ${userId}, ${publisherId}, 'original', 'due',
-        ${next[0].rewrite_text.slice(0, 280)}, ${mediaUrl}, ${next[0].id}, ${due}
-      )
-    `;
-  } catch {
-    return false;
-  }
-  await sql`update publishers set last_original_at = now() where id = ${publisherId} and user_id = ${userId}`;
-  return true;
+async function enqueueOriginal(userId: string, publisherId: string): Promise<boolean> {
+  const result = await withTransaction(async (sql) =>
+    enqueueOriginalAtomic(sql, { userId, publisherId, maxAhead: MAX_AHEAD }),
+  );
+  return result.queued;
 }
 
 async function writeTake(
@@ -374,6 +286,7 @@ async function writeTake(
   targetText: string,
   mode: "reply" | "quote",
 ): Promise<string> {
+  if (!openRouterEnabled()) return "";
   const system =
     mode === "quote"
       ? "Write one X quote-tweet. JSON only: {\"text\":\"...\"}. Under 200 characters. A specific take on the post, in the posting account's voice. No hashtags, no emoji stuffing, no 'this.', do not mention tools."
@@ -402,7 +315,7 @@ async function enqueueWatchKind(
   publisherId: string,
   kind: "reply" | "quote",
 ): Promise<boolean> {
-  if ((await waitingKind(sql, publisherId, kind)) >= MAX_AHEAD) return false;
+  if (!openRouterEnabled()) return false;
   const safe = await unusedWatchPost(sql, userId, publisherId, kind);
   if (!safe) return false;
   const pack = await loadVoice(sql, userId, publisherId);
@@ -414,34 +327,24 @@ async function enqueueWatchKind(
     return false;
   }
   if (!body) return false;
-  const pool = await mediaPool(sql, userId, publisherId);
-  const mediaUrl = pickPhoto(pool, `${safe.text} ${body}`);
-  const last = await sql<{ due_at: string | null }>`
-    select max(due_at) as due_at from outbox
-    where publisher_id = ${publisherId} and kind = ${kind}
-  `;
-  const due = nextDue(last[0]?.due_at, kind === "quote" ? QUOTE_GAP_MIN : REPLY_GAP_MIN);
-  try {
-    await sql`
-      insert into outbox (
-        id, user_id, publisher_id, kind, status, body, media_url, reply_to_url, watch_post_id, due_at
-      ) values (
-        ${crypto.randomUUID()}, ${userId}, ${publisherId}, ${kind}, 'due',
-        ${body}, ${mediaUrl}, ${safe.url}, ${safe.id}, ${due}
-      )
-    `;
-  } catch {
-    return false;
-  }
-  if (kind === "quote") {
-    await sql`update publishers set last_quote_at = now() where id = ${publisherId} and user_id = ${userId}`;
-  } else {
-    await sql`update publishers set last_reply_at = now() where id = ${publisherId} and user_id = ${userId}`;
-  }
-  return true;
+  // Watch posts have no stored media. Do not attach a photo from the scrape pool.
+  const result = await withTransaction(async (tx) =>
+    enqueueWatchAtomic(tx, {
+      userId,
+      publisherId,
+      kind,
+      body,
+      watchPostId: safe.id,
+      replyToUrl: safe.url,
+      mediaUrl: null,
+      maxAhead: MAX_AHEAD,
+    }),
+  );
+  return result.queued;
 }
 
 async function tickWatchHandle(sql: Sql, userId: string, watch: WatchRow): Promise<number> {
+  if (!openRouterEnabled()) return 0;
   const found = await searchAccountWindow(watch.handle, {});
   let added = 0;
   for (const tweet of found.tweets.slice(0, MAX_WATCH_NEW + 4)) {
@@ -517,7 +420,38 @@ async function duePublishers(sql: Sql, userId: string, limit: number): Promise<{
   }
 }
 
+async function dueLiveUsers(sql: Sql, limit: number): Promise<{ user_id: string }[]> {
+  const cap = Math.max(limit, 1);
+  try {
+    const rows = await sql<{ user_id: string }>`
+      select user_id from (
+        select user_id,
+          min(least(
+            coalesce(last_original_at, '1970-01-01'::timestamptz),
+            coalesce(last_reply_at, '1970-01-01'::timestamptz),
+            coalesce(last_quote_at, '1970-01-01'::timestamptz)
+          )) as last_work
+        from publishers
+        where drip_enabled = true
+        group by user_id
+      ) t
+      order by last_work asc
+      limit ${cap * 4}
+    `;
+    return fairSelect(rows, cap);
+  } catch {
+    const rows = await sql<{ user_id: string }>`
+      select distinct user_id from publishers where drip_enabled = true
+      order by user_id
+      limit ${cap * 4}
+    `;
+    return fairSelect(rows, cap);
+  }
+}
+
 export async function tickLiveForUser(userId: string): Promise<{ watch: number; queued: number }> {
+  if (!studioTickEnabled()) return { watch: 0, queued: 0 };
+  assertManualQueueOnly();
   await seedStarterWatch(userId);
   const sql = await getSql();
   const dueWatch = await dueWatches(sql, userId, WATCHES_PER_TICK);
@@ -529,7 +463,7 @@ export async function tickLiveForUser(userId: string): Promise<{ watch: number; 
   let queued = 0;
   const originalPubs = await duePublishers(sql, userId, ORIGINALS_PER_TICK);
   for (const pub of originalPubs) {
-    if (await enqueueOriginal(sql, userId, pub.id)) queued += 1;
+    if (await enqueueOriginal(userId, pub.id)) queued += 1;
   }
   const llmPubs = await duePublishers(sql, userId, PUBS_PER_TICK);
   for (const pub of llmPubs) {
@@ -543,6 +477,8 @@ export async function fillQueue(
   userId: string,
   publisherId: string,
 ): Promise<{ queued: number; watch: number; seeded: number }> {
+  if (!studioTickEnabled()) return { queued: 0, watch: 0, seeded: 0 };
+  assertManualQueueOnly();
   const sql = await getSql();
   const owned = await sql<{ id: string }>`
     select id from publishers where id = ${publisherId} and user_id = ${userId} limit 1
@@ -556,7 +492,7 @@ export async function fillQueue(
   }
   let queued = 0;
   for (let i = 0; i < 3; i += 1) {
-    if (await enqueueOriginal(sql, userId, publisherId)) queued += 1;
+    if (await enqueueOriginal(userId, publisherId)) queued += 1;
     else break;
   }
   for (let i = 0; i < 3; i += 1) {
@@ -571,23 +507,9 @@ export async function fillQueue(
 }
 
 export async function tickLiveAll(publisherLimit = 2): Promise<{ watch: number; queued: number }> {
+  if (!studioTickEnabled()) return { watch: 0, queued: 0 };
   const sql = await getSql();
-  let users: { user_id: string }[] = [];
-  try {
-    users = await sql<{ user_id: string }>`
-      select distinct user_id from (
-        select user_id from publishers where drip_enabled = true
-        union
-        select user_id from watch_handles where enabled = true
-      ) u
-      limit ${Math.max(publisherLimit, 1)}
-    `;
-  } catch {
-    users = await sql<{ user_id: string }>`
-      select distinct user_id from publishers where drip_enabled = true
-      limit ${Math.max(publisherLimit, 1)}
-    `;
-  }
+  const users = await dueLiveUsers(sql, Math.max(publisherLimit, 1));
   let watch = 0;
   let queued = 0;
   for (const row of users) {

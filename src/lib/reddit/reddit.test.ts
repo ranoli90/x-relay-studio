@@ -13,16 +13,18 @@ import {
 import { REDDIT_SCOPES } from "./types.ts";
 
 describe("app naming", () => {
-  it("is unique per desk and never includes reddit", () => {
+  it("is unique per desk and never includes reddit or restore digits", () => {
     const a = appNameForDesk("1554477288539986");
     const b = appNameForDesk("9999000011112222");
     assert.notEqual(a, b);
     assert.equal(/\breddit\b/i.test(a), false);
     assert.equal(/\breddit\b/i.test(appIdForDesk("1554477288539986")), false);
     assert.throws(() => assertSafeAppName("Reddit Relay"));
-    const ua = userAgentFor("alice", appIdForDesk("1554477288539986"));
-    assert.match(ua, /^web:desk\.1554\.9986:v1\.0\.0 \(by \/u\/alice\)$/);
+    const id = appIdForDesk("1554477288539986");
+    const ua = userAgentFor("alice", id);
+    assert.match(ua, new RegExp(`^web:${id.replace(/\./g, "\\.")}:v0\\.2\\.0 \\(by /u/alice\\)$`));
     assert.equal(/\breddit\b/i.test(ua), false);
+    assert.equal(/1554|9986|1554477288539986/.test(a + id + ua), false);
     assert.match(apiSignupBlurb("1554477288539986"), /warmed-up/);
     assert.match(apiSignupBlurb("1554477288539986"), /not a moderator/i);
   });
@@ -43,7 +45,8 @@ describe("oauth safety", () => {
       "https://app.example.com/api/reddit/oauth/callback",
     );
     assert.equal(isPlausibleOrigin("javascript:alert(1)"), false);
-    assert.equal(isPlausibleOrigin("https://ok.example"), true);
+    assert.equal(isPlausibleOrigin("https://ok.example"), false);
+    assert.equal(isPlausibleOrigin("http://127.0.0.1"), true);
   });
 });
 

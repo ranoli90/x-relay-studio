@@ -1,20 +1,20 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { pendingMigrations } from "../../scripts/migration-plan.mjs";
+import { isProductionRuntime } from "./runtime";
 
 /** Which database backend is active. */
 export type DbSource = "neon" | "pglite";
 
-function isProductionRuntime(): boolean {
-  return Boolean(process.env.VERCEL) || process.env.NODE_ENV === "production";
-}
+export { isProductionRuntime };
 
 // An empty/whitespace DATABASE_URL (an easy misconfig in deploy UIs) must mean
-// "unset" — otherwise production would silently run on the PGLite fallback.
+// "unset" — otherwise Vercel would silently run on the PGLite fallback.
 const rawDatabaseUrl =
   typeof process !== "undefined" ? process.env.DATABASE_URL : undefined;
 const databaseUrl =
   rawDatabaseUrl && rawDatabaseUrl.trim() ? rawDatabaseUrl : undefined;
 
-if (isProductionRuntime() && !databaseUrl) {
+if (process.env.VERCEL && !databaseUrl) {
   throw new Error(
     "DATABASE_URL is required in production. The live site cannot run on a throwaway in-memory database.",
   );
@@ -44,14 +44,20 @@ export interface Sql {
 
 const globalRef = globalThis as typeof globalThis & {
   __pgSqlPromise__?: Promise<Sql>;
+  __pgPool__?: import("pg").Pool;
   __pgliteInstance__?: Promise<import("@electric-sql/pglite").PGlite>;
   __pgliteMigrateChain__?: Promise<void>;
 };
+
+const txStore = new AsyncLocalStorage<Sql>();
 
 const OID_INT8 = 20;
 const OID_DATE = 1082;
 const OID_INTERVAL = 1186;
 const identity = (v: string) => v;
+
+/** Stable advisory-lock key for migration coordination (transaction-scoped). */
+export const MIGRATION_LOCK_KEY = 0x58524c31;
 
 type Run = <T>(text: string, params: unknown[]) => Promise<T[]>;
 
@@ -81,18 +87,27 @@ async function applyNeonMigrations(pool: import("pg").Pool): Promise<void> {
     await client.query(
       "CREATE TABLE IF NOT EXISTS _migrations (name TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now())",
     );
-    const applied = (await client.query("SELECT name FROM _migrations")).rows.map(
-      (r: { name: string }) => r.name,
-    );
-    for (const { name, path } of pendingMigrations(Object.keys(migrationFiles), applied)) {
-      const text = migrationFiles[path];
-      if (!text) continue;
+    for (;;) {
       try {
         await client.query("BEGIN");
+        await client.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
+        const applied = (await client.query("SELECT name FROM _migrations")).rows.map(
+          (r: { name: string }) => r.name,
+        );
+        const next = pendingMigrations(Object.keys(migrationFiles), applied)[0];
+        if (!next) {
+          await client.query("COMMIT");
+          break;
+        }
+        const text = migrationFiles[next.path];
+        if (!text) {
+          await client.query("COMMIT");
+          break;
+        }
         await client.query(text);
-        await client.query("INSERT INTO _migrations (name) VALUES ($1)", [name]);
+        await client.query("INSERT INTO _migrations (name) VALUES ($1)", [next.name]);
         await client.query("COMMIT");
-        console.log(`[db] applied ${name}`);
+        console.log(`[db] applied ${next.name}`);
       } catch (err) {
         try {
           await client.query("ROLLBACK");
@@ -101,6 +116,30 @@ async function applyNeonMigrations(pool: import("pg").Pool): Promise<void> {
         }
         throw err;
       }
+    }
+  } finally {
+    client.release();
+  }
+}
+
+/** Read-only: production requests do not apply DDL. `scripts/migrate.mjs` is the release path. */
+async function assertNeonSchema(pool: import("pg").Pool): Promise<void> {
+  const client = await pool.connect();
+  try {
+    const exists = await client.query(
+      `select 1 from information_schema.tables where table_name = '_migrations' limit 1`,
+    );
+    if (!exists.rows[0]) {
+      throw new Error("Schema is missing _migrations. Run npm run db:migrate before serving traffic.");
+    }
+    const applied = (await client.query("SELECT name FROM _migrations")).rows.map(
+      (r: { name: string }) => r.name,
+    );
+    const next = pendingMigrations(Object.keys(migrationFiles), applied)[0];
+    if (next) {
+      throw new Error(
+        `Schema is behind (${next.name} not applied). Run npm run db:migrate with a release credential.`,
+      );
     }
   } finally {
     client.release();
@@ -120,11 +159,21 @@ function createNeonSql(): Promise<Sql> {
       connectionTimeoutMillis: 8_000,
       allowExitOnIdle: true,
     });
+    globalRef.__pgPool__ = pool;
     pool.on("connect", (client) => {
       void client.query("set statement_timeout = 15000");
       void client.query("set lock_timeout = 8000");
     });
-    await applyNeonMigrations(pool);
+    try {
+      const migrateHere =
+        process.env.XRELAY_MIGRATE_ON_START === "1" || !isProductionRuntime();
+      if (migrateHere) await applyNeonMigrations(pool);
+      else await assertNeonSchema(pool);
+    } catch (err) {
+      globalRef.__pgPool__ = undefined;
+      await pool.end().catch(() => undefined);
+      throw err;
+    }
     return toSql(async <T>(text: string, params: unknown[]) => {
       const res = await pool.query(text, params);
       return res.rows as T[];
@@ -198,12 +247,70 @@ async function createSql(): Promise<Sql> {
   return dbSource === "neon" ? createNeonSql() : createPgliteSql();
 }
 
-export function getSql(): Promise<Sql> {
+export async function getSql(): Promise<Sql> {
+  const tx = txStore.getStore();
+  if (tx) return tx;
   sqlPromise ??= createSql().catch((err) => {
     sqlPromise = null;
     throw err;
   });
   return sqlPromise;
+}
+
+/**
+ * Run `fn` on one checked-out client. Nested calls reuse the same handle.
+ * Nested getSql() inside the callback also uses that handle.
+ */
+export async function withTransaction<T>(fn: (sql: Sql) => Promise<T>): Promise<T> {
+  const existing = txStore.getStore();
+  if (existing) return fn(existing);
+
+  if (dbSource === "pglite") {
+    const pg = await getPglite();
+    return pg.transaction(async (tx) => {
+      const sql = toSql(async <TRow>(text: string, params: unknown[]) => {
+        const result = await tx.query<TRow>(text, params);
+        return result.rows;
+      });
+      return txStore.run(sql, () => fn(sql));
+    });
+  }
+
+  const pool = globalRef.__pgPool__;
+  if (!pool) await getSql();
+  const live = globalRef.__pgPool__;
+  if (!live) throw new Error("Database pool is not initialized.");
+  const client = await live.connect();
+  const sql = toSql(async <TRow>(text: string, params: unknown[]) => {
+    const res = await client.query(text, params);
+    return res.rows as TRow[];
+  });
+  try {
+    await client.query("BEGIN");
+    try {
+      const result = await txStore.run(sql, () => fn(sql));
+      await client.query("COMMIT");
+      return result;
+    } catch (err) {
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        try {
+          client.release(true);
+        } catch {
+          /* already gone */
+        }
+        throw err;
+      }
+      throw err;
+    }
+  } finally {
+    try {
+      client.release();
+    } catch {
+      /* released above */
+    }
+  }
 }
 
 export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite> {
@@ -217,7 +324,6 @@ export async function getPglite(): Promise<import("@electric-sql/pglite").PGlite
 }
 
 export function ensureDbReady(): Promise<void> {
-  if (dbSource !== "pglite") return Promise.resolve();
   return getSql().then(() => undefined);
 }
 

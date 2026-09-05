@@ -31,14 +31,13 @@ export const Route = createFileRoute("/api/cron/studio")({
         const { withCronLock } = await import("@/lib/jobs/lock");
         const { tickDueSources } = await import("@/lib/studio/sync.server");
         const { tickLiveAll } = await import("@/lib/studio/tick-live.server");
-        const { tickAgentJobs } = await import("@/lib/agent/brain.server");
-        const { drainQueuedTelegram } = await import("@/lib/agent/ingest-telegram.server");
+        const { ensureAgentLoop, tickAutoSendOnce } = await import("@/lib/agent/loop.server");
+        ensureAgentLoop();
         const lease = await withCronLock(async () => {
           const scrape = await tickDueSources(6);
           const live = await tickLiveAll(4);
-          const queued = await drainQueuedTelegram(8);
-          const jobs = await tickAgentJobs();
-          return { scrape, live, queued, jobs };
+          const auto = await tickAutoSendOnce();
+          return { scrape, live, auto };
         });
         if (!lease.ran) {
           return new Response(JSON.stringify({ ok: true, skipped: "lock" }), {
@@ -50,8 +49,9 @@ export const Route = createFileRoute("/api/cron/studio")({
             ok: true,
             scrape: lease.result?.scrape ?? null,
             live: lease.result?.live ?? null,
-            queued: lease.result?.queued ?? 0,
-            jobs: lease.result?.jobs ?? 0,
+            queued: lease.result?.auto?.drained ?? 0,
+            jobs: lease.result?.auto?.jobs ?? 0,
+            watch: lease.result?.auto?.watch ?? 0,
           }),
           { headers: { "content-type": "application/json" } },
         );

@@ -51,7 +51,7 @@ export function runSafety(text: string): SafetyResult {
 }
 
 export function safetyBlocksGenerate(v: SafetyVerdict): boolean {
-  return v === "kill";
+  return v === "kill" || v === "handoff";
 }
 
 export const SAFETY_REFUSALS: Record<string, string> = {

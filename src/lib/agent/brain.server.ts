@@ -1,14 +1,21 @@
-import { getSql } from "@/lib/db";
+import { getSql, withTransaction } from "@/lib/db";
 import { newId } from "./ids.ts";
 import { runSafety, SAFETY_REFUSALS, safetyBlocksGenerate } from "./safety.ts";
 import { understandLocal } from "./understand.ts";
 import { buildPlan, routeWorkflow } from "./route.ts";
 import { writeWithGateway } from "./gateway.server.ts";
-import { clockLabel, hourInZone } from "./clock.ts";
+import { clockLabel, hourInZone, inWindow } from "./clock.ts";
 import { findSku } from "./catalog.ts";
 import { goldSummary } from "./eval.ts";
 import { writeLocal } from "./write.ts";
 import { ensureSeed } from "./seed.server.ts";
+import { applyMarkPaid } from "./pay.ts";
+import { claimDueJobs, finalizeJob } from "@/lib/jobs/claim.ts";
+import { ensureSlaTicket } from "@/lib/jobs/tickets.ts";
+import { decideAutoSend } from "./auto.ts";
+import { pickAgentName, pickFromRoster } from "./names.ts";
+import { recordActivity } from "./activity.server.ts";
+import { tryDispatchAutoSend } from "./dispatch.server.ts";
 import type {
   Archetype,
   CatalogRow,
@@ -19,6 +26,8 @@ import type {
   UnderstandResult,
   WorkflowId,
 } from "./types.ts";
+
+type Sql = Awaited<ReturnType<typeof getSql>>;
 
 function iso(d: string | Date | null | undefined): string | null {
   if (!d) return null;
@@ -38,6 +47,126 @@ async function thought(
   );
 }
 
+async function chooseAgentName(sql: Sql, userId: string, threadId: string): Promise<string> {
+  const roster = await sql.query<{ name: string }>(
+    `select name from agent_roster where user_id = $1 order by created_at asc`,
+    [userId],
+  );
+  if (roster.length > 0) return pickFromRoster(threadId, roster.map((r) => r.name));
+  return pickAgentName(threadId);
+}
+
+async function ensureAgentName(
+  sql: Sql,
+  userId: string,
+  threadId: string,
+  existing: string | null | undefined,
+): Promise<string> {
+  if (existing) return existing;
+  const name = await chooseAgentName(sql, userId, threadId);
+  await sql.query(
+    `update agent_threads set agent_name = $1 where id = $2 and user_id = $3 and agent_name is null`,
+    [name, threadId, userId],
+  );
+  return name;
+}
+
+async function commitBubbles(
+  sql: Sql,
+  opts: {
+    userId: string;
+    personaId: string;
+    threadId: string;
+    peerId: string | null;
+    agentName: string;
+    workflow: WorkflowId;
+    bubbles: string[];
+    offerId: string | null;
+    wantAuto: boolean;
+  },
+): Promise<boolean> {
+  const ids: string[] = [];
+  for (const bubble of opts.bubbles) {
+    const id = newId("msg");
+    ids.push(id);
+    await sql.query(
+      `insert into agent_messages
+        (id, user_id, thread_id, role, body, workflow, offer_id, auto, status, agent_name)
+       values ($1,$2,$3,'draft',$4,$5,$6,false,'held',$7)`,
+      [id, opts.userId, opts.threadId, bubble, opts.workflow, opts.offerId, opts.agentName],
+    );
+  }
+  await recordActivity(sql, {
+    userId: opts.userId,
+    personaId: opts.personaId,
+    threadId: opts.threadId,
+    agentName: opts.agentName,
+    kind: "typing",
+    body: opts.workflow,
+  });
+  if (!opts.wantAuto) {
+    await recordActivity(sql, {
+      userId: opts.userId,
+      personaId: opts.personaId,
+      threadId: opts.threadId,
+      agentName: opts.agentName,
+      kind: "held",
+    });
+    return false;
+  }
+
+  let fail: string | null = null;
+  if (opts.peerId) {
+    for (const bubble of opts.bubbles) {
+      const result = await tryDispatchAutoSend({
+        userId: opts.userId,
+        peer: opts.peerId,
+        chat: opts.peerId,
+        body: bubble,
+        agentName: opts.agentName,
+      });
+      if (result.status === "fail") {
+        fail = result.error ?? "dispatch failed";
+        break;
+      }
+    }
+  }
+
+  if (fail) {
+    await sql.query(
+      `insert into agent_tickets (id, user_id, thread_id, kind, body)
+       values ($1,$2,$3,'dispatch',$4)`,
+      [newId("tix"), opts.userId, opts.threadId, `Auto-send failed. ${fail}`.slice(0, 500)],
+    );
+    await recordActivity(sql, {
+      userId: opts.userId,
+      personaId: opts.personaId,
+      threadId: opts.threadId,
+      agentName: opts.agentName,
+      kind: "failed",
+      body: fail.slice(0, 280),
+    });
+    return false;
+  }
+
+  for (const id of ids) {
+    await sql.query(
+      `update agent_messages
+          set role = 'persona', status = 'sent', auto = true
+        where id = $1 and user_id = $2`,
+      [id, opts.userId],
+    );
+  }
+  await recordActivity(sql, {
+    userId: opts.userId,
+    personaId: opts.personaId,
+    threadId: opts.threadId,
+    agentName: opts.agentName,
+    kind: "sent",
+  });
+  return true;
+}
+
 export async function processInbound(opts: {
   userId: string;
   threadId?: string;
@@ -45,7 +174,7 @@ export async function processInbound(opts: {
   text: string;
   idempotencyKey?: string;
   source?: Source;
-}): Promise<{ threadId: string; workflow: WorkflowId; held: boolean; killed: boolean }> {
+}): Promise<{ threadId: string; workflow: WorkflowId; held: boolean; killed: boolean; auto: boolean }> {
   const sql = await getSql();
   const personaId = await ensureSeed(opts.userId);
 
@@ -68,6 +197,7 @@ export async function processInbound(opts: {
         workflow: (existing[0]?.workflow as WorkflowId) ?? "W1_INGEST",
         held: true,
         killed: false,
+        auto: false,
       };
     }
   }
@@ -122,8 +252,9 @@ export async function processInbound(opts: {
       archetype: string;
       lifetime_cents: number;
       trust: number;
+      tg_peer_id: string | null;
     }>(
-      `select display_name, source, archetype, lifetime_cents, trust from agent_fans
+      `select display_name, source, archetype, lifetime_cents, trust, tg_peer_id from agent_fans
         where id = $1 and user_id = $2`,
       [fanId, opts.userId],
     )
@@ -134,14 +265,19 @@ export async function processInbound(opts: {
       workflow: string;
       last_inbound_at: string | Date | null;
       last_outbound_at: string | Date | null;
+      agent_name: string | null;
     }>(
-      `select takeover, workflow, last_inbound_at, last_outbound_at from agent_threads
+      `select takeover, workflow, last_inbound_at, last_outbound_at, agent_name from agent_threads
         where id = $1`,
       [threadId],
     )
   )[0];
 
   const now = new Date();
+  const hour = hourInZone(now, persona.timezone);
+  const quiet = inWindow(hour, persona.quiet_start, persona.quiet_end);
+  const agentName = await ensureAgentName(sql, opts.userId, threadId, thread.agent_name);
+
   await sql.query(
     `insert into agent_messages (id, user_id, thread_id, role, body, status)
      values ($1,$2,$3,'fan',$4,'sent')`,
@@ -152,23 +288,45 @@ export async function processInbound(opts: {
     [now.toISOString(), threadId],
   );
   await thought(sql, opts.userId, threadId, "ingest", `W1 INGEST. Normalized. Idempotent key attached.`);
+  await recordActivity(sql, {
+    userId: opts.userId,
+    personaId,
+    threadId,
+    agentName,
+    kind: "inbound",
+    body: opts.text.slice(0, 280),
+  });
 
   const safety = runSafety(opts.text);
   await thought(sql, opts.userId, threadId, "safety", `W2 SAFETY ${safety.verdict}. ${safety.note}`);
 
   if (safetyBlocksGenerate(safety.verdict)) {
     const refuse = SAFETY_REFUSALS[safety.codes[0] ?? "minor"] ?? SAFETY_REFUSALS.minor;
+    const killed = safety.verdict === "kill";
     await sql.query(
       `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status)
-       values ($1,$2,$3,'system',$4,'W2_SAFETY','sent')`,
+       values ($1,$2,$3,'system',$4,'W2_SAFETY','held')`,
       [newId("msg"), opts.userId, threadId, refuse],
     );
     await sql.query(
-      `update agent_threads set workflow = 'W15_HANDOFF', state = 'killed', takeover = true where id = $1`,
-      [threadId],
+      `update agent_threads set workflow = 'W15_HANDOFF', state = $1, takeover = true where id = $2`,
+      [killed ? "killed" : "handoff", threadId],
     );
-    await thought(sql, opts.userId, threadId, "handoff", "Thread killed. Writer never ran.");
-    return { threadId, workflow: "W15_HANDOFF", held: true, killed: true };
+    await thought(
+      sql,
+      opts.userId,
+      threadId,
+      "handoff",
+      killed ? "Thread killed. Writer never ran." : "Handoff. Writer never ran.",
+    );
+    await recordActivity(sql, {
+      userId: opts.userId,
+      personaId,
+      threadId,
+      agentName,
+      kind: killed ? "killed" : "handoff",
+    });
+    return { threadId, workflow: "W15_HANDOFF", held: true, killed, auto: false };
   }
 
   const countRows = await sql.query<{ n: number }>(
@@ -280,23 +438,29 @@ export async function processInbound(opts: {
     startHour: c.start_hour,
     endHour: c.end_hour,
   }));
-  const hour = hourInZone(now, persona.timezone);
   await thought(sql, opts.userId, threadId, "clock", `W18 LIFE-CLOCK ${clockLabel(hour, clock)}`);
 
   if (safety.verdict === "refuse") {
     const code = safety.codes[0] ?? "irl";
     const line = SAFETY_REFUSALS[code] ?? SAFETY_REFUSALS.irl;
     await sql.query(
-      `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status)
-       values ($1,$2,$3,'draft',$4,$5,'held')`,
-      [newId("msg"), opts.userId, threadId, line, workflow],
+      `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status, agent_name)
+       values ($1,$2,$3,'draft',$4,$5,'held',$6)`,
+      [newId("msg"), opts.userId, threadId, line, workflow, agentName],
     );
     await sql.query(
       `update agent_threads set workflow = $1, state = 'held' where id = $2`,
       [workflow, threadId],
     );
     await thought(sql, opts.userId, threadId, "write", "Refuse draft. Writer skipped on safety.");
-    return { threadId, workflow, held: true, killed: false };
+    await recordActivity(sql, {
+      userId: opts.userId,
+      personaId,
+      threadId,
+      agentName,
+      kind: "held",
+    });
+    return { threadId, workflow, held: true, killed: false, auto: false };
   }
 
   if (thread.takeover) {
@@ -305,7 +469,30 @@ export async function processInbound(opts: {
       [threadId],
     );
     await thought(sql, opts.userId, threadId, "handoff", "Takeover on. AI paused.");
-    return { threadId, workflow: "W15_HANDOFF", held: true, killed: false };
+    await recordActivity(sql, {
+      userId: opts.userId,
+      personaId,
+      threadId,
+      agentName,
+      kind: "handoff",
+    });
+    return { threadId, workflow: "W15_HANDOFF", held: true, killed: false, auto: false };
+  }
+
+  if (workflow === "W15_HANDOFF") {
+    await sql.query(
+      `update agent_threads set workflow = 'W15_HANDOFF', state = 'handoff', takeover = true where id = $1`,
+      [threadId],
+    );
+    await thought(sql, opts.userId, threadId, "handoff", "Handoff workflow. Writer skipped.");
+    await recordActivity(sql, {
+      userId: opts.userId,
+      personaId,
+      threadId,
+      agentName,
+      kind: "handoff",
+    });
+    return { threadId, workflow: "W15_HANDOFF", held: true, killed: false, auto: false };
   }
 
   const catalog = await sql.query<{
@@ -339,6 +526,19 @@ export async function processInbound(opts: {
     [threadId],
   );
 
+  try {
+    const { rememberFan } = await import("./memory.server.ts");
+    await rememberFan({
+      fanId,
+      inbound: opts.text,
+      diary,
+      last,
+      lifetimeCents: fan.lifetime_cents,
+    });
+  } catch {
+    /* memory must never block inbound */
+  }
+
   if (workflow === "W7_GFE") {
     await sql.query(
       `update agent_seats set held = least(capacity, held + 1), updated_at = now()
@@ -348,6 +548,7 @@ export async function processInbound(opts: {
     await thought(sql, opts.userId, threadId, "plan", "GFE seat held. First contract stays human.");
   }
 
+  let proofReady = false;
   if (workflow === "W13_PROOF") {
     const asset = (
       await sql.query<{ id: string; label: string }>(
@@ -361,6 +562,7 @@ export async function processInbound(opts: {
       await sql.query(`update agent_proof_assets set used_fan_id = $1 where id = $2`, [fanId, asset.id]);
       await thought(sql, opts.userId, threadId, "plan", `Proof reserved: ${asset.label}. 1 asset / fan.`);
     }
+    proofReady = Boolean(asset);
   }
 
   const written = await writeWithGateway(opts.userId, threadId, {
@@ -374,6 +576,8 @@ export async function processInbound(opts: {
     catalog: catalogRows,
     fanName: fan.display_name,
     inbound: opts.text,
+    proofAvailable: proofReady,
+    deliveryConfirmed: Number(justDelivered?.n ?? 0) > 0,
   });
   await thought(
     sql,
@@ -385,17 +589,32 @@ export async function processInbound(opts: {
       : `Writer ${written.model}. ${written.bubbles.length} bubble(s).`,
   );
 
-  const inQuiet = hour >= persona.quiet_start || hour < persona.quiet_end;
-  const auto = plan.autonomy === "auto" && !inQuiet && !written.dropped && written.bubbles.length > 0;
-  const state: ThreadState =
-    workflow === "W15_HANDOFF" ? "handoff" : auto ? "open" : "held";
+  const wantAuto = decideAutoSend({
+    personaAutoSend: Boolean(persona.auto_send),
+    goldAllowed: gold.autoSendAllowed,
+    quiet,
+    takeover: Boolean(thread.takeover),
+    workflow: plan.workflow,
+    dropped: written.dropped,
+    killed: false,
+    bubbleCount: written.bubbles.length,
+    safetyVerdict: safety.verdict,
+  });
 
   if (written.bubbles.length === 0) {
     await sql.query(
       `update agent_threads set workflow = $1, state = 'held' where id = $2`,
       [workflow, threadId],
     );
-    return { threadId, workflow, held: true, killed: false };
+    await recordActivity(sql, {
+      userId: opts.userId,
+      personaId,
+      threadId,
+      agentName,
+      kind: "held",
+      body: written.dropReason,
+    });
+    return { threadId, workflow, held: true, killed: false, auto: false };
   }
 
   const sku = findSku(catalogRows, plan.sku);
@@ -409,24 +628,18 @@ export async function processInbound(opts: {
     );
   }
 
-  for (const bubble of written.bubbles) {
-    await sql.query(
-      `insert into agent_messages
-        (id, user_id, thread_id, role, body, workflow, offer_id, auto, status)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [
-        newId("msg"),
-        opts.userId,
-        threadId,
-        auto ? "persona" : "draft",
-        bubble,
-        workflow,
-        offerId,
-        auto,
-        auto ? "sent" : "held",
-      ],
-    );
-  }
+  const auto = await commitBubbles(sql, {
+    userId: opts.userId,
+    personaId,
+    threadId,
+    peerId: fan.tg_peer_id,
+    agentName,
+    workflow,
+    bubbles: written.bubbles,
+    offerId,
+    wantAuto,
+  });
+  const state: ThreadState = auto ? "open" : "held";
 
   if (plan.checkInHours) {
     const runAt = new Date(now.getTime() + plan.checkInHours * 3600_000).toISOString();
@@ -454,9 +667,15 @@ export async function processInbound(opts: {
     await thought(sql, opts.userId, threadId, "diary", `HIM patched. ${diaryLine}`);
   }
 
-  await thought(sql, opts.userId, threadId, "desk", "W19 DESK. Thought + diary only. Never to buyer.");
+  await thought(
+    sql,
+    opts.userId,
+    threadId,
+    "desk",
+    auto ? "W19 DESK. Auto-sent." : "W19 DESK. Thought + diary only. Never to buyer.",
+  );
 
-  return { threadId, workflow, held: !auto, killed: false };
+  return { threadId, workflow, held: !auto, killed: false, auto };
 }
 
 function diaryPatch(intent: string, text: string): string | null {
@@ -467,19 +686,11 @@ function diaryPatch(intent: string, text: string): string | null {
 }
 
 export async function tickAgentJobs(userId?: string): Promise<number> {
+  const token = newId("claim");
+  const due = await withTransaction((tx) =>
+    claimDueJobs(tx, token, userId ? { userId, limit: 20 } : { limit: 20 }),
+  );
   const sql = await getSql();
-  const due = userId
-    ? await sql.query<{ id: string; user_id: string; thread_id: string | null; kind: string }>(
-        `select id, user_id, thread_id, kind from agent_jobs
-          where done_at is null and run_at <= now() and user_id = $1
-          limit 20`,
-        [userId],
-      )
-    : await sql.query<{ id: string; user_id: string; thread_id: string | null; kind: string }>(
-        `select id, user_id, thread_id, kind from agent_jobs
-          where done_at is null and run_at <= now()
-          limit 20`,
-      );
   let n = 0;
   for (const job of due) {
     try {
@@ -493,32 +704,34 @@ export async function tickAgentJobs(userId?: string): Promise<number> {
           )
         )[0];
         if (pending) {
-          await sql.query(
-            `insert into agent_tickets (id, user_id, thread_id, offer_id, kind, body)
-             values ($1,$2,$3,$4,'sla','PAID offer not delivered in 10 minutes.')`,
-            [newId("tix"), job.user_id, job.thread_id, pending.id],
-          );
-          await thought(
-            sql,
-            job.user_id,
-            job.thread_id,
-            "handoff",
-            "W9 FULFILL watchdog. PAID still sitting. Ticket for operator.",
-          );
+          const ticket = await ensureSlaTicket(sql, {
+            userId: job.user_id,
+            threadId: job.thread_id,
+            offerId: pending.id,
+          });
+          if (ticket.inserted) {
+            await thought(
+              sql,
+              job.user_id,
+              job.thread_id,
+              "handoff",
+              "W9 FULFILL watchdog. PAID still sitting. Ticket for operator.",
+            );
+          }
         }
       } else if (job.kind === "check_in" && job.thread_id) {
         await runCheckIn(sql, job.user_id, job.thread_id);
       }
     } catch (err) {
       console.info("[agent]", { event: "job_fail", id: job.id, err: String(err).slice(0, 120) });
+      await finalizeJob(sql, job.id, token, { ok: false, error: String(err) });
+      continue;
     }
-    await sql.query(`update agent_jobs set done_at = now() where id = $1`, [job.id]);
-    n += 1;
+    const done = await finalizeJob(sql, job.id, token, { ok: true });
+    if (done) n += 1;
   }
   return n;
 }
-
-type Sql = Awaited<ReturnType<typeof getSql>>;
 
 async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   const thread = (
@@ -527,8 +740,9 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
       last_outbound_at: string | Date | null;
       fan_id: string;
       persona_id: string;
+      agent_name: string | null;
     }>(
-      `select takeover, last_outbound_at, fan_id, persona_id from agent_threads
+      `select takeover, last_outbound_at, fan_id, persona_id, agent_name from agent_threads
         where id = $1 and user_id = $2`,
       [threadId, userId],
     )
@@ -548,14 +762,27 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   if (held) return;
 
   const persona = (
-    await sql.query<{ display_name: string; bible: string; timezone: string }>(
-      `select display_name, bible, timezone from agent_personas where id = $1`,
+    await sql.query<{
+      display_name: string;
+      bible: string;
+      timezone: string;
+      auto_send: boolean;
+      quiet_start: number;
+      quiet_end: number;
+    }>(
+      `select display_name, bible, timezone, auto_send, quiet_start, quiet_end from agent_personas where id = $1`,
       [thread.persona_id],
     )
   )[0];
   const fan = (
-    await sql.query<{ display_name: string; lifetime_cents: number; archetype: string; source: string }>(
-      `select display_name, lifetime_cents, archetype, source from agent_fans where id = $1`,
+    await sql.query<{
+      display_name: string;
+      lifetime_cents: number;
+      archetype: string;
+      source: string;
+      tg_peer_id: string | null;
+    }>(
+      `select display_name, lifetime_cents, archetype, source, tg_peer_id from agent_fans where id = $1`,
       [thread.fan_id],
     )
   )[0];
@@ -591,6 +818,18 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
       order by created_at desc limit 20`,
     [threadId],
   );
+  try {
+    const { rememberFan } = await import("./memory.server.ts");
+    await rememberFan({
+      fanId: thread.fan_id,
+      inbound: last.find((m) => m.role === "fan")?.body ?? "",
+      diary,
+      last,
+      lifetimeCents: fan.lifetime_cents,
+    });
+  } catch {
+    /* memory must never block jobs */
+  }
   const claims = await sql.query<{
     kind: string;
     claim: string;
@@ -625,8 +864,12 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     whale: fan.lifetime_cents >= 20000,
     firstOfferSent: true,
   };
-  const plan = buildPlan("W11_REACTIVATE", u, ctx, false);
-  const hour = hourInZone(new Date(), persona.timezone);
+  const gold = goldSummary();
+  const autoEnabled = Boolean(persona.auto_send) && gold.autoSendAllowed;
+  const now = new Date();
+  const hour = hourInZone(now, persona.timezone);
+  const quiet = inWindow(hour, persona.quiet_start, persona.quiet_end);
+  const plan = buildPlan("W11_REACTIVATE", u, ctx, autoEnabled);
   const written = writeLocal({
     plan,
     personaName: persona.display_name,
@@ -640,18 +883,42 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     inbound: "",
   });
   if (written.bubbles.length === 0) return;
-  for (const bubble of written.bubbles) {
+  const agentName = await ensureAgentName(sql, userId, threadId, thread.agent_name);
+  const wantAuto = decideAutoSend({
+    personaAutoSend: Boolean(persona.auto_send),
+    goldAllowed: gold.autoSendAllowed,
+    quiet,
+    takeover: false,
+    workflow: plan.workflow,
+    dropped: written.dropped,
+    killed: false,
+    bubbleCount: written.bubbles.length,
+    safetyVerdict: "allow",
+  });
+  const auto = await commitBubbles(sql, {
+    userId,
+    personaId: thread.persona_id,
+    threadId,
+    peerId: fan.tg_peer_id,
+    agentName,
+    workflow: "W11_REACTIVATE",
+    bubbles: written.bubbles,
+    offerId: null,
+    wantAuto,
+  });
+  if (auto) {
     await sql.query(
-      `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status)
-       values ($1,$2,$3,'draft',$4,'W11_REACTIVATE','held')`,
-      [newId("msg"), userId, threadId, bubble],
+      `update agent_threads set workflow = 'W11_REACTIVATE', state = 'open', last_outbound_at = $1 where id = $2`,
+      [now.toISOString(), threadId],
     );
+    await thought(sql, userId, threadId, "queue", "W11 REACTIVATE. One memory callback. Auto.");
+  } else {
+    await sql.query(
+      `update agent_threads set workflow = 'W11_REACTIVATE', state = 'held', unread = unread + 1 where id = $1`,
+      [threadId],
+    );
+    await thought(sql, userId, threadId, "queue", "W11 REACTIVATE. One memory callback. Draft, not auto.");
   }
-  await sql.query(
-    `update agent_threads set workflow = 'W11_REACTIVATE', state = 'held', unread = unread + 1 where id = $1`,
-    [threadId],
-  );
-  await thought(sql, userId, threadId, "queue", "W11 REACTIVATE. One memory callback. Draft, not auto.");
 }
 
 export async function markPaid(opts: {
@@ -660,45 +927,10 @@ export async function markPaid(opts: {
   rail: string;
   externalId: string;
   amountCents: number;
-}): Promise<{ ok: boolean }> {
-  const sql = await getSql();
-  const offer = (
-    await sql.query<{ id: string; thread_id: string; fan_id: string; user_id: string; status: string }>(
-      `select id, thread_id, fan_id, user_id, status from agent_offers where id = $1 and user_id = $2`,
-      [opts.offerId, opts.userId],
-    )
-  )[0];
-  if (!offer) return { ok: false };
-  const existingPay = (
-    await sql.query<{ id: string }>(
-      `select id from agent_payments where rail = $1 and external_id = $2 limit 1`,
-      [opts.rail, opts.externalId],
-    )
-  )[0];
-  if (!existingPay) {
-    await sql.query(
-      `insert into agent_payments (id, user_id, offer_id, rail, amount_cents, status, external_id, paid_at)
-       values ($1,$2,$3,$4,$5,'paid',$6,now())`,
-      [newId("pay"), opts.userId, offer.id, opts.rail, opts.amountCents, opts.externalId],
-    );
-  }
-  await sql.query(
-    `update agent_offers set status = 'paid', paid_at = now() where id = $1`,
-    [offer.id],
-  );
-  await sql.query(
-    `update agent_fans set lifetime_cents = lifetime_cents + $1, trust = least(100, trust + 8) where id = $2`,
-    [opts.amountCents, offer.fan_id],
-  );
-  await sql.query(
-    `update agent_threads set workflow = 'W9_FULFILL', state = 'fulfilling' where id = $1`,
-    [offer.thread_id],
-  );
-  const runAt = new Date(Date.now() + 10 * 60_000).toISOString();
-  await sql.query(
-    `insert into agent_jobs (id, user_id, thread_id, kind, run_at, payload)
-     values ($1,$2,$3,'fulfillment',$4,$5)`,
-    [newId("job"), opts.userId, offer.thread_id, runAt, JSON.stringify({ offerId: offer.id })],
-  );
-  return { ok: true };
+}): Promise<{ ok: boolean; replay?: boolean }> {
+  return withTransaction(async (sql) => {
+    const result = await applyMarkPaid(sql, opts.userId, opts);
+    if (!result.ok) return { ok: false };
+    return { ok: true, replay: result.replay };
+  });
 }

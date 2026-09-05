@@ -6,7 +6,13 @@ import { chatOpenRouter, extractJson, openRouterConfigured } from "@/lib/openrou
 import { getSql } from "@/lib/db";
 import { newId } from "./ids.ts";
 import type { WriteInput, WriteResult } from "./types.ts";
-import { writeLocal, validateDraft, splitBubbles } from "./write.ts";
+import {
+  writeLocal,
+  validateDraft,
+  splitBubbles,
+  writeCapsFor,
+  shouldSkipRemoteWrite,
+} from "./write.ts";
 
 export type AgentTask =
   | "understand"
@@ -45,16 +51,16 @@ const TABLE: Record<AgentTask, Route> = {
   },
   write: {
     task: "write",
-    primary: "x-ai/grok-4",
-    fallback: ["x-ai/grok-4-fast", "minimax/minimax-m3", "deepseek/deepseek-chat"],
+    primary: "x-ai/grok-4.5",
+    fallback: ["x-ai/grok-4", "x-ai/grok-4-fast", "minimax/minimax-m3", "deepseek/deepseek-chat"],
     sort: "throughput",
     timeoutMs: 12000,
     maxTokens: 280,
   },
   hard_write: {
     task: "hard_write",
-    primary: "x-ai/grok-4.6",
-    fallback: ["x-ai/grok-4"],
+    primary: "x-ai/grok-4.5",
+    fallback: ["x-ai/grok-4.6", "x-ai/grok-4"],
     sort: "throughput",
     timeoutMs: 16000,
     maxTokens: 400,
@@ -243,21 +249,39 @@ export async function runTask(opts: {
 export async function writeWithGateway(userId: string, threadId: string, input: WriteInput): Promise<WriteResult> {
   const local = writeLocal(input);
   if (!writerAvailable()) return local;
+  // Handoff / kill / W2 safety / no-rails holds never call the model (including hard_write).
+  if (shouldSkipRemoteWrite(input, local)) return local;
 
+  const caps = writeCapsFor(input);
+  const rails =
+    caps.allowedMethods && caps.allowedMethods.length > 0
+      ? caps.allowedMethods.join(", ")
+      : "(none — do not name any rail or payment method)";
   const catalogLines = input.catalog
     .map((c) => `${c.sku} ${c.title} $${(c.priceCents / 100).toFixed(0)} rail=${c.rail}`)
     .join("\n");
   const diary = input.diary.map((d) => `${d.voice}: ${d.body}`).join("\n");
   const last = input.last.map((m) => `${m.role}: ${m.body}`).join("\n");
   const clock = input.clock.map((c) => `${c.kind} ${c.startHour}-${c.endHour} ${c.claim}`).join("; ");
+  const proofLine = caps.proofAvailable
+    ? "An unused proof asset is reserved. You may offer that reserved asset. Never promise a live selfie or a recycled live."
+    : "NO proof asset is reserved. Do not promise a selfie, verification pic, same-outfit, live proof, or that you can send one.";
+  const deliveryLine = caps.deliveryConfirmed
+    ? "Delivery is confirmed. You may say you got it to them."
+    : "Delivery is NOT confirmed. Do not claim you sent, delivered, or that it is in their inbox.";
 
   const system = `You write as ${input.personaName}. Short Telegram bubbles. Lowercase ok. No emoji. Never say you are an AI.
-Never invent a price. Catalog only:
+Never invent a price or a payment rail. Catalog only:
 ${catalogLines}
+Only these payment rails may be named: ${rails}
+${proofLine}
+${deliveryLine}
 Life clock now hour=${input.hour}: ${clock}
 Do not contradict ME claims or the clock (no gym+bed at the wrong hour).
-Forbidden in output: strategy=, trust_score, gfe_ready, prices not on the list.
-Plan you must follow: workflow=${input.plan.workflow} tactic=${input.plan.tactic} sku=${input.plan.sku ?? "none"} hold=${input.plan.hold}
+Forbidden in output: strategy=, trust_score, gfe_ready, as an ai, as a language model, openrouter, system prompt, gift cards, restriction workarounds, bypass language, prices not on the list, payment methods not on the allowlist.
+Plan you must follow: workflow=${input.plan.workflow} tactic=${input.plan.tactic} sku=${input.plan.sku ?? "none"}
+hold=${input.plan.hold} is about whether the desk may auto-send. You still write the draft. Do not mention hold, workflow ids, or plan fields.
+Sound like a person who remembers one fact and asks one thing. Do not write a bare "hey what's up" as the whole reply.
 ${input.bible}
 Diary for THIS fan only:
 ${diary}`;
@@ -267,15 +291,16 @@ ${diary}`;
   const llm = await runTask({
     userId,
     threadId,
-    task: input.plan.workflow === "W15_HANDOFF" ? "hard_write" : "write",
+    task: "write",
     messages: [
       { role: "system", content: system },
       { role: "user", content: user },
     ],
   });
   if (!llm) return local;
-  const drop = validateDraft(llm.text, input.catalog, input.hour, input.clock);
-  if (drop) return { ...local, dropReason: drop, model: llm.model };
+  const drop = validateDraft(llm.text, input.catalog, input.hour, input.clock, caps);
+  // Failed remote text does not smear a remote model id onto a successful local draft.
+  if (drop) return local;
   return { bubbles: splitBubbles(llm.text), dropped: false, dropReason: null, model: llm.model };
 }
 

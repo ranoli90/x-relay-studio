@@ -1,7 +1,9 @@
 import { ChevronLeft } from "lucide-react";
 import type { TelegramAccount } from "@/lib/telegram/types";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { TgAvatar } from "./avatar";
+import { tgFocusClass } from "./format";
 
 export function ProfilePane({
   account,
@@ -26,7 +28,7 @@ export function ProfilePane({
           <button
             type="button"
             onClick={onBack}
-            className="grid size-11 place-items-center"
+            className={cn("grid size-11 min-h-[44px] min-w-[44px] place-items-center", tgFocusClass)}
             aria-label="Back"
           >
             <ChevronLeft className="size-5" />

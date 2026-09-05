@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { floodSecondsLeft, floodWaitLabel, watchIsLocked } from "./watch-status.ts";
+import { floodSecondsLeft, floodWaitLabel, watchIsLocked, watchTerminal, watchTerminalLabel } from "./watch-status.ts";
 
 describe("watch-status", () => {
   it("treats past floodUntil as unlocked", () => {
@@ -14,5 +14,15 @@ describe("watch-status", () => {
     assert.equal(watchIsLocked({ authDead: true }, now), true);
     assert.equal(floodWaitLabel("2026-01-01T00:02:00.000Z", now), "2 min");
     assert.equal(watchIsLocked({ floodUntil: "2026-01-01T00:02:00.000Z" }, now), true);
+  });
+
+  it("persists distinct revoked / flood / dead terminals", () => {
+    const now = Date.parse("2026-01-01T00:00:00.000Z");
+    assert.equal(watchTerminal({ authDead: true, lastError: "Telegram revoked this session." }, now), "revoked");
+    assert.equal(watchTerminal({ authDead: true, lastError: "Telegram signed this desk out." }, now), "dead");
+    assert.equal(watchTerminal({ floodUntil: "2026-01-01T00:02:00.000Z" }, now), "flood");
+    assert.match(watchTerminalLabel("revoked") ?? "", /revoked/i);
+    assert.match(watchTerminalLabel("dead") ?? "", /signed this desk out/i);
+    assert.match(watchTerminalLabel("flood") ?? "", /wait/i);
   });
 });

@@ -1,11 +1,15 @@
 /** Desk-scoped Telegram rate limits. No sleeps — callers fail closed with 429. */
 import { getSql } from "@/lib/db";
 import { TelegramError } from "./errors";
+import {
+  USER_SEND_BURST,
+  USER_SEND_BURST_MS,
+  USER_SEND_DAY,
+  USER_SEND_PER_MIN,
+} from "./rate";
 
-export const USER_SEND_PER_MIN = 20;
-export const USER_SEND_BURST = 8;
-export const USER_SEND_BURST_MS = 15 * 60 * 1000;
-export const USER_SEND_DAY = 80;
+export { USER_SEND_BURST, USER_SEND_BURST_MS, USER_SEND_DAY, USER_SEND_PER_MIN };
+
 
 function isoAgo(ms: number): string {
   return new Date(Date.now() - ms).toISOString();

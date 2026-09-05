@@ -3,10 +3,11 @@ import {
   emptyCheckResults,
   mergeCheckResults,
   requiredChecksPassed,
+  stampCheck,
   type TelegramCheckId,
   type TelegramCheckResult,
 } from "./checks";
-import { TelegramError } from "./errors";
+import { TelegramError, isTerminalSessionError } from "./errors";
 import { withMtprotoLease } from "./lease.server";
 import {
   assertSessionLive,
@@ -21,7 +22,7 @@ import {
 } from "./session.server";
 import { fetchMe, pullInbox } from "./mtproto.server";
 import { redactPreview } from "./preview";
-import { appendMessage, getAccount, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
+import { appendMessage, getAccount, getChatPeer, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
 
 function scopedChatId(userId: string, dialogChatId: string): string {
   const uid = userId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 36);
@@ -30,23 +31,42 @@ function scopedChatId(userId: string, dialogChatId: string): string {
 
 const FRESH_MS = 45_000;
 
+/** Watching + live session. Not AI consent — `automation_armed` is separate. */
+export function sessionReadyForBackgroundWatch(
+  row:
+    | {
+        watching?: boolean | null;
+        session_enc?: string | null;
+        has_session?: boolean | null;
+        hasSession?: boolean | null;
+        auth_dead?: boolean | null;
+      }
+    | null
+    | undefined,
+): boolean {
+  const enc = row?.session_enc;
+  const hasEnc = typeof enc === "string" ? enc.length > 0 : Boolean(enc);
+  const hasSession = Boolean(row?.has_session ?? row?.hasSession ?? hasEnc);
+  return Boolean(row?.watching && hasSession && !row?.auth_dead);
+}
+
 export async function syncWatch(userId: string, opts?: { chatId?: string | null; historyLimit?: number; forceOnce?: boolean }) {
   const row = await getUserSession(userId);
   if (!row?.session_enc) {
     const chats = await (await import("./snapshot.server")).listChats(userId);
-    return { chats, messages: [] as Awaited<ReturnType<typeof import("./snapshot.server").listMessages>> };
+    return { chats, messages: [] as Awaited<ReturnType<typeof import("./snapshot.server").listMessages>>, liveOk: false };
   }
   if (row.auth_dead) {
     const { listChats, listMessages } = await import("./snapshot.server");
     const chats = await listChats(userId);
     const messages = opts?.chatId ? await listMessages(userId, opts.chatId) : [];
-    return { chats, messages };
+    return { chats, messages, liveOk: false };
   }
   if (!row.watching && !opts?.forceOnce) {
     const { listChats, listMessages } = await import("./snapshot.server");
     const chats = await listChats(userId);
     const messages = opts?.chatId ? await listMessages(userId, opts.chatId) : [];
-    return { chats, messages };
+    return { chats, messages, liveOk: false };
   }
   try {
     assertSessionLive(row);
@@ -54,7 +74,7 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
     const { listChats, listMessages } = await import("./snapshot.server");
     const chats = await listChats(userId);
     const messages = opts?.chatId ? await listMessages(userId, opts.chatId) : [];
-    if (err instanceof TelegramError && err.code === "flood") return { chats, messages };
+    if (err instanceof TelegramError && err.code === "flood") return { chats, messages, liveOk: false };
     throw err;
   }
 
@@ -63,16 +83,19 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
   if (fresh && !opts?.forceOnce && !opts?.chatId) {
     const { listChats } = await import("./snapshot.server");
     const chats = await listChats(userId);
-    return { chats, messages: [] as Awaited<ReturnType<typeof import("./snapshot.server").listMessages>> };
+    return { chats, messages: [] as Awaited<ReturnType<typeof import("./snapshot.server").listMessages>>, liveOk: true };
   }
   const skipDialogs = Boolean(fresh && opts?.chatId);
 
   const material = await decryptSessionMaterial(row);
+  const generation = Number(row.account_generation) || 1;
   let ingested = 0;
+  let liveOk = true;
   try {
     await withMtprotoLease(userId, async () => {
       const account = await getAccount(userId);
       const selfId = account?.telegramUserId ?? 0;
+      const focusPeer = opts?.chatId ? await getChatPeer(userId, opts.chatId) : null;
       const { dialogs, histories, session } = await pullInbox({
         apiId: material.apiId,
         apiHash: material.apiHash,
@@ -85,8 +108,10 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
         photoLimit: 0,
         focusChatId: opts?.chatId ?? null,
         skipDialogs,
+        focusAccessHash: focusPeer?.accessHash ?? null,
+        focusPeerKind: focusPeer?.peerKind ?? null,
       });
-      if (session !== material.session) await saveSignedIn({ userId, session });
+      if (session !== material.session) await saveSignedIn({ userId, session, generation });
 
       const openId = opts?.chatId ?? null;
       for (const dialog of dialogs) {
@@ -106,18 +131,9 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
           lastPreview: redactPreview(dialog.lastPreview),
           lastAt: dialog.lastAt,
           photoUrl: null,
+          accessHash: dialog.accessHash,
+          peerKind: dialog.peerKind,
         });
-        if (dialog.accessHash) {
-          try {
-            const sql = await getSql();
-            await sql.query(
-              `update telegram_chats set access_hash = $3 where user_id = $1 and id = $2`,
-              [userId, chatId, dialog.accessHash],
-            );
-          } catch {
-            /* column may not exist yet */
-          }
-        }
       }
 
       const byChat = new Map(histories.map((h) => [h.chatId, h.messages]));
@@ -133,7 +149,7 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
             telegramMessageId: msg.telegramMessageId,
             createdAt: msg.createdAt,
             bumpUnread: false,
-            aiStatus: msg.fromSelf ? "outbound" : "queued",
+            aiStatus: msg.fromSelf ? "outbound" : row.automation_armed ? "queued" : "held",
           });
           if (saved) ingested += 1;
         }
@@ -143,38 +159,44 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
         userId,
         chatsWatched: dialogs.length || row.chats_watched || 0,
         messagesIngested: (row.messages_ingested || 0) + ingested,
+        generation,
       });
     });
   } catch (err) {
+    liveOk = false;
     await persistMappedError(userId, err);
     const message = err instanceof TelegramError ? err.message : "Could not refresh Telegram.";
-    const hadChats = (row.chats_watched || 0) > 0;
     await recordSync({
       userId,
       chatsWatched: row.chats_watched || 0,
       messagesIngested: row.messages_ingested || 0,
-      error: hadChats ? "Last live refresh missed." : message,
+      error: message,
+      generation,
     });
   }
 
   const { listChats, listMessages } = await import("./snapshot.server");
   const chats = await listChats(userId);
   const messages = opts?.chatId ? await listMessages(userId, opts.chatId) : [];
-  return { chats, messages };
+  return { chats, messages, liveOk };
 }
 
 export async function runWatchChecks(userId: string): Promise<TelegramCheckResult[]> {
   const row = await getUserSession(userId);
   if (!row) throw new TelegramError("invalid", "Connect Telegram first.", 404);
   const now = new Date().toISOString();
+  const previous = mergeCheckResults(parseStored(row.checks_json));
   const results = emptyCheckResults();
-  const set = (id: TelegramCheckId, ok: boolean, detail: string) => {
+  const prev = (id: TelegramCheckId) => previous.find((r) => r.id === id);
+  const set = (id: TelegramCheckId, ok: boolean, detail: string, terminal = false) => {
     const item = results.find((r) => r.id === id);
-    if (item) {
-      item.ok = ok;
-      item.detail = detail;
-      item.ranAt = now;
-    }
+    if (!item) return;
+    const stamped = stampCheck(prev(id), { ok, detail, at: now, terminal });
+    item.ok = stamped.ok;
+    item.detail = stamped.detail;
+    item.ranAt = stamped.ranAt;
+    item.lastAttemptAt = stamped.lastAttemptAt;
+    item.lastSuccessAt = stamped.lastSuccessAt;
   };
 
   const account = await getAccount(userId);
@@ -185,7 +207,9 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
       assertSessionLive(row);
       const material = await decryptSessionMaterial(row);
       const { me, session } = await withMtprotoLease(userId, () => fetchMe(material));
-      if (session !== material.session) await saveSignedIn({ userId, session });
+      if (session !== material.session) {
+        await saveSignedIn({ userId, session, generation: Number(row.account_generation) || 1 });
+      }
       await upsertLinkedAccount({
         userId,
         telegramUserId: me.telegramUserId,
@@ -200,7 +224,8 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
       set("signed_in", true, me.username ? `@${me.username}` : me.firstName);
     } catch (err) {
       await persistMappedError(userId, err);
-      set("signed_in", false, err instanceof Error ? err.message : "Could not reach Telegram.");
+      const terminal = err instanceof TelegramError && isTerminalSessionError(err.code);
+      set("signed_in", false, err instanceof Error ? err.message : "Could not reach Telegram.", terminal);
       await saveChecks(userId, mergeCheckResults(results));
       return mergeCheckResults(results);
     }
@@ -209,13 +234,20 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
   await saveChecks(userId, mergeCheckResults(results));
 
   try {
-    const { chats } = await syncWatch(userId, { historyLimit: 8, forceOnce: true });
+    const { chats, liveOk } = await syncWatch(userId, { historyLimit: 8, forceOnce: true });
     const real = chats.filter((c) => c.kind === "user");
     const withPreview = real.filter((c) => c.lastPreview);
+    const latestAfter = await getUserSession(userId);
+    const terminal = Boolean(latestAfter?.auth_dead);
     set(
       "chats_visible",
-      real.length > 0,
-      real.length ? `${real.length} chats on this desk` : "No chats came through yet.",
+      liveOk,
+      liveOk
+        ? real.length
+          ? `${real.length} chats on this desk`
+          : "No chats on this account yet."
+        : latestAfter?.last_error || "Could not list chats just now.",
+      terminal,
     );
     const sql = await getSql();
     const msgCount = await sql.query<{ n: number }>(
@@ -223,29 +255,33 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
       [userId],
     );
     const n = msgCount[0]?.n ?? 0;
-    const readable = n > 0 || withPreview.length > 0;
     set(
       "messages_readable",
-      readable,
-      n
-        ? `${n} messages stored`
-        : withPreview.length
-          ? `Previews from ${withPreview.length} chats`
-          : "We listed chats but didn’t get message text yet.",
+      liveOk,
+      liveOk
+        ? n
+          ? `${n} messages stored`
+          : withPreview.length
+            ? `Previews from ${withPreview.length} chats`
+            : "No messages yet — that's fine on an empty account."
+        : latestAfter?.last_error || "Could not read messages just now.",
+      terminal,
     );
-    const latest = await getUserSession(userId);
+    const live = Boolean(latestAfter?.session_enc) && !latestAfter?.auth_dead;
     set(
       "watching_on",
-      Boolean(latest?.watching) && (Boolean(latest?.last_sync_at) || real.length > 0),
-      real.length
+      live,
+      latestAfter?.watching
         ? "Watching is on. New messages will land here."
-        : latest?.last_error || "Watching is on. New messages will land here.",
+        : "Watching can be turned on from settings. This check does not turn it on.",
+      terminal,
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not watch Telegram.";
-    set("chats_visible", false, message);
-    set("messages_readable", false, message);
-    set("watching_on", false, message);
+    const terminal = err instanceof TelegramError && isTerminalSessionError(err.code);
+    set("chats_visible", false, message, terminal);
+    set("messages_readable", false, message, terminal);
+    set("watching_on", false, message, terminal);
   }
 
   const latest = await getUserSession(userId);
@@ -273,6 +309,16 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
   const merged = mergeCheckResults(results);
   await saveChecks(userId, merged);
   return merged;
+}
+
+function parseStored(raw: string | null | undefined): TelegramCheckResult[] {
+  if (!raw) return emptyCheckResults();
+  try {
+    const parsed = JSON.parse(raw) as TelegramCheckResult[];
+    return Array.isArray(parsed) ? parsed : emptyCheckResults();
+  } catch {
+    return emptyCheckResults();
+  }
 }
 
 export async function finishWatchOnboarding(userId: string): Promise<void> {

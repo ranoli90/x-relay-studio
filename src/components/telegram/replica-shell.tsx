@@ -18,21 +18,26 @@ export function ReplicaShell() {
   const selectedChatId = useTelegram((s) => s.selectedChatId);
   const messages = useTelegram((s) => s.messages);
   const messagesLoading = useTelegram((s) => s.messagesLoading);
-  const sending = useTelegram((s) => s.sending);
+  const sendingChatId = useTelegram((s) => s.sendingChatId);
   const saving = useTelegram((s) => s.saving);
   const error = useTelegram((s) => s.error);
+  const errorSource = useTelegram((s) => s.errorSource);
   const folder = useTelegram((s) => s.folder);
   const notify = useTelegram((s) => s.notify);
+  const drafts = useTelegram((s) => s.drafts);
   const load = useTelegram((s) => s.load);
   const sync = useTelegram((s) => s.sync);
   const selectChat = useTelegram((s) => s.selectChat);
   const send = useTelegram((s) => s.send);
+  const setDraft = useTelegram((s) => s.setDraft);
   const setView = useTelegram((s) => s.setView);
   const setFolder = useTelegram((s) => s.setFolder);
   const setNotify = useTelegram((s) => s.setNotify);
   const saveProfile = useTelegram((s) => s.saveProfile);
   const setWatching = useTelegram((s) => s.setWatching);
+  const setAutomationArmed = useTelegram((s) => s.setAutomationArmed);
   const unlink = useTelegram((s) => s.unlink);
+  const dropSession = useTelegram((s) => s.dropSession);
   const clearError = useTelegram((s) => s.clearError);
   const { query, setQuery } = useChatQuery();
   const [confirmUnlink, setConfirmUnlink] = useState(false);
@@ -120,6 +125,7 @@ export function ReplicaShell() {
       notify={notify}
       onNotify={setNotify}
       onWatching={(on) => void setWatching(on)}
+      onAutomation={(on) => void setAutomationArmed(on)}
       onBack={() => setView("profile")}
       onUnlink={requestUnlink}
     />
@@ -130,13 +136,17 @@ export function ReplicaShell() {
       chat={selected}
       messages={messages}
       loading={messagesLoading}
-      sending={sending}
+      sending={sendingChatId === selectedChatId}
+      draft={selectedChatId ? (drafts[selectedChatId] ?? "") : ""}
       showBack={narrow}
+      onDraft={(value) => {
+        if (selectedChatId) setDraft(selectedChatId, value);
+      }}
       onBack={() => {
         void selectChat(null);
       }}
       onProfile={() => setView("peer")}
-      onSend={(body) => void send(body)}
+      onSend={(body) => send(body)}
     />
   );
 
@@ -145,8 +155,8 @@ export function ReplicaShell() {
   }
 
   return (
-    <div className="flex h-dvh flex-col overflow-hidden bg-bg text-fg">
-      <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-border bg-bg px-3 [padding-top:env(safe-area-inset-top)]">
+    <div className="flex h-dvh min-w-0 flex-col overflow-hidden bg-bg text-fg">
+      <header className="flex min-h-12 min-w-0 shrink-0 items-center gap-2 overflow-x-hidden border-b border-border bg-bg px-3 [padding-top:env(safe-area-inset-top)]">
         <Link
           to="/"
           className="flex min-w-0 items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
@@ -169,16 +179,25 @@ export function ReplicaShell() {
         ) : account?.preview ? (
           <span className="font-mono text-[11px] uppercase tracking-widest text-subtle">Preview</span>
         ) : null}
+        <Link
+          to="/agents"
+          className="ml-auto flex h-11 min-h-[44px] shrink-0 items-center px-2 text-xs text-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
+        >
+          Agents
+        </Link>
         {authEnabled ? (
           <button
             type="button"
-            className="ml-auto shrink-0 text-xs text-subtle hover:text-fg"
-            onClick={() => void signOut("/")}
+            className="min-h-[44px] shrink-0 px-2 text-xs text-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
+            onClick={() => {
+              dropSession();
+              void signOut("/");
+            }}
           >
             Sign out
           </button>
         ) : (
-          <Link to="/" className="ml-auto shrink-0 text-xs text-subtle hover:text-fg">
+          <Link to="/" className="shrink-0 text-xs text-subtle hover:text-fg">
             Home
           </Link>
         )}
@@ -198,7 +217,7 @@ export function ReplicaShell() {
             Connect Telegram first.
           </div>
         ) : (
-          <div className="tg-replica h-full min-h-0">
+          <div className="tg-replica h-full min-h-0 min-w-0 overflow-x-hidden">
             {narrow ? (
               <div className="relative h-full min-h-0 overflow-hidden">
                 {list}
@@ -241,7 +260,7 @@ export function ReplicaShell() {
                 </PushScreen>
               </div>
             ) : (
-              <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)_minmax(0,320px)]">
+              <div className="grid h-full min-h-0 min-w-0 grid-cols-1 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)_minmax(0,320px)]">
                 {list}
                 {view === "edit" ? (
                   <ProfileEdit
@@ -294,9 +313,13 @@ export function ReplicaShell() {
         )}
         {error ? (
           <p
-            className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-md border border-border bg-surface px-3 py-2 text-xs text-down shadow-sm"
+            className="absolute left-1/2 top-3 z-20 max-w-[min(100%-1.5rem,24rem)] -translate-x-1/2 rounded-md border border-border bg-surface px-3 py-2 text-xs text-down shadow-sm"
             role="alert"
+            data-error-source={errorSource ?? undefined}
           >
+            <span className="sr-only">
+              {errorSource === "provider" ? "Telegram error. " : errorSource === "local" ? "Error. " : ""}
+            </span>
             {error}
           </p>
         ) : null}

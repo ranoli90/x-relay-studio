@@ -25,20 +25,20 @@ export const TELEGRAM_CHECKS: TelegramCheckMeta[] = [
   {
     id: "chats_visible",
     title: "Chats are visible",
-    blurb: "Your real conversations can be listed here.",
+    blurb: "Your real conversations can be listed here. An empty account is fine.",
     required: true,
   },
   {
     id: "messages_readable",
     title: "Messages can be read",
-    blurb: "Recent messages from Telegram landed on this desk.",
+    blurb: "We can read message text when chats have any. Zero messages is valid.",
     required: true,
   },
   {
     id: "watching_on",
-    title: "Watching is on",
-    blurb: "New messages will keep arriving while this desk is open.",
-    required: true,
+    title: "Watching is ready",
+    blurb: "Watching stays off until you turn it on. This check does not flip it.",
+    required: false,
   },
   {
     id: "openrouter_ready",
@@ -57,6 +57,8 @@ export type TelegramCheckResult = {
   ok: boolean | null;
   detail: string | null;
   ranAt: string | null;
+  lastAttemptAt?: string | null;
+  lastSuccessAt?: string | null;
 };
 
 export function emptyCheckResults(): TelegramCheckResult[] {
@@ -65,6 +67,8 @@ export function emptyCheckResults(): TelegramCheckResult[] {
     ok: null,
     detail: null,
     ranAt: null,
+    lastAttemptAt: null,
+    lastSuccessAt: null,
   }));
 }
 
@@ -82,8 +86,50 @@ export function mergeCheckResults(
   }
   return TELEGRAM_CHECKS.map((meta) => {
     const existing = byId.get(meta.id);
-    return existing ?? { id: meta.id, ok: null, detail: null, ranAt: null };
+    if (!existing) return { id: meta.id, ok: null, detail: null, ranAt: null, lastAttemptAt: null, lastSuccessAt: null };
+    return {
+      id: meta.id,
+      ok: existing.ok ?? null,
+      detail: existing.detail ?? null,
+      ranAt: existing.ranAt ?? null,
+      lastAttemptAt: existing.lastAttemptAt ?? existing.ranAt ?? null,
+      lastSuccessAt:
+        existing.lastSuccessAt ?? (existing.ok === true ? existing.ranAt : null) ?? null,
+    };
   });
+}
+
+export function stampCheck(
+  previous: TelegramCheckResult | undefined,
+  input: { ok: boolean; detail: string; at?: string; terminal?: boolean },
+): Pick<TelegramCheckResult, "ok" | "detail" | "ranAt" | "lastAttemptAt" | "lastSuccessAt"> {
+  const at = input.at ?? new Date().toISOString();
+  if (input.ok) {
+    return {
+      ok: true,
+      detail: input.detail,
+      ranAt: at,
+      lastAttemptAt: at,
+      lastSuccessAt: at,
+    };
+  }
+  const lastSuccessAt = previous?.lastSuccessAt ?? (previous?.ok === true ? previous.ranAt : null) ?? null;
+  if (!input.terminal && previous?.ok === true) {
+    return {
+      ok: true,
+      detail: previous.detail ?? input.detail,
+      ranAt: at,
+      lastAttemptAt: at,
+      lastSuccessAt,
+    };
+  }
+  return {
+    ok: false,
+    detail: input.detail,
+    ranAt: at,
+    lastAttemptAt: at,
+    lastSuccessAt,
+  };
 }
 
 export function requiredChecksPassed(results: TelegramCheckResult[]): boolean {

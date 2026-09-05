@@ -24,6 +24,11 @@
   --color-line: rgb(243 241 234 / 0.12);
   --color-ok: #8aa084;
   --color-bad: #c47a72;
+  --color-tone-sage: #8aa084;
+  --color-tone-sand: #c4a574;
+  --color-tone-ink: #f3f1ea;
+  --color-tone-clay: #c47a72;
+  --color-tone-mist: #9a9690;
 
   --radius-sm: 8px;
   --radius-md: 12px;
@@ -105,6 +110,24 @@
     background-size: 200% 100%;
     animation: skeleton-shimmer 1.6s var(--ease-out) infinite;
   }
+
+  .floor-live-dot {
+    animation: floor-live-pulse 1.8s var(--ease-out) infinite;
+  }
+
+  .floor-typing-dot {
+    animation: floor-typing 1s var(--ease-out) infinite;
+  }
+  .floor-typing-dot:nth-child(2) {
+    animation-delay: 120ms;
+  }
+  .floor-typing-dot:nth-child(3) {
+    animation-delay: 240ms;
+  }
+
+  .floor-bubble-enter {
+    animation: floor-bubble-in var(--motion-fast) var(--ease-out) both;
+  }
 }
 
 @keyframes page-enter {
@@ -122,6 +145,55 @@
   }
   to {
     background-position: -100% 0;
+  }
+}
+
+@keyframes floor-live-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 0.7;
+  }
+  70% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+  100% {
+    transform: scale(2.4);
+    opacity: 0;
+  }
+}
+
+@keyframes floor-typing {
+  0%,
+  80%,
+  100% {
+    opacity: 0.28;
+    transform: translateY(0);
+  }
+  40% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
+}
+
+@keyframes floor-bubble-in {
+  from {
+    transform: translateY(8px);
+    opacity: 0.55;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .page-enter,
+  .skeleton-shimmer,
+  .floor-live-dot,
+  .floor-typing-dot,
+  .floor-bubble-enter {
+    animation: none;
   }
 }
 

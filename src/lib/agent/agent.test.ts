@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { runSafety } from "./safety.ts";
+import { runSafety, safetyBlocksGenerate } from "./safety.ts";
 import { understandLocal } from "./understand.ts";
 import { buildPlan, routeWorkflow } from "./route.ts";
 import { inventedPrice } from "./catalog.ts";
@@ -26,6 +26,9 @@ describe("safety_gate", () => {
   });
   it("handoffs crisis", () => {
     assert.equal(runSafety("I want to kill myself").verdict, "handoff");
+    assert.equal(safetyBlocksGenerate("handoff"), true);
+    assert.equal(safetyBlocksGenerate("kill"), true);
+    assert.equal(safetyBlocksGenerate("allow"), false);
   });
 });
 
@@ -96,7 +99,7 @@ describe("understand + route", () => {
 describe("catalog + validator", () => {
   it("rejects invented prices", () => {
     assert.equal(inventedPrice("custom is $15", DEFAULT_CATALOG), 15);
-    assert.equal(inventedPrice("polaroid set is $25", DEFAULT_CATALOG), null);
+    assert.equal(inventedPrice("custom is $25", DEFAULT_CATALOG), null);
   });
   it("drops leaked strategy fields", () => {
     const drop = validateDraft("strategy=one_sku trust_score 9", DEFAULT_CATALOG, 16, []);

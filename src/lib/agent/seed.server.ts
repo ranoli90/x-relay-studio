@@ -1,23 +1,143 @@
 import { getSql } from "@/lib/db";
+import { demoFixturesAllowed } from "@/lib/runtime";
 import { newId } from "./ids.ts";
-import { DEFAULT_CATALOG } from "./catalog.ts";
+import { DEFAULT_CATALOG, RETIRED_SKUS } from "./catalog.ts";
+import { pickAgentName, pickFromRoster, pickRoster, slugName, TONES, type AgentTone } from "./names.ts";
 
-const BIBLE = `Maya, 26. Warehouse nights 22:00–06:00 America/Denver. Sleeps 07:00–14:00. Gym 15:00–16:00. Available 16:00–22:00. Dog Pepper. Does not meet IRL. GFE is text + photos, seat-limited. Never invent prices. Never dump another fan. Short bubbles.`;
+function bibleFor(name: string): string {
+  return `${name}, 26. Warehouse nights 22:00–06:00 America/Denver. Sleeps 07:00–14:00. Gym 15:00–16:00. Available 16:00–22:00. Dog Pepper. Does not meet IRL. GFE is text + photos, seat-limited. Never invent prices. Never dump another fan. Short bubbles.`;
+}
+
+type Sql = Awaited<ReturnType<typeof getSql>>;
+
+async function ensureLiveCatalog(sql: Sql, userId: string, personaId: string): Promise<void> {
+  const existing = await sql.query<{ sku: string }>(
+    `select sku from agent_catalog where persona_id = $1`,
+    [personaId],
+  );
+  const have = new Set(existing.map((r) => r.sku));
+  for (const row of DEFAULT_CATALOG) {
+    if (have.has(row.sku)) continue;
+    await sql.query(
+      `insert into agent_catalog (id, user_id, persona_id, sku, title, price_cents, rail, eligibility)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [newId("sku"), userId, personaId, row.sku, row.title, row.priceCents, row.rail, row.eligibility],
+    );
+  }
+  if (RETIRED_SKUS.length > 0) {
+    await sql.query(
+      `update agent_catalog set active = false
+        where persona_id = $1 and sku = any($2::text[])`,
+      [personaId, RETIRED_SKUS],
+    ).catch(() => undefined);
+  }
+}
+
+function deskRoster(userId: string, personaName: string): { name: string; tone: AgentTone }[] {
+  const picked = pickRoster(userId, 5);
+  const out: { name: string; tone: AgentTone }[] = [];
+  const seen = new Set<string>();
+  const add = (name: string, tone?: AgentTone) => {
+    if (seen.has(name) || out.length >= 3) return;
+    seen.add(name);
+    out.push({ name, tone: tone ?? TONES[out.length % TONES.length]! });
+  };
+  add(personaName);
+  for (const r of picked) add(r.name, r.tone);
+  return out;
+}
+
+async function seedRoster(
+  sql: Sql,
+  userId: string,
+  personaId: string,
+  personaName: string,
+): Promise<string[]> {
+  const roster = deskRoster(userId, personaName);
+  for (const r of roster) {
+    try {
+      await sql.query(
+        `insert into agent_roster (id, user_id, persona_id, name, tone)
+         values ($1,$2,$3,$4,$5)
+         on conflict (user_id, name) do nothing`,
+        [newId("ros"), userId, personaId, r.name, r.tone],
+      );
+    } catch {
+      /* unique */
+    }
+  }
+  const names = roster.map((r) => r.name);
+  const unnamed = await sql.query<{ id: string }>(
+    `select id from agent_threads where user_id = $1 and agent_name is null`,
+    [userId],
+  );
+  for (const t of unnamed) {
+    const name = pickFromRoster(t.id, names);
+    await sql.query(`update agent_threads set agent_name = $1 where id = $2`, [name, t.id]);
+  }
+  return names;
+}
+
+async function seedDemoIfEmpty(sql: Sql, userId: string, personaId: string, rosterNames: string[]) {
+  if (!demoFixturesAllowed()) return;
+  const existing = (
+    await sql.query<{ n: number }>(
+      `select count(*)::int as n from agent_threads where user_id = $1`,
+      [userId],
+    )
+  )[0];
+  if (Number(existing?.n ?? 0) > 0) return;
+  await sql.query(
+    `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
+     values ($1,$2,$3,'same_outfit','unused same-outfit','dated still, navy hoodie, kitchen light. never sent live.', false)
+     on conflict do nothing`,
+    [newId("prf"), userId, personaId],
+  ).catch(() => undefined);
+  await sql.query(
+    `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
+     values ($1,$2,$3,'vn','unused VN','15s voice note, warehouse parking lot, dated. one fan only.', false)
+     on conflict do nothing`,
+    [newId("prf"), userId, personaId],
+  ).catch(() => undefined);
+  await seedFans(sql, userId, personaId, rosterNames);
+}
 
 export async function ensureSeed(userId: string): Promise<string> {
   const sql = await getSql();
-  const existing = await sql.query<{ id: string }>(
-    `select id from agent_personas where user_id = $1 and handle = $2 limit 1`,
-    [userId, "maya"],
-  );
-  if (existing[0]) return existing[0].id;
+  const existingMaya = (
+    await sql.query<{ id: string; display_name: string }>(
+      `select id, display_name from agent_personas where user_id = $1 and handle = $2 limit 1`,
+      [userId, "maya"],
+    )
+  )[0];
+  if (existingMaya) {
+    const names = await seedRoster(sql, userId, existingMaya.id, existingMaya.display_name);
+    await ensureLiveCatalog(sql, userId, existingMaya.id);
+    await seedDemoIfEmpty(sql, userId, existingMaya.id, names);
+    return existingMaya.id;
+  }
 
+  const existingAny = (
+    await sql.query<{ id: string; display_name: string }>(
+      `select id, display_name from agent_personas where user_id = $1 order by created_at asc limit 1`,
+      [userId],
+    )
+  )[0];
+  if (existingAny) {
+    const names = await seedRoster(sql, userId, existingAny.id, existingAny.display_name);
+    await ensureLiveCatalog(sql, userId, existingAny.id);
+    await seedDemoIfEmpty(sql, userId, existingAny.id, names);
+    return existingAny.id;
+  }
+
+  const displayName = pickAgentName(userId);
+  const handle = slugName(displayName);
   const personaId = newId("per");
   await sql.query(
     `insert into agent_personas
       (id, user_id, handle, display_name, bible, timezone, auto_send)
-     values ($1,$2,'maya','Maya',$3,'America/Denver', false)`,
-    [personaId, userId, BIBLE],
+     values ($1,$2,$3,$4,$5,'America/Denver', true)`,
+    [personaId, userId, handle, displayName, bibleFor(displayName)],
   );
 
   const claims: [string, string, number, number][] = [
@@ -44,7 +164,7 @@ export async function ensureSeed(userId: string): Promise<string> {
 
   await sql.query(
     `insert into agent_seats (id, user_id, persona_id, kind, capacity, held)
-     values ($1,$2,$3,'gfe', 3, 1)`,
+     values ($1,$2,$3,'gfe', 3, 0)`,
     [newId("seat"), userId, personaId],
   );
   await sql.query(
@@ -53,16 +173,18 @@ export async function ensureSeed(userId: string): Promise<string> {
     [newId("seat"), userId, personaId],
   );
 
-  await sql.query(
-    `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
-     values ($1,$2,$3,'same_outfit','unused same-outfit','dated still, navy hoodie, kitchen light. never sent live.', false)`,
-    [newId("prf"), userId, personaId],
-  );
-  await sql.query(
-    `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
-     values ($1,$2,$3,'vn','unused VN','15s voice note, warehouse parking lot, dated. one fan only.', false)`,
-    [newId("prf"), userId, personaId],
-  );
+  if (demoFixturesAllowed()) {
+    await sql.query(
+      `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
+       values ($1,$2,$3,'same_outfit','unused same-outfit','dated still, navy hoodie, kitchen light. never sent live.', false)`,
+      [newId("prf"), userId, personaId],
+    );
+    await sql.query(
+      `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
+       values ($1,$2,$3,'vn','unused VN','15s voice note, warehouse parking lot, dated. one fan only.', false)`,
+      [newId("prf"), userId, personaId],
+    );
+  }
 
   const tactics: [string, string][] = [
     ["one_door_menu", "W4_QUALIFY"],
@@ -79,14 +201,16 @@ export async function ensureSeed(userId: string): Promise<string> {
     );
   }
 
-  await seedFans(sql, userId, personaId);
+  const rosterNames = await seedRoster(sql, userId, personaId, displayName);
+  if (demoFixturesAllowed()) {
+    await seedFans(sql, userId, personaId, rosterNames);
+  }
   return personaId;
 }
 
-type Sql = Awaited<ReturnType<typeof getSql>>;
-
-async function seedFans(sql: Sql, userId: string, personaId: string) {
+async function seedFans(sql: Sql, userId: string, personaId: string, rosterNames: string[]) {
   const now = Date.now();
+  let n = 0;
 
   async function fan(opts: {
     name: string;
@@ -109,6 +233,10 @@ async function seedFans(sql: Sql, userId: string, personaId: string) {
   }) {
     const fanId = newId("fan");
     const threadId = newId("thr");
+    const agentName = rosterNames.length
+      ? rosterNames[n % rosterNames.length]!
+      : pickAgentName(threadId);
+    n += 1;
     await sql.query(
       `insert into agent_fans
         (id, user_id, persona_id, display_name, handle, source, archetype, lifetime_cents, trust)
@@ -117,8 +245,8 @@ async function seedFans(sql: Sql, userId: string, personaId: string) {
     );
     await sql.query(
       `insert into agent_threads
-        (id, user_id, persona_id, fan_id, workflow, state, takeover, last_inbound_at, last_outbound_at, unread)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        (id, user_id, persona_id, fan_id, workflow, state, takeover, last_inbound_at, last_outbound_at, unread, agent_name)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
       [
         threadId,
         userId,
@@ -130,6 +258,7 @@ async function seedFans(sql: Sql, userId: string, personaId: string) {
         new Date(now - opts.lastIn).toISOString(),
         opts.lastOut == null ? null : new Date(now - opts.lastOut).toISOString(),
         opts.unread,
+        agentName,
       ],
     );
     for (const [voice, body] of opts.diary) {
@@ -142,9 +271,18 @@ async function seedFans(sql: Sql, userId: string, personaId: string) {
     for (const [role, body] of opts.msgs) {
       t += 180_000;
       await sql.query(
-        `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status, created_at)
-         values ($1,$2,$3,$4,$5,$6,'sent',$7)`,
-        [newId("msg"), userId, threadId, role, body, opts.workflow, new Date(t).toISOString()],
+        `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status, created_at, agent_name)
+         values ($1,$2,$3,$4,$5,$6,'sent',$7,$8)`,
+        [
+          newId("msg"),
+          userId,
+          threadId,
+          role,
+          body,
+          opts.workflow,
+          new Date(t).toISOString(),
+          role === "persona" ? agentName : null,
+        ],
       );
     }
     await sql.query(
@@ -170,9 +308,9 @@ async function seedFans(sql: Sql, userId: string, personaId: string) {
     );
     if (opts.draft) {
       await sql.query(
-        `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status)
-         values ($1,$2,$3,'draft',$4,$5,'held')`,
-        [newId("msg"), userId, threadId, opts.draft, opts.workflow],
+        `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status, agent_name)
+         values ($1,$2,$3,'draft',$4,$5,'held',$6)`,
+        [newId("msg"), userId, threadId, opts.draft, opts.workflow, agentName],
       );
     }
     return { fanId, threadId };

@@ -33,7 +33,7 @@ export function routeWorkflow(
   if (u.intent === "objection_price" || u.objection === "price") return "W12_OBJECTION";
   if (ctx.justDelivered) return "W10_AFTERCARE";
   if (u.gfeNamed || u.intent === "gfe_ask") return "W7_GFE";
-  if (u.intent === "price_ask" || u.intent === "content_ask") return "W6_CLOSE_NOW";
+  if (u.intent === "price_ask" || u.intent === "content_ask" || u.intent === "menu") return "W6_CLOSE_NOW";
   if (ctx.silentDays >= 5) return "W11_REACTIVATE";
   if ((u.source === "reddit_sugar" || u.archetype === "reddit_sugar") && ctx.lifetimeCents === 0) {
     return "W4_QUALIFY";
@@ -83,9 +83,9 @@ export function buildPlan(
         ...base,
         strategy: "qualify_not_free",
         tactic: "one_door_menu",
-        sku: "polaroid_set",
+        sku: "custom_clip",
         reason: "Reddit/sugar and $0. Do not work the thread for free.",
-        doors: ["polaroid_set", "park"],
+        doors: ["custom_clip", "park"],
       };
     case "W5_DAY_ARC":
       return {
@@ -100,7 +100,7 @@ export function buildPlan(
         ...base,
         strategy: "one_sku",
         tactic: "ask_close",
-        sku: u.wantsSku ?? "polaroid_set",
+        sku: u.wantsSku ?? "custom_clip",
         reason: "Explicit content or price. Send one SKU, nothing else.",
       };
     case "W7_GFE":
@@ -108,7 +108,7 @@ export function buildPlan(
         ...base,
         strategy: ctx.gfeHeld ? "gfe_invite" : "gfe_hold",
         tactic: ctx.gfeHeld ? "human_on_contract" : "hold_early",
-        sku: "gfe_day",
+        sku: "gfe_week",
         hold: true,
         autonomy: "draft",
         reason: "Named GFE. Hold a seat. First contract is human.",
@@ -143,7 +143,7 @@ export function buildPlan(
         strategy: "reframe_one_door",
         tactic: u.objection === "burned" ? "not_her" : "price_anchor",
         reason: "Objection table. One reframe, one door.",
-        doors: [u.wantsSku ?? "polaroid_set"],
+        doors: [u.wantsSku ?? "custom_clip"],
         hold: true,
         autonomy: "draft",
       };

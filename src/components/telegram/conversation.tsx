@@ -5,13 +5,15 @@ import { mediaLabel, isServicePeer } from "@/lib/telegram/preview";
 import { cn } from "@/lib/utils";
 import { TgAvatar } from "./avatar";
 import { Composer } from "./composer";
-import { formatChatTime, formatDayLabel, sameDay } from "./format";
+import { formatChatTime, formatDayLabel, sameDay, tgFocusClass } from "./format";
 
 export function Conversation({
   chat,
   messages,
   loading,
   sending,
+  draft,
+  onDraft,
   onBack,
   onProfile,
   onSend,
@@ -21,22 +23,29 @@ export function Conversation({
   messages: TelegramMessage[];
   loading: boolean;
   sending: boolean;
+  draft: string;
+  onDraft: (value: string) => void;
   onBack: () => void;
   onProfile: () => void;
-  onSend: (body: string) => void;
+  onSend: (body: string) => void | Promise<boolean | void>;
   showBack: boolean;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
+  const hasSendingMsg = messages.some((m) => m.status === "sending");
+
   useEffect(() => {
     const el = scroller.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [chat?.id]);
+
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 96;
-    if (nearBottom) el.scrollTop = el.scrollHeight;
-  }, [messages.length]);
+    if (!nearBottom) return;
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    el.scrollTo({ top: el.scrollHeight, behavior: reduced ? "auto" : "smooth" });
+  }, [messages.length, sending]);
 
   if (!chat) {
     return (
@@ -51,13 +60,13 @@ export function Conversation({
   const showAuthor = chat.kind !== "user";
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg)]">
-      <header className="flex h-14 shrink-0 items-center gap-2 border-b border-white/5 px-2">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden bg-[var(--tg-bg)]">
+      <header className="flex h-14 min-w-0 shrink-0 items-center gap-2 border-b border-white/5 px-2">
         {showBack ? (
           <button
             type="button"
             onClick={onBack}
-            className="grid size-11 place-items-center text-[var(--tg-text)]"
+            className={cn("grid size-11 min-h-[44px] min-w-[44px] place-items-center text-[var(--tg-text)]", tgFocusClass)}
             aria-label="Back"
           >
             <ChevronLeft className="size-5" />
@@ -66,7 +75,10 @@ export function Conversation({
         <button
           type="button"
           onClick={onProfile}
-          className="flex min-w-0 flex-1 items-center gap-3 rounded-md px-1 py-1 text-left"
+          className={cn(
+            "flex min-h-[44px] min-w-0 flex-1 items-center gap-3 rounded-md px-1 py-1 text-left",
+            tgFocusClass,
+          )}
         >
           <TgAvatar name={chat.title} src={chat.photoUrl} size="sm" />
           <span className="min-w-0">
@@ -83,7 +95,7 @@ export function Conversation({
           </span>
         </button>
       </header>
-      <div ref={scroller} className="tg-thread min-h-0 flex-1 overflow-y-auto px-3 py-3">
+      <div ref={scroller} className="tg-thread min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3">
         {loading && messages.length === 0 ? (
           <p className="py-8 text-center text-sm text-[var(--tg-text-secondary)]">Loading…</p>
         ) : messages.length === 0 ? (
@@ -120,20 +132,24 @@ export function Conversation({
                         {msg.authorName}
                       </p>
                     ) : null}
-                    <p className="whitespace-pre-wrap break-words">{mediaLabel(msg.body)}</p>
+                    <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{mediaLabel(msg.body)}</p>
                     <p
                       className={cn(
                         "mt-1 flex items-center justify-end gap-1 text-[length:var(--tg-fs-time)]",
                         msg.fromSelf ? "text-[var(--tg-tick)]" : "text-[var(--tg-text-secondary)]",
                       )}
                     >
-                      {formatChatTime(msg.createdAt)}
-                      {msg.fromSelf ? (
-                        <Check
-                          className={cn("size-3", msg.status === "sending" ? "opacity-40" : "")}
-                          aria-label={msg.status === "sending" ? "Sending" : "Sent"}
-                        />
-                      ) : null}
+                      {msg.status === "sending" ? (
+                        <>
+                          Sending
+                          <SendingDots />
+                        </>
+                      ) : (
+                        <>
+                          {formatChatTime(msg.createdAt)}
+                          {msg.fromSelf ? <Check className="size-3" aria-label="Sent" /> : null}
+                        </>
+                      )}
                     </p>
                   </div>
                 </div>
@@ -141,8 +157,47 @@ export function Conversation({
             );
           })
         )}
+        {sending && !hasSendingMsg ? (
+          <div className="mb-1.5 flex justify-end">
+            <div className="rounded-2xl rounded-br-md bg-[var(--tg-own-bubble)] px-3 py-2 text-[var(--tg-own-text)]">
+              <span className="sr-only">Sending</span>
+              <SendingDots bright />
+            </div>
+          </div>
+        ) : null}
       </div>
-      <Composer disabled={sending || !writable} kind={chat.kind} onSend={onSend} />
+      <Composer
+        disabled={sending || !writable}
+        kind={chat.kind}
+        draft={draft}
+        onDraft={onDraft}
+        onSend={onSend}
+      />
     </div>
+  );
+}
+
+function SendingDots({ bright }: { bright?: boolean }) {
+  return (
+    <span className="inline-flex items-center gap-1" aria-hidden="true">
+      <span
+        className={cn(
+          "floor-typing-dot size-1 rounded-full",
+          bright ? "bg-[var(--tg-own-text)]" : "bg-[var(--tg-tick)]",
+        )}
+      />
+      <span
+        className={cn(
+          "floor-typing-dot size-1 rounded-full",
+          bright ? "bg-[var(--tg-own-text)]" : "bg-[var(--tg-tick)]",
+        )}
+      />
+      <span
+        className={cn(
+          "floor-typing-dot size-1 rounded-full",
+          bright ? "bg-[var(--tg-own-text)]" : "bg-[var(--tg-tick)]",
+        )}
+      />
+    </span>
   );
 }

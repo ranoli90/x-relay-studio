@@ -16,6 +16,31 @@ export function floodWaitLabel(floodUntil: string | null | undefined, now = Date
   return `${Math.ceil(left / 3600)} hr`;
 }
 
+export type WatchTerminal = "revoked" | "flood" | "dead" | null;
+
+export function watchTerminal(
+  watch: {
+    authDead?: boolean;
+    floodUntil?: string | null;
+    lastError?: string | null;
+  } | null | undefined,
+  now = Date.now(),
+): WatchTerminal {
+  if (watch?.authDead) {
+    if (/revok/i.test(watch.lastError ?? "")) return "revoked";
+    return "dead";
+  }
+  if (floodSecondsLeft(watch?.floodUntil, now) > 0) return "flood";
+  return null;
+}
+
+export function watchTerminalLabel(terminal: WatchTerminal): string | null {
+  if (terminal === "revoked") return "Telegram revoked this session. Connect again.";
+  if (terminal === "dead") return "Telegram signed this desk out. Connect again.";
+  if (terminal === "flood") return "Telegram asked this desk to wait.";
+  return null;
+}
+
 export function watchIsLocked(
   watch: {
     authDead?: boolean;

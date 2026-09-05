@@ -1,14 +1,28 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
-import { getSql } from "@/lib/db";
+import { getSql, withTransaction } from "@/lib/db";
+import { assertSimulatorAllowed } from "@/lib/runtime";
 import { ensureSeed } from "./seed.server.ts";
-import { processInbound, markPaid, tickAgentJobs } from "./brain.server.ts";
+import { processInbound, tickAgentJobs } from "./brain.server.ts";
+import { applyMarkPaid } from "./pay.ts";
 import { goldSummary } from "./eval.ts";
 import { clockLabel, clockParts, inWindow } from "./clock.ts";
 import { formatUsd } from "./catalog.ts";
+import { listActivity } from "./activity.server.ts";
+import {
+  applyApproveDraft,
+  applyMarkDelivered,
+  MessageIdSchema,
+  OfferIdSchema,
+  OperatorSendSchema,
+  SimulateInboundSchema,
+  ThreadToggleSchema,
+} from "./owned.ts";
+import { newId } from "./ids.ts";
 import type {
   CatalogRow,
   ClockSlot,
+  DeskRosterEntry,
   DeskSnapshot,
   OperatorDiary,
   OperatorMessage,
@@ -24,10 +38,22 @@ function iso(d: string | Date | null | undefined): string | null {
   return d instanceof Date ? d.toISOString() : String(d);
 }
 
+function kickAgentLoop(userId?: string) {
+  void import("./loop.server.ts")
+    .then((m) => {
+      if (userId) m.markDeskPresent(userId);
+      m.ensureAgentLoop();
+    })
+    .catch(() => {
+      /* in-process loop is best-effort */
+    });
+}
+
 export const loadDesk = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<DeskSnapshot> => {
     const userId = context.userId;
+    kickAgentLoop(userId);
     const personaId = await ensureSeed(userId);
     const sql = await getSql();
     const persona = (
@@ -37,8 +63,12 @@ export const loadDesk = createServerFn({ method: "GET" })
         display_name: string;
         timezone: string;
         auto_send: boolean;
+        background_run: boolean;
+        quiet_start: number;
+        quiet_end: number;
       }>(
-        `select id, handle, display_name, timezone, auto_send from agent_personas where id = $1`,
+        `select id, handle, display_name, timezone, auto_send, background_run, quiet_start, quiet_end
+           from agent_personas where id = $1`,
         [personaId],
       )
     )[0];
@@ -58,7 +88,7 @@ export const loadDesk = createServerFn({ method: "GET" })
     }));
     const now = new Date();
     const { hour, minute } = clockParts(now, persona.timezone);
-    const quiet = inWindow(hour, 23, 10);
+    const quiet = inWindow(hour, persona.quiet_start, persona.quiet_end);
     const seats = await sql.query<{ kind: string; capacity: number; held: number }>(
       `select kind, capacity, held from agent_seats where persona_id = $1`,
       [personaId],
@@ -100,6 +130,32 @@ export const loadDesk = createServerFn({ method: "GET" })
       [userId],
     );
     const evals = goldSummary();
+    const rosterRows = await sql.query<{
+      name: string;
+      tone: string;
+      thread_count: number;
+    }>(
+      `select r.name, r.tone,
+              (select count(*)::int from agent_threads t
+                where t.user_id = r.user_id and t.agent_name = r.name) as thread_count
+         from agent_roster r
+        where r.user_id = $1
+        order by r.created_at asc`,
+      [userId],
+    );
+    const activity = await listActivity(userId, 40);
+    const liveUntil = Date.now() - 120_000;
+    const roster: DeskRosterEntry[] = rosterRows.map((r) => {
+      const recent = activity.some(
+        (a) => a.agentName === r.name && Date.parse(a.createdAt) >= liveUntil,
+      );
+      return {
+        name: r.name,
+        tone: r.tone,
+        live: Boolean(persona.auto_send) && (Boolean(persona.background_run) || recent),
+        threadCount: Number(r.thread_count ?? 0),
+      };
+    });
     return {
       persona: {
         id: persona.id,
@@ -110,6 +166,8 @@ export const loadDesk = createServerFn({ method: "GET" })
         hour,
         clockLabel: clockLabel(hour, clock, minute),
         quiet,
+        backgroundRun: Boolean(persona.background_run),
+        agentName: persona.display_name,
       },
       seats,
       catalog: catalog.map(
@@ -144,6 +202,8 @@ export const loadDesk = createServerFn({ method: "GET" })
         total: evals.total,
         autoSendAllowed: evals.autoSendAllowed,
       },
+      roster,
+      activity,
     };
   });
 
@@ -165,14 +225,16 @@ async function listThreads(sql: Sql, userId: string): Promise<OperatorThread[]> 
     trust: number;
     last_inbound_at: string | Date | null;
     last_outbound_at: string | Date | null;
+    created_at: string | Date;
+    agent_name: string | null;
   }>(
     `select t.id, t.fan_id, f.display_name, f.handle, f.source, f.archetype,
             t.workflow, t.state, t.takeover, t.unread, f.lifetime_cents, f.trust,
-            t.last_inbound_at, t.last_outbound_at
+            t.last_inbound_at, t.last_outbound_at, t.created_at, t.agent_name
        from agent_threads t
        join agent_fans f on f.id = t.fan_id
       where t.user_id = $1
-      order by coalesce(t.last_inbound_at, t.created_at) desc`,
+      order by greatest(t.last_inbound_at, t.last_outbound_at, t.created_at) desc`,
     [userId],
   );
   const out: OperatorThread[] = [];
@@ -195,12 +257,29 @@ async function listThreads(sql: Sql, userId: string): Promise<OperatorThread[]> 
       takeover: r.takeover,
       unread: r.unread,
       lastPreview: last?.body ?? "",
-      lastAt: iso(r.last_inbound_at) ?? iso(r.last_outbound_at),
+      lastAt: latestIso(r.last_inbound_at, r.last_outbound_at, r.created_at),
       lifetimeCents: r.lifetime_cents,
       trust: r.trust,
+      agentName: r.agent_name,
     });
   }
   return out;
+}
+
+function latestIso(...vals: (string | Date | null | undefined)[]): string | null {
+  let best: number | null = null;
+  let bestIso: string | null = null;
+  for (const v of vals) {
+    const s = iso(v);
+    if (!s) continue;
+    const t = Date.parse(s);
+    if (!Number.isFinite(t)) continue;
+    if (best == null || t > best) {
+      best = t;
+      bestIso = s;
+    }
+  }
+  return bestIso;
 }
 
 export const loadThread = createServerFn({ method: "POST" })
@@ -222,9 +301,10 @@ export const loadThread = createServerFn({ method: "POST" })
       workflow: string | null;
       status: string;
       auto: boolean;
+      agent_name: string | null;
       created_at: string | Date;
     }>(
-      `select id, role, body, workflow, status, auto, created_at from agent_messages
+      `select id, role, body, workflow, status, auto, agent_name, created_at from agent_messages
         where thread_id = $1 order by created_at asc`,
       [data.threadId],
     );
@@ -315,6 +395,7 @@ export const loadThread = createServerFn({ method: "POST" })
         status: m.status,
         auto: m.auto,
         createdAt: iso(m.created_at) ?? "",
+        agentName: m.agent_name,
       })),
       thoughts: thoughts.map(
         (t): OperatorThought => ({
@@ -359,8 +440,9 @@ function safeJson(raw: string): string[] {
 
 export const simulateInbound = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { threadId?: string; text: string; scenario?: string }) => d)
+  .validator((d: unknown) => SimulateInboundSchema.parse(d))
   .handler(async ({ context, data }) => {
+    assertSimulatorAllowed("Inbound simulation");
     const text = (data.text || scenarioText(data.scenario)).slice(0, 2000);
     if (!text.trim()) throw new Error("Empty message.");
     return processInbound({
@@ -394,34 +476,18 @@ function scenarioText(id?: string): string {
 
 export const approveDraft = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { messageId: string; body?: string }) => d)
+  .validator((d: unknown) => MessageIdSchema.parse(d))
   .handler(async ({ context, data }) => {
-    const sql = await getSql();
-    const row = (
-      await sql.query<{ id: string; thread_id: string; body: string }>(
-        `select id, thread_id, body from agent_messages
-          where id = $1 and user_id = $2 and role = 'draft'`,
-        [data.messageId, context.userId],
-      )
-    )[0];
-    if (!row) throw new Error("Draft not found.");
-    const body = (data.body ?? row.body).trim();
-    await sql.query(
-      `update agent_messages set role = 'persona', status = 'sent', body = $1, auto = false
-        where id = $2`,
-      [body, row.id],
-    );
-    await sql.query(
-      `update agent_threads set last_outbound_at = now(), state = 'open', unread = 0
-        where id = $1 and user_id = $2`,
-      [row.thread_id, context.userId],
-    );
-    return { ok: true };
+    return withTransaction(async (sql) => {
+      const result = await applyApproveDraft(sql, context.userId, data.messageId, data.body);
+      if (!result.ok) throw new Error("Draft not found.");
+      return { ok: true as const, status: "approved" as const };
+    });
   });
 
 export const dropDraft = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { messageId: string }) => d)
+  .validator((d: unknown) => MessageIdSchema.parse(d))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql.query(
@@ -434,7 +500,7 @@ export const dropDraft = createServerFn({ method: "POST" })
 
 export const setTakeover = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { threadId: string; on: boolean }) => d)
+  .validator((d: unknown) => ThreadToggleSchema.parse(d))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql.query(
@@ -447,7 +513,7 @@ export const setTakeover = createServerFn({ method: "POST" })
 
 export const operatorSend = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { threadId: string; body: string }) => d)
+  .validator((d: unknown) => OperatorSendSchema.parse(d))
   .handler(async ({ context, data }) => {
     const body = data.body.trim().slice(0, 2000);
     if (!body) throw new Error("Empty.");
@@ -459,58 +525,50 @@ export const operatorSend = createServerFn({ method: "POST" })
       )
     )[0];
     if (!owned) throw new Error("Thread not found.");
-    const { newId } = await import("./ids.ts");
     await sql.query(
       `insert into agent_messages (id, user_id, thread_id, role, body, status, auto)
-       values ($1,$2,$3,'persona',$4,'sent', false)`,
+       values ($1,$2,$3,'persona',$4,'local', false)`,
       [newId("msg"), context.userId, data.threadId, body],
     );
     await sql.query(
-      `update agent_threads set last_outbound_at = now(), takeover = true, unread = 0
-        where id = $1`,
-      [data.threadId],
+      `update agent_threads set takeover = true, unread = 0
+        where id = $1 and user_id = $2`,
+      [data.threadId, context.userId],
     );
-    return { ok: true };
+    return { ok: true, status: "local" as const };
   });
 
 export const simulatePay = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { offerId: string }) => d)
+  .validator((d: unknown) => OfferIdSchema.parse(d))
   .handler(async ({ context, data }) => {
-    const sql = await getSql();
-    const offer = (
-      await sql.query<{ id: string; price_cents: number }>(
-        `select id, price_cents from agent_offers where id = $1 and user_id = $2`,
-        [data.offerId, context.userId],
-      )
-    )[0];
-    if (!offer) throw new Error("Offer not found.");
-    const { newId } = await import("./ids.ts");
-    return markPaid({
-      userId: context.userId,
-      offerId: offer.id,
-      rail: "throne",
-      externalId: newId("wh"),
-      amountCents: offer.price_cents,
+    assertSimulatorAllowed("Payment simulation");
+    return withTransaction(async (sql) => {
+      const offer = (
+        await sql.query<{ id: string; price_cents: number }>(
+          `select id, price_cents from agent_offers where id = $1 and user_id = $2`,
+          [data.offerId, context.userId],
+        )
+      )[0];
+      if (!offer) throw new Error("Offer not found.");
+      return applyMarkPaid(sql, context.userId, {
+        offerId: offer.id,
+        rail: "throne",
+        externalId: newId("wh"),
+        amountCents: offer.price_cents,
+      });
     });
   });
 
 export const markDelivered = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { offerId: string }) => d)
+  .validator((d: unknown) => OfferIdSchema.parse(d))
   .handler(async ({ context, data }) => {
-    const sql = await getSql();
-    await sql.query(
-      `update agent_offers set status = 'delivered', delivered_at = now()
-        where id = $1 and user_id = $2`,
-      [data.offerId, context.userId],
-    );
-    await sql.query(
-      `update agent_threads set workflow = 'W10_AFTERCARE', state = 'aftercare'
-        where id = (select thread_id from agent_offers where id = $1)`,
-      [data.offerId],
-    );
-    return { ok: true };
+    return withTransaction(async (sql) => {
+      const result = await applyMarkDelivered(sql, context.userId, data.offerId);
+      if (!result.ok) return { ok: false as const };
+      return { ok: true as const, attested: true as const };
+    });
   });
 
 export const patchDiary = createServerFn({ method: "POST" })
@@ -554,6 +612,21 @@ export const setAutoSend = createServerFn({ method: "POST" })
       personaId,
       context.userId,
     ]);
+    if (data.on) kickAgentLoop(context.userId);
+    return { ok: true, on: data.on };
+  });
+
+export const setBackgroundRun = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: { on: boolean }) => d)
+  .handler(async ({ context, data }) => {
+    const personaId = await ensureSeed(context.userId);
+    const sql = await getSql();
+    await sql.query(
+      `update agent_personas set background_run = $1 where id = $2 and user_id = $3`,
+      [data.on, personaId, context.userId],
+    );
+    if (data.on) kickAgentLoop(context.userId);
     return { ok: true, on: data.on };
   });
 

@@ -25,6 +25,7 @@ export const MessagesSchema = z.object({
 
 export const SyncSchema = z.object({
   chatId: ChatIdSchema.nullable().optional(),
+  historyLimit: z.number().int().min(1).max(200).optional(),
 });
 
 export const PreviewNameSchema = z.object({
@@ -58,6 +59,10 @@ export const OpenRouterKeySchema = z.object({
 
 export const WatchToggleSchema = z.object({
   watching: z.boolean(),
+});
+
+export const AutomationToggleSchema = z.object({
+  armed: z.boolean(),
 });
 
 export const ProfileSchema = z.object({

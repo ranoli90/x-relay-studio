@@ -10,6 +10,8 @@ import type {
   TelegramPath,
   TelegramAiStatus,
 } from "./types";
+import type { TelegramPeerKind } from "./peer";
+import { parseAccessHash, peerKindFromId } from "./peer";
 import { assertBioLimit, clampBio, safeHttpUrl, sanitizeUsername } from "./validate";
 import { redactPreview, redactSecretText } from "./preview";
 
@@ -193,7 +195,7 @@ export async function appendMessage(opts: {
   const id = newId("msg");
   const status: TelegramMessageStatus = opts.status ?? "sent";
   const aiStatus: TelegramAiStatus =
-    opts.aiStatus ?? (opts.fromSelf ? "outbound" : "queued");
+    opts.aiStatus ?? (opts.fromSelf ? "outbound" : "held");
   await sql.query(
     `insert into telegram_messages (id, user_id, chat_id, from_self, author_name, body, created_at, telegram_message_id, status, ai_status)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
@@ -327,24 +329,70 @@ export async function enterPreviewAccount(
 
 export async function listChats(userId: string): Promise<TelegramChat[]> {
   const sql = await getSql();
-  const rows = await sql.query<{
-    id: string;
-    kind: TelegramChat["kind"];
-    title: string;
-    photo_url: string | null;
-    last_preview: string | null;
-    last_at: string | Date | null;
-    unread: number;
-    pinned: boolean;
-    muted: boolean;
-    peer_id: string | null;
-  }>(
-    `select id, kind, title, photo_url, last_preview, last_at, unread, pinned, muted, peer_id
-       from telegram_chats where user_id = $1
-       order by pinned desc, last_at desc, title asc`,
-    [userId],
-  );
-  return rows.map((row) => ({
+  try {
+    const rows = await sql.query<{
+      id: string;
+      kind: TelegramChat["kind"];
+      title: string;
+      photo_url: string | null;
+      last_preview: string | null;
+      last_at: string | Date | null;
+      unread: number;
+      pinned: boolean;
+      muted: boolean;
+      peer_id: string | null;
+      access_hash: string | null;
+      peer_kind: string | null;
+    }>(
+      `select id, kind, title, photo_url, last_preview, last_at, unread, pinned, muted, peer_id, access_hash, peer_kind
+         from telegram_chats where user_id = $1
+         order by pinned desc, last_at desc, title asc`,
+      [userId],
+    );
+    return rows.map((row) => mapChatRow(row));
+  } catch {
+    const rows = await sql.query<{
+      id: string;
+      kind: TelegramChat["kind"];
+      title: string;
+      photo_url: string | null;
+      last_preview: string | null;
+      last_at: string | Date | null;
+      unread: number;
+      pinned: boolean;
+      muted: boolean;
+      peer_id: string | null;
+    }>(
+      `select id, kind, title, photo_url, last_preview, last_at, unread, pinned, muted, peer_id
+         from telegram_chats where user_id = $1
+         order by pinned desc, last_at desc, title asc`,
+      [userId],
+    );
+    return rows.map((row) => mapChatRow(row));
+  }
+}
+
+function mapChatRow(row: {
+  id: string;
+  kind: TelegramChat["kind"];
+  title: string;
+  photo_url: string | null;
+  last_preview: string | null;
+  last_at: string | Date | null;
+  unread: number;
+  pinned: boolean;
+  muted: boolean;
+  peer_id: string | null;
+  access_hash?: string | null;
+  peer_kind?: string | null;
+}): TelegramChat {
+  const peerKind =
+    row.peer_kind === "user" || row.peer_kind === "chat" || row.peer_kind === "channel"
+      ? row.peer_kind
+      : row.peer_id
+        ? peerKindFromId(row.peer_id)
+        : null;
+  return {
     id: row.id,
     kind: row.kind,
     title: row.title,
@@ -357,7 +405,9 @@ export async function listChats(userId: string): Promise<TelegramChat[]> {
     pinned: row.pinned,
     muted: row.muted,
     peerId: row.peer_id,
-  }));
+    accessHash: parseAccessHash(row.access_hash ?? null),
+    peerKind,
+  };
 }
 
 export async function markChatRead(userId: string, chatId: string): Promise<void> {
@@ -424,15 +474,51 @@ export async function getChatKind(
 export async function getChatPeer(
   userId: string,
   chatId: string,
-): Promise<{ kind: TelegramChat["kind"]; peerId: string | null } | null> {
+): Promise<{
+  kind: TelegramChat["kind"];
+  peerId: string | null;
+  accessHash: string | null;
+  peerKind: TelegramPeerKind | null;
+} | null> {
   const sql = await getSql();
-  const rows = await sql.query<{ kind: TelegramChat["kind"]; peer_id: string | null }>(
-    `select kind, peer_id from telegram_chats where user_id = $1 and id = $2`,
-    [userId, chatId],
-  );
-  const row = rows[0];
-  if (!row) return null;
-  return { kind: row.kind, peerId: row.peer_id };
+  try {
+    const rows = await sql.query<{
+      kind: TelegramChat["kind"];
+      peer_id: string | null;
+      access_hash: string | null;
+      peer_kind: string | null;
+    }>(
+      `select kind, peer_id, access_hash, peer_kind from telegram_chats where user_id = $1 and id = $2`,
+      [userId, chatId],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    const peerKind =
+      row.peer_kind === "user" || row.peer_kind === "chat" || row.peer_kind === "channel"
+        ? row.peer_kind
+        : row.peer_id
+          ? peerKindFromId(row.peer_id)
+          : null;
+    return {
+      kind: row.kind,
+      peerId: row.peer_id,
+      accessHash: parseAccessHash(row.access_hash),
+      peerKind,
+    };
+  } catch {
+    const rows = await sql.query<{ kind: TelegramChat["kind"]; peer_id: string | null }>(
+      `select kind, peer_id from telegram_chats where user_id = $1 and id = $2`,
+      [userId, chatId],
+    );
+    const row = rows[0];
+    if (!row) return null;
+    return {
+      kind: row.kind,
+      peerId: row.peer_id,
+      accessHash: null,
+      peerKind: row.peer_id ? peerKindFromId(row.peer_id) : null,
+    };
+  }
 }
 
 export async function savePeerPhoto(userId: string, peerId: string, bytes: Buffer): Promise<void> {
@@ -485,33 +571,80 @@ export async function upsertUserChat(opts: {
   lastPreview: string | null;
   lastAt: string | null;
   photoUrl?: string | null;
+  accessHash?: string | null;
+  peerKind?: TelegramPeerKind | null;
 }): Promise<void> {
   const sql = await getSql();
-  await sql.query(
-    `insert into telegram_chats (id, user_id, kind, title, last_preview, last_at, unread, pinned, muted, peer_id, photo_url)
-     values ($1,$2,'user',$3,$4,$5,$6,$7,$8,$9,$10)
-     on conflict (id) do update set
-       title = excluded.title,
-       last_preview = coalesce(excluded.last_preview, telegram_chats.last_preview),
-       last_at = coalesce(excluded.last_at, telegram_chats.last_at),
-       unread = excluded.unread,
-       pinned = excluded.pinned,
-       muted = excluded.muted,
-       peer_id = excluded.peer_id,
-       photo_url = coalesce(excluded.photo_url, telegram_chats.photo_url)`,
-    [
-      opts.id,
-      opts.userId,
-      opts.title.slice(0, 120),
-      opts.lastPreview,
-      opts.lastAt,
-      opts.unread,
-      opts.pinned,
-      opts.muted,
-      opts.peerId,
-      opts.photoUrl ?? null,
-    ],
-  );
+  const hash = parseAccessHash(opts.accessHash ?? null);
+  const kind = opts.peerKind ?? peerKindFromId(opts.peerId);
+  try {
+    await sql.query(
+      `insert into telegram_chats (id, user_id, kind, title, last_preview, last_at, unread, pinned, muted, peer_id, photo_url, access_hash, peer_kind)
+       values ($1,$2,'user',$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+       on conflict (id) do update set
+         title = excluded.title,
+         last_preview = coalesce(excluded.last_preview, telegram_chats.last_preview),
+         last_at = coalesce(excluded.last_at, telegram_chats.last_at),
+         unread = excluded.unread,
+         pinned = excluded.pinned,
+         muted = excluded.muted,
+         peer_id = excluded.peer_id,
+         photo_url = coalesce(excluded.photo_url, telegram_chats.photo_url),
+         access_hash = coalesce(excluded.access_hash, telegram_chats.access_hash),
+         peer_kind = coalesce(excluded.peer_kind, telegram_chats.peer_kind)`,
+      [
+        opts.id,
+        opts.userId,
+        opts.title.slice(0, 120),
+        opts.lastPreview,
+        opts.lastAt,
+        opts.unread,
+        opts.pinned,
+        opts.muted,
+        opts.peerId,
+        opts.photoUrl ?? null,
+        hash,
+        kind,
+      ],
+    );
+  } catch {
+    await sql.query(
+      `insert into telegram_chats (id, user_id, kind, title, last_preview, last_at, unread, pinned, muted, peer_id, photo_url)
+       values ($1,$2,'user',$3,$4,$5,$6,$7,$8,$9,$10)
+       on conflict (id) do update set
+         title = excluded.title,
+         last_preview = coalesce(excluded.last_preview, telegram_chats.last_preview),
+         last_at = coalesce(excluded.last_at, telegram_chats.last_at),
+         unread = excluded.unread,
+         pinned = excluded.pinned,
+         muted = excluded.muted,
+         peer_id = excluded.peer_id,
+         photo_url = coalesce(excluded.photo_url, telegram_chats.photo_url)`,
+      [
+        opts.id,
+        opts.userId,
+        opts.title.slice(0, 120),
+        opts.lastPreview,
+        opts.lastAt,
+        opts.unread,
+        opts.pinned,
+        opts.muted,
+        opts.peerId,
+        opts.photoUrl ?? null,
+      ],
+    );
+    try {
+      await sql.query(
+        `update telegram_chats
+            set access_hash = coalesce($3, access_hash),
+                peer_kind = coalesce($4, peer_kind)
+          where user_id = $1 and id = $2`,
+        [opts.userId, opts.id, hash, kind],
+      );
+    } catch {
+      /* access_hash / peer_kind columns may not exist yet */
+    }
+  }
 }
 
 export async function sendNote(
@@ -590,8 +723,76 @@ export async function unlinkAccount(userId: string): Promise<void> {
   const sql = await getSql();
   await sql.query(`delete from telegram_photos where user_id = $1`, [userId]);
   await sql.query(`delete from telegram_rate_events where user_id = $1`, [userId]);
+  await sql.query(`delete from telegram_send_intents where user_id = $1`, [userId]);
+  await sql.query(`delete from telegram_messages where user_id = $1`, [userId]);
+  await sql.query(`delete from telegram_chats where user_id = $1`, [userId]);
   await sql.query(`delete from telegram_accounts where user_id = $1`, [userId]);
   console.info("[telegram]", { event: "unlinked", userId });
+}
+
+export async function findRecentOutbound(
+  userId: string,
+  chatId: string,
+  body: string,
+  telegramMessageId?: string | number | null,
+): Promise<TelegramMessage | null> {
+  const sql = await getSql();
+  if (telegramMessageId != null && String(telegramMessageId)) {
+    const byId = await sql.query<{
+      id: string;
+      chat_id: string;
+      from_self: boolean;
+      author_name: string;
+      body: string;
+      created_at: string | Date;
+      status: string | null;
+    }>(
+      `select id, chat_id, from_self, author_name, body, created_at, status
+         from telegram_messages
+        where user_id = $1 and chat_id = $2 and telegram_message_id = $3
+        limit 1`,
+      [userId, chatId, Number(telegramMessageId)],
+    );
+    if (byId[0]) {
+      return {
+        id: byId[0].id,
+        chatId: byId[0].chat_id,
+        fromSelf: byId[0].from_self,
+        authorName: byId[0].author_name,
+        body: byId[0].body,
+        createdAt: iso(byId[0].created_at) ?? new Date().toISOString(),
+        status: byId[0].status === "sending" ? "sending" : "sent",
+      };
+    }
+  }
+  const rows = await sql.query<{
+    id: string;
+    chat_id: string;
+    from_self: boolean;
+    author_name: string;
+    body: string;
+    created_at: string | Date;
+    status: string | null;
+  }>(
+    `select id, chat_id, from_self, author_name, body, created_at, status
+       from telegram_messages
+      where user_id = $1 and chat_id = $2 and from_self = true and body = $3
+        and created_at > now() - interval '2 minutes'
+      order by created_at desc
+      limit 1`,
+    [userId, chatId, body],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return {
+    id: row.id,
+    chatId: row.chat_id,
+    fromSelf: row.from_self,
+    authorName: row.author_name,
+    body: row.body,
+    createdAt: iso(row.created_at) ?? new Date().toISOString(),
+    status: row.status === "sending" ? "sending" : "sent",
+  };
 }
 
 export async function createOidcTicket(opts: {

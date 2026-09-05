@@ -41,3 +41,9 @@ export const DEFAULT_CATALOG: CatalogRow[] = [
 ];
 
 export const RETIRED_SKUS = ["polaroid_set", "voice_note", "gfe_day"];
+
+export function liveSku(sku: string | null | undefined): string | null {
+  if (!sku) return null;
+  if (RETIRED_SKUS.includes(sku)) return "custom_clip";
+  return sku;
+}

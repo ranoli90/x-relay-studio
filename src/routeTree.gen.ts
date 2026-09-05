@@ -10,6 +10,7 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as AgentsRouteImport } from './routes/agents'
 import { Route as DeskRouteImport } from './routes/desk'
 import { Route as LoginRouteImport } from './routes/login'
 import { Route as PrivacyRouteImport } from './routes/privacy'
@@ -22,6 +23,7 @@ import { Route as TelegramIndexRouteImport } from './routes/telegram.index'
 import { Route as TelegramAppRouteImport } from './routes/telegram.app'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiCronStudioRouteImport } from './routes/api/cron/studio'
+import { Route as ApiPaymentsPlisioRouteImport } from './routes/api/payments/plisio'
 import { Route as ApiPaymentsWebhookRouteImport } from './routes/api/payments/webhook'
 import { Route as ApiTelegramPhotoRouteImport } from './routes/api/telegram/photo'
 import { Route as ApiRedditOauthCallbackRouteImport } from './routes/api/reddit/oauth/callback'
@@ -32,6 +34,11 @@ import { Route as ApiTelegramOidcCallbackRouteImport } from './routes/api/telegr
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AgentsRoute = AgentsRouteImport.update({
+  id: '/agents',
+  path: '/agents',
   getParentRoute: () => rootRouteImport,
 } as any)
 const DeskRoute = DeskRouteImport.update({
@@ -94,6 +101,11 @@ const ApiCronStudioRoute = ApiCronStudioRouteImport.update({
   path: '/api/cron/studio',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPaymentsPlisioRoute = ApiPaymentsPlisioRouteImport.update({
+  id: '/api/payments/plisio',
+  path: '/api/payments/plisio',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiPaymentsWebhookRoute = ApiPaymentsWebhookRouteImport.update({
   id: '/api/payments/webhook',
   path: '/api/payments/webhook',
@@ -127,6 +139,7 @@ const ApiTelegramOidcCallbackRoute = ApiTelegramOidcCallbackRouteImport.update({
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/agents': typeof AgentsRoute
   '/desk': typeof DeskRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
@@ -139,6 +152,7 @@ export interface FileRoutesByFullPath {
   '/telegram/': typeof TelegramIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/payments/plisio': typeof ApiPaymentsPlisioRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
   '/api/telegram/photo': typeof ApiTelegramPhotoRoute
   '/api/reddit/oauth/callback': typeof ApiRedditOauthCallbackRoute
@@ -148,6 +162,7 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/agents': typeof AgentsRoute
   '/desk': typeof DeskRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
@@ -159,6 +174,7 @@ export interface FileRoutesByTo {
   '/telegram': typeof TelegramIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/payments/plisio': typeof ApiPaymentsPlisioRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
   '/api/telegram/photo': typeof ApiTelegramPhotoRoute
   '/api/reddit/oauth/callback': typeof ApiRedditOauthCallbackRoute
@@ -169,6 +185,7 @@ export interface FileRoutesByTo {
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/agents': typeof AgentsRoute
   '/desk': typeof DeskRoute
   '/login': typeof LoginRoute
   '/privacy': typeof PrivacyRoute
@@ -181,6 +198,7 @@ export interface FileRoutesById {
   '/telegram/': typeof TelegramIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/payments/plisio': typeof ApiPaymentsPlisioRoute
   '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
   '/api/telegram/photo': typeof ApiTelegramPhotoRoute
   '/api/reddit/oauth/callback': typeof ApiRedditOauthCallbackRoute
@@ -192,6 +210,7 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/agents'
     | '/desk'
     | '/login'
     | '/privacy'
@@ -204,6 +223,7 @@ export interface FileRouteTypes {
     | '/telegram/'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/payments/plisio'
     | '/api/payments/webhook'
     | '/api/telegram/photo'
     | '/api/reddit/oauth/callback'
@@ -213,6 +233,7 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/agents'
     | '/desk'
     | '/login'
     | '/privacy'
@@ -224,6 +245,7 @@ export interface FileRouteTypes {
     | '/telegram'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/payments/plisio'
     | '/api/payments/webhook'
     | '/api/telegram/photo'
     | '/api/reddit/oauth/callback'
@@ -233,6 +255,7 @@ export interface FileRouteTypes {
   id:
     | '__root__'
     | '/'
+    | '/agents'
     | '/desk'
     | '/login'
     | '/privacy'
@@ -245,6 +268,7 @@ export interface FileRouteTypes {
     | '/telegram/'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/payments/plisio'
     | '/api/payments/webhook'
     | '/api/telegram/photo'
     | '/api/reddit/oauth/callback'
@@ -255,6 +279,7 @@ export interface FileRouteTypes {
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  AgentsRoute: typeof AgentsRoute
   DeskRoute: typeof DeskRoute
   LoginRoute: typeof LoginRoute
   PrivacyRoute: typeof PrivacyRoute
@@ -265,6 +290,7 @@ export interface RootRouteChildren {
   XRoute: typeof XRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiCronStudioRoute: typeof ApiCronStudioRoute
+  ApiPaymentsPlisioRoute: typeof ApiPaymentsPlisioRoute
   ApiPaymentsWebhookRoute: typeof ApiPaymentsWebhookRoute
   ApiTelegramPhotoRoute: typeof ApiTelegramPhotoRoute
   ApiRedditOauthCallbackRoute: typeof ApiRedditOauthCallbackRoute
@@ -280,6 +306,13 @@ declare module '@tanstack/react-router' {
       path: '/'
       fullPath: '/'
       preLoaderRoute: typeof IndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/agents': {
+      id: '/agents'
+      path: '/agents'
+      fullPath: '/agents'
+      preLoaderRoute: typeof AgentsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/desk': {
@@ -366,6 +399,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCronStudioRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/payments/plisio': {
+      id: '/api/payments/plisio'
+      path: '/api/payments/plisio'
+      fullPath: '/api/payments/plisio'
+      preLoaderRoute: typeof ApiPaymentsPlisioRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/payments/webhook': {
       id: '/api/payments/webhook'
       path: '/api/payments/webhook'
@@ -427,6 +467,7 @@ const TelegramRouteWithChildren = TelegramRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  AgentsRoute: AgentsRoute,
   DeskRoute: DeskRoute,
   LoginRoute: LoginRoute,
   PrivacyRoute: PrivacyRoute,
@@ -437,6 +478,7 @@ const rootRouteChildren: RootRouteChildren = {
   XRoute: XRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiCronStudioRoute: ApiCronStudioRoute,
+  ApiPaymentsPlisioRoute: ApiPaymentsPlisioRoute,
   ApiPaymentsWebhookRoute: ApiPaymentsWebhookRoute,
   ApiTelegramPhotoRoute: ApiTelegramPhotoRoute,
   ApiRedditOauthCallbackRoute: ApiRedditOauthCallbackRoute,

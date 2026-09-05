@@ -1,29 +1,27 @@
+import { createHash } from "node:crypto";
+
 const BANNED = /\breddit\b|\bsnoo\b/i;
 const APP_VERSION = "v0.2.0";
 
-export function deskParts(deskNumber: string) {
+/** Opaque token derived from the restore number. Digits never appear in public names. */
+export function opaqueDeskToken(deskNumber: string): string {
   const d = deskNumber.replace(/\D/g, "");
   if (d.length < 8) {
     throw new Error("A desk number is required before naming a Reddit app.");
   }
-  const head = d.slice(0, 4);
-  const tail = d.slice(-4);
-  return { head, tail, digits: d };
+  return createHash("sha256").update(`xrelay-reddit-app:${d}`).digest("hex").slice(0, 10);
 }
 
 export function appNameForDesk(deskNumber: string) {
-  const { head, tail } = deskParts(deskNumber);
-  return `Desk ${head} ${tail} mail`;
+  return `Desk mail ${opaqueDeskToken(deskNumber)}`;
 }
 
 export function appIdForDesk(deskNumber: string) {
-  const { head, tail } = deskParts(deskNumber);
-  return `desk.${head}.${tail}`;
+  return `desk.mail.${opaqueDeskToken(deskNumber)}`;
 }
 
 export function appDescriptionForDesk(deskNumber: string) {
-  const { head, tail } = deskParts(deskNumber);
-  return `Personal mail desk ${head}-${tail} for Reddit. Own inbox and health only. Not an official client.`;
+  return `Personal mail desk ${opaqueDeskToken(deskNumber)} for inbox and health only. Not an official client.`;
 }
 
 export function apiSignupBlurb(deskNumber: string) {

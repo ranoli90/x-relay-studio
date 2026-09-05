@@ -1,16 +1,19 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { timingSafeEqual } from "node:crypto";
-import { markPaid } from "@/lib/agent/brain.server";
+import { applyMarkPaid, FanPaySchema, fanWebhookAuthorized } from "@/lib/agent/pay";
+import { withTransaction } from "@/lib/db";
 
 function allowed(request: Request): boolean {
-  const secret = process.env.PAYMENTS_WEBHOOK_SECRET?.trim() || process.env.CRON_SECRET?.trim();
-  if (!secret) return false;
-  const header = request.headers.get("authorization") ?? "";
-  const expected = `Bearer ${secret}`;
-  const a = Buffer.from(header);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
+  return fanWebhookAuthorized(
+    request.headers.get("authorization"),
+    process.env.PAYMENTS_WEBHOOK_SECRET,
+  );
+}
+
+function json(status: number, body: Record<string, unknown>): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 export const Route = createFileRoute("/api/payments/webhook")({
@@ -18,40 +21,34 @@ export const Route = createFileRoute("/api/payments/webhook")({
     handlers: {
       POST: async ({ request }) => {
         if (!allowed(request)) {
-          return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
-            status: 401,
-            headers: { "content-type": "application/json" },
-          });
+          return json(401, { ok: false, error: "unauthorized" });
         }
-        let body: {
-          userId?: string;
-          offerId?: string;
-          rail?: string;
-          externalId?: string;
-          amountCents?: number;
-        };
+        let raw: unknown;
         try {
-          body = (await request.json()) as typeof body;
+          raw = await request.json();
         } catch {
-          return new Response(JSON.stringify({ ok: false, error: "bad json" }), {
-            status: 400,
-            headers: { "content-type": "application/json" },
-          });
+          return json(400, { ok: false, error: "bad json" });
         }
-        if (!body.userId || !body.offerId || !body.rail || !body.externalId || !body.amountCents) {
-          return new Response(JSON.stringify({ ok: false, error: "missing fields" }), {
-            status: 400,
-            headers: { "content-type": "application/json" },
-          });
+        const parsed = FanPaySchema.safeParse(raw);
+        if (!parsed.success) {
+          return json(400, { ok: false, error: "missing fields" });
         }
-        const res = await markPaid({
-          userId: body.userId,
-          offerId: body.offerId,
-          rail: body.rail,
-          externalId: body.externalId,
-          amountCents: body.amountCents,
-        });
-        return Response.json({ ok: res.ok, truth: "webhook" });
+        try {
+          const result = await withTransaction((sql) => applyMarkPaid(sql, null, parsed.data));
+          if (!result.ok) {
+            const status = result.reason === "not_found" ? 404 : 409;
+            return json(status, { ok: false, error: result.reason });
+          }
+          return json(200, {
+            ok: true,
+            replay: result.replay,
+            offerId: result.offerId,
+            threadId: result.threadId,
+            truth: "webhook",
+          });
+        } catch {
+          return json(500, { ok: false, error: "unavailable" });
+        }
       },
     },
   },

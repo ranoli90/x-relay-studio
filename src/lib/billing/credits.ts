@@ -30,6 +30,11 @@ export type BurnEvent = {
   availableCredits: number;
 };
 
+export type CreditHold = {
+  lotId: string;
+  units: 1;
+};
+
 export function decideBurn(e: BurnEvent): BurnDecision {
   if (e.safetyKilled) return { burn: false, reason: "killed" };
   if (e.alreadyBilled) return { burn: false, reason: "already_billed" };
@@ -72,6 +77,45 @@ export function takeOne(lots: Lot[], nowMs = Date.now()): { lots: Lot[]; took: L
     lots: lots.map((l) => (l.id === target.id ? { ...l, remaining: l.remaining - 1 } : { ...l })),
     took: target,
   };
+}
+
+/** Decrement one live lot. Caller must commit (keep it) or release. */
+export function reserveOne(lots: Lot[], nowMs = Date.now()): { lots: Lot[]; hold: CreditHold | null } {
+  const taken = takeOne(lots, nowMs);
+  if (!taken.took) return { lots: taken.lots, hold: null };
+  return { lots: taken.lots, hold: { lotId: taken.took.id, units: 1 } };
+}
+
+/** Put a reserved unit back. Failed model / killed work must call this. */
+export function release(lots: Lot[], hold: CreditHold): Lot[] {
+  return lots.map((lot) =>
+    lot.id === hold.lotId ? { ...lot, remaining: lot.remaining + hold.units } : { ...lot },
+  );
+}
+
+/**
+ * Reserve if the event is billable. Failed model / killed / parked / human-only
+ * never hold a lot. Live lot remaining is the authority for no_credits — a stale
+ * `availableCredits` on the event is ignored. On success the decrement is already
+ * applied; commit is keeping it.
+ */
+export function reserveAndCommit(
+  lots: Lot[],
+  event: BurnEvent,
+  nowMs = Date.now(),
+): { lots: Lot[]; hold: CreditHold | null; decision: BurnDecision } {
+  const decision = decideBurn({
+    ...event,
+    availableCredits: availableCredits(lots, nowMs),
+  });
+  if (!decision.burn) {
+    return { lots: lots.map((l) => ({ ...l })), hold: null, decision };
+  }
+  const reserved = reserveOne(lots, nowMs);
+  if (!reserved.hold) {
+    return { lots: reserved.lots, hold: null, decision: { burn: false, reason: "no_credits" } };
+  }
+  return { lots: reserved.lots, hold: reserved.hold, decision };
 }
 
 export function expireRefills(lots: Lot[], nowMs = Date.now()): Lot[] {
