@@ -16,7 +16,7 @@ import {
   saveChecks,
   saveSignedIn,
 } from "./session.server";
-import { fetchMe, pullDialogs, pullHistory, type PulledDialog } from "./mtproto.server";
+import { fetchMe, pullInbox } from "./mtproto.server";
 import { appendMessage, getAccount, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
 
 function scopedChatId(userId: string, dialogChatId: string): string {
@@ -40,18 +40,23 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
   const material = await decryptSessionMaterial(row);
   let ingested = 0;
   try {
-    const { dialogs, session } = await pullDialogs({
+    const account = await getAccount(userId);
+    const selfId = account?.telegramUserId ?? 0;
+    const { dialogs, histories, session } = await pullInbox({
       apiId: material.apiId,
       apiHash: material.apiHash,
       session: material.session,
-      limit: 20,
+      selfId,
+      dialogLimit: 20,
+      historyLimit: opts?.historyLimit ?? 8,
+      historyChats: opts?.chatId ? 1 : 3,
     });
     if (session !== material.session) await saveSignedIn({ userId, session });
 
-    const account = await getAccount(userId);
-    const selfId = account?.telegramUserId ?? 0;
     const selected = opts?.chatId ?? null;
-    const historyTargets = pickHistoryTargets(dialogs, selected);
+    const historyTargets = selected
+      ? dialogs.filter((d) => selected.endsWith(d.chatId) || selected.includes(d.chatId)).slice(0, 1)
+      : dialogs;
 
     for (const dialog of dialogs) {
       const chatId = scopedChatId(userId, dialog.chatId);
@@ -68,18 +73,12 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
       });
     }
 
-    const liveSession = session;
+    const byChat = new Map(histories.map((h) => [h.chatId, h.messages]));
     for (const dialog of historyTargets) {
+      const pulled = byChat.get(dialog.chatId);
+      if (!pulled) continue;
       const chatId = scopedChatId(userId, dialog.chatId);
-      const pulled = await pullHistory({
-        apiId: material.apiId,
-        apiHash: material.apiHash,
-        session: liveSession,
-        entity: dialog.entity,
-        limit: opts?.historyLimit ?? 30,
-        selfId,
-      });
-      for (const msg of pulled.messages) {
+      for (const msg of pulled) {
         const saved = await appendMessage({
           userId,
           chatId,
@@ -108,21 +107,12 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
       messagesIngested: row.messages_ingested || 0,
       error: message,
     });
-    if (err instanceof TelegramError) throw err;
   }
 
   const { listChats, listMessages } = await import("./snapshot.server");
   const chats = await listChats(userId);
   const messages = opts?.chatId ? await listMessages(userId, opts.chatId) : [];
   return { chats, messages };
-}
-
-function pickHistoryTargets(dialogs: PulledDialog[], selectedChatId: string | null): PulledDialog[] {
-  if (selectedChatId) {
-    const match = dialogs.find((d) => selectedChatId.endsWith(d.chatId) || selectedChatId.includes(d.chatId));
-    if (match) return [match];
-  }
-  return dialogs.slice(0, 3);
 }
 
 export async function runWatchChecks(userId: string): Promise<TelegramCheckResult[]> {
@@ -197,7 +187,9 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
     set(
       "watching_on",
       Boolean(latest?.watching) && (Boolean(latest?.last_sync_at) || real.length > 0),
-      latest?.last_error ? latest.last_error : "Watching is on. New messages will land here.",
+      real.length
+        ? "Watching is on. New messages will land here."
+        : latest?.last_error || "Watching is on. New messages will land here.",
     );
   } catch (err) {
     const message = err instanceof Error ? err.message : "Could not watch Telegram.";

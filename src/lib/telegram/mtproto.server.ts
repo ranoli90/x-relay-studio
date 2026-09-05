@@ -79,12 +79,14 @@ function mapRpc(err: unknown): TelegramError {
   }
   if (
     msg.includes("CONNECTION") ||
+    msg.includes("CONNECT") ||
     msg.includes("NETSOCKET") ||
     msg.includes("WAS LOST") ||
     msg.includes("TOOK TOO LONG") ||
     msg.includes("ECONN") ||
     msg.includes("ETIMEDOUT") ||
-    msg.includes("TIMEOUT")
+    msg.includes("TIMEOUT") ||
+    msg.includes(" DC ")
   ) {
     return new TelegramError("flood", "Telegram dropped the connection. Tap try again.", 503);
   }
@@ -109,7 +111,7 @@ async function withClient<T>(
     return { result, session };
   })();
   try {
-    return await withTimeout(work, 18_000, "connect");
+    return await withTimeout(work, 22_000, "connect");
   } catch (err) {
     if (err instanceof TelegramError) throw err;
     if (err instanceof lib.errors.SessionPasswordNeededError) {
@@ -302,6 +304,84 @@ export async function pullDialogs(opts: {
     },
   );
   return { dialogs: result, session };
+}
+
+export async function pullInbox(opts: {
+  apiId: number;
+  apiHash: string;
+  session: string;
+  selfId: number;
+  dialogLimit?: number;
+  historyLimit?: number;
+  historyChats?: number;
+}): Promise<{ dialogs: PulledDialog[]; histories: { chatId: string; messages: PulledMessage[] }[]; session: string }> {
+  const dialogLimit = opts.dialogLimit ?? 20;
+  const historyLimit = opts.historyLimit ?? 8;
+  const historyChats = opts.historyChats ?? 3;
+  const { result, session } = await withClient(
+    { apiId: opts.apiId, apiHash: opts.apiHash, session: opts.session },
+    async ({ client }) => {
+      const raw = (await client.getDialogs({ limit: dialogLimit })) as unknown as Record<
+        string,
+        unknown
+      >[];
+      const dialogs: PulledDialog[] = raw.map((d) => {
+        const unread = Number(d.unreadCount ?? 0);
+        const date = d.date ? new Date(Number(d.date) * 1000).toISOString() : null;
+        const message = d.message as Record<string, unknown> | undefined;
+        return {
+          chatId: dialogId(d as { id?: unknown }),
+          peerId: String(d.id ?? ""),
+          title: dialogTitle(d),
+          unread: Number.isFinite(unread) ? unread : 0,
+          pinned: Boolean(d.pinned),
+          muted: Boolean(d.archived),
+          lastPreview: message ? messageBody(message).slice(0, 140) || null : null,
+          lastAt: date,
+          entity: d.entity ?? d.id,
+        };
+      });
+      const histories: { chatId: string; messages: PulledMessage[] }[] = [];
+      for (const dialog of dialogs.slice(0, historyChats)) {
+        try {
+          const rawMsgs = (await client.getMessages(dialog.entity as never, {
+            limit: historyLimit,
+          })) as unknown as Record<string, unknown>[];
+          const out: PulledMessage[] = [];
+          for (const msg of rawMsgs) {
+            const id = Number(msg.id);
+            const body = messageBody(msg);
+            if (!Number.isFinite(id) || !body) continue;
+            const sender = (msg.sender ?? msg.fromId ?? {}) as Record<string, unknown>;
+            const fromSelf = Boolean(msg.out) || Number(sender.id) === opts.selfId;
+            const author =
+              (typeof sender.firstName === "string" && sender.firstName) ||
+              (typeof sender.title === "string" && sender.title) ||
+              (fromSelf ? "You" : "Telegram");
+            const createdAt = msg.date
+              ? new Date(Number(msg.date) * 1000).toISOString()
+              : new Date().toISOString();
+            out.push({
+              telegramMessageId: id,
+              fromSelf,
+              authorName: String(author),
+              body,
+              createdAt,
+            });
+          }
+          histories.push({ chatId: dialog.chatId, messages: out.reverse() });
+        } catch (err) {
+          console.info("[telegram]", {
+            event: "history_skip",
+            chatId: dialog.chatId,
+            message: err instanceof Error ? err.message.slice(0, 120) : "skip",
+          });
+        }
+      }
+      return { dialogs, histories };
+    },
+  );
+  return { ...result, session };
 }
 
 export async function pullHistory(opts: {
