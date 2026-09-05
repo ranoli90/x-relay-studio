@@ -1,4 +1,4 @@
-import { sha256Hex, timingSafeEqualString } from "@/lib/secrets";
+import { sha256Hex, timingSafeEqualString } from "../secrets.ts";
 
 const HEX64 = /^[a-f0-9]{64}$/;
 
