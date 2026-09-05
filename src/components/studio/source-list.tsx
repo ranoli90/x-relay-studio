@@ -23,6 +23,7 @@ export function SourceWorkspace() {
   const clearSelected = useStudio((s) => s.clearSelected);
   const selectAllVisible = useStudio((s) => s.selectAllVisible);
   const [draft, setDraft] = useState("");
+  const [composerOpen, setComposerOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<"all" | "pulling" | "live" | "error">("all");
   const retryErrors = useStudio((s) => s.retryErrors);
 
@@ -83,6 +84,7 @@ export function SourceWorkspace() {
           </p>
         </div>
 
+        {(mine.length === 0 || composerOpen) ? (
         <form onSubmit={onAdd} className="mt-4">
           <Textarea
             value={draft}
@@ -97,6 +99,11 @@ export function SourceWorkspace() {
             <Button type="submit" disabled={adding || parsed.length === 0}>
               {adding ? "Adding…" : parsed.length ? `Add ${parsed.length}` : "Add accounts"}
             </Button>
+            {mine.length > 0 && (
+              <button type="button" className="h-11 text-xs text-muted hover:text-fg" onClick={() => setComposerOpen(false)}>
+                Hide
+              </button>
+            )}
             <p className="text-xs text-subtle">
               {parsed.length
                 ? `${parsed.length} unique handle${parsed.length === 1 ? "" : "s"} · Enter+${typeof navigator !== "undefined" && /Mac/i.test(navigator.platform) ? "⌘" : "Ctrl"} to submit`
@@ -104,6 +111,15 @@ export function SourceWorkspace() {
             </p>
           </div>
         </form>
+        ) : (
+          <button
+            type="button"
+            className="mt-4 inline-flex h-11 items-center text-sm text-muted hover:text-fg"
+            onClick={() => setComposerOpen(true)}
+          >
+            Add more accounts
+          </button>
+        )}
       </div>
 
       {mine.length > 0 && (

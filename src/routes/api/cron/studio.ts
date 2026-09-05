@@ -19,8 +19,8 @@ export const Route = createFileRoute("/api/cron/studio")({
         }
         const { tickDueSources } = await import("@/lib/studio/sync.server");
         const { tickLiveAll } = await import("@/lib/studio/drip.server");
-        const scrape = await tickDueSources(3);
-        const live = await tickLiveAll(2);
+        const scrape = await tickDueSources(6);
+        const live = await tickLiveAll(4);
         return new Response(JSON.stringify({ ok: true, ...scrape, ...live }), {
           headers: { "content-type": "application/json" },
         });

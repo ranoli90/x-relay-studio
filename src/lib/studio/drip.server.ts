@@ -13,6 +13,8 @@ const WATCH_CATCHUP_MIN = 12;
 const MAX_WATCH_NEW = 3;
 const MAX_AHEAD = 8;
 const PUBS_PER_TICK = 2;
+const ORIGINALS_PER_TICK = 12;
+const WATCHES_PER_TICK = 4;
 const STOP = new Set(
   "the a an of to in for on with and or is it this that you we they i me my at as be by from not but if so just".split(
     " ",
@@ -518,16 +520,19 @@ async function duePublishers(sql: Sql, userId: string, limit: number): Promise<{
 export async function tickLiveForUser(userId: string): Promise<{ watch: number; queued: number }> {
   await seedStarterWatch(userId);
   const sql = await getSql();
-  const dueWatch = await dueWatches(sql, userId, 2);
+  const dueWatch = await dueWatches(sql, userId, WATCHES_PER_TICK);
   let watch = 0;
   for (const row of dueWatch) {
     watch += await tickWatchHandle(sql, userId, row);
   }
 
-  const pubs = await duePublishers(sql, userId, PUBS_PER_TICK);
   let queued = 0;
-  for (const pub of pubs) {
+  const originalPubs = await duePublishers(sql, userId, ORIGINALS_PER_TICK);
+  for (const pub of originalPubs) {
     if (await enqueueOriginal(sql, userId, pub.id)) queued += 1;
+  }
+  const llmPubs = await duePublishers(sql, userId, PUBS_PER_TICK);
+  for (const pub of llmPubs) {
     if (await enqueueWatchKind(sql, userId, pub.id, "reply")) queued += 1;
     if (await enqueueWatchKind(sql, userId, pub.id, "quote")) queued += 1;
   }
@@ -545,7 +550,7 @@ export async function fillQueue(
   if (!owned[0]) return { queued: 0, watch: 0, seeded: 0 };
   const seeded = await seedStarterWatch(userId);
   let watch = 0;
-  const dueWatch = await dueWatches(sql, userId, 2);
+  const dueWatch = await dueWatches(sql, userId, WATCHES_PER_TICK);
   for (const row of dueWatch) {
     watch += await tickWatchHandle(sql, userId, row);
   }

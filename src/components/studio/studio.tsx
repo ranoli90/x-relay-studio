@@ -7,6 +7,7 @@ import { LiveView } from "@/components/studio/live-view";
 import { SourceDetail } from "@/components/studio/source-detail";
 import { SourceWorkspace } from "@/components/studio/source-list";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { UserButton } from "@/lib/auth/gates";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
@@ -120,11 +121,10 @@ function Header() {
         <label className="min-w-0 sm:hidden">
           <span className="sr-only">Posting account</span>
           <select
-            className="h-11 max-w-36 truncate rounded-md border border-border bg-bg px-2 font-mono text-sm text-fg"
+            className="h-11 max-w-44 truncate rounded-md border border-border bg-bg px-2 font-mono text-sm text-fg"
             value={selectedPublisherId ?? ""}
             onChange={(e) => {
               selectPublisher(e.target.value);
-              setTab("sources");
             }}
           >
             {publishers.map((p) => (
@@ -210,9 +210,16 @@ function Sidebar({ booting }: { booting: boolean }) {
   const selectedPublisherId = useStudio((s) => s.selectedPublisherId);
   const selectPublisher = useStudio((s) => s.selectPublisher);
   const sources = useStudio((s) => s.sources);
-  const setTab = useStudio((s) => s.setTab);
   const [adding, setAdding] = useState(false);
+  const [pubQuery, setPubQuery] = useState("");
   const removePublisher = useStudio((s) => s.removePublisher);
+  const visiblePublishers = useMemo(() => {
+    const q = pubQuery.trim().toLowerCase().replace(/^@/, "");
+    if (!q) return publishers;
+    return publishers.filter(
+      (p) => p.handle.toLowerCase().includes(q) || p.name.toLowerCase().includes(q),
+    );
+  }, [publishers, pubQuery]);
 
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-r border-border bg-bg sm:flex">
@@ -225,6 +232,15 @@ function Sidebar({ booting }: { booting: boolean }) {
       </div>
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
         <p className="px-2 pb-2 font-mono text-xs uppercase tracking-widest text-subtle">Posting as</p>
+        {publishers.length > 5 && (
+          <Input
+            value={pubQuery}
+            onChange={(e) => setPubQuery(e.target.value)}
+            placeholder={`Filter ${publishers.length} accounts`}
+            className="mb-2 h-10"
+            aria-label="Filter posting accounts"
+          />
+        )}
         {booting && publishers.length === 0 ? (
           <ul className="grid gap-1">
             <li className="flex items-center gap-2 rounded-lg px-2 py-2">
@@ -244,7 +260,7 @@ function Sidebar({ booting }: { booting: boolean }) {
           </ul>
         ) : (
           <ul className="grid gap-1">
-            {publishers.map((p) => {
+            {visiblePublishers.map((p) => {
               const count = sources.filter((s) => s.publisherId === p.id).length;
               const active = p.id === selectedPublisherId;
               return (
@@ -253,7 +269,6 @@ function Sidebar({ booting }: { booting: boolean }) {
                     type="button"
                     onClick={() => {
                       selectPublisher(p.id);
-                      setTab("sources");
                       setAdding(false);
                     }}
                     className={cn(

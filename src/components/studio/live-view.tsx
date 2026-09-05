@@ -2,6 +2,7 @@ import { Check, Copy, ExternalLink, Trash2 } from "lucide-react";
 import { useMemo, useState, type FormEvent } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { parseHandles, STARTER_WATCH } from "@/lib/studio/handles";
 import type { OutboxItem, OutboxKind } from "@/lib/studio/types";
@@ -25,7 +26,15 @@ export function LiveView() {
   const markOutbox = useStudio((s) => s.markOutbox);
   const fillQueue = useStudio((s) => s.fillQueue);
   const [draft, setDraft] = useState("");
+  const [watchQuery, setWatchQuery] = useState("");
   const parsed = parseHandles(draft);
+  const visibleWatch = useMemo(() => {
+    const q = watchQuery.trim().toLowerCase().replace(/^@/, "");
+    if (!q) return watch;
+    return watch.filter(
+      (w) => w.handle.toLowerCase().includes(q) || w.name.toLowerCase().includes(q),
+    );
+  }, [watch, watchQuery]);
 
   const ready = useMemo(
     () => outbox.filter((o) => o.status === "due" && o.readyNow),
@@ -96,7 +105,18 @@ export function LiveView() {
               your own. This list is not per source.
             </li>
           )}
-          {watch.map((w) => (
+          {watch.length > 8 && (
+            <li className="py-2">
+              <Input
+                value={watchQuery}
+                onChange={(e) => setWatchQuery(e.target.value)}
+                placeholder={`Filter ${watch.length} creators`}
+                className="h-10"
+                aria-label="Filter watch list"
+              />
+            </li>
+          )}
+          {visibleWatch.map((w) => (
             <li key={w.id} className="flex items-center gap-3 py-2">
               <span className="size-8 overflow-hidden rounded-full bg-surface-2">
                 {w.avatar ? (
@@ -149,6 +169,13 @@ export function LiveView() {
             </Button>
             <Button onClick={openNextFive} disabled={ready.length === 0}>
               Open next 5
+            </Button>
+            <Button
+              variant="ghost"
+              disabled={ready.length === 0}
+              onClick={() => void markOutbox(ready.slice(0, 5).map((item) => item.id), "sent")}
+            >
+              Mark 5 sent
             </Button>
           </div>
         </div>
