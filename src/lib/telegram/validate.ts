@@ -80,7 +80,7 @@ export function parseOrThrow<S extends z.ZodType>(schema: S, input: unknown): z.
 
 export function parsedStartLogin(
   input: z.infer<typeof StartLoginSchema>,
-  platform?: { apiId: number; apiHash: string } | null,
+  deskApp?: { apiId: number; apiHash: string } | null,
 ): {
   apiId: number;
   apiHash: string;
@@ -88,12 +88,13 @@ export function parsedStartLogin(
 } {
   const phone = normalizePhone(input.phone);
   if (!phone) throw new TelegramError("invalid", "Use a full phone number with country code.", 400);
-  // Per-desk keys from my.telegram.org win. Platform env is only a fallback so
-  // every account does not cluster on one api_id from Vercel IPs.
+  // Posted keys from this request, else keys already stored on THIS desk.
+  // Never fall back to process.env TELEGRAM_API_ID — that clusters every
+  // signed-out / new desk onto one unofficial client from Vercel IPs.
   const postedId = input.apiId ? parseApiId(input.apiId) : null;
   const postedHash = input.apiHash ? parseApiHash(input.apiHash) : null;
-  const apiId = postedId ?? platform?.apiId ?? null;
-  const apiHash = postedHash ?? platform?.apiHash ?? null;
+  const apiId = postedId ?? deskApp?.apiId ?? null;
+  const apiHash = postedHash ?? deskApp?.apiHash ?? null;
   if (!apiId || !apiHash) {
     throw new TelegramError(
       "not_configured",
