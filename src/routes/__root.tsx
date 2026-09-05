@@ -16,7 +16,7 @@ const fetchSessionUser = createServerFn({ method: "GET" }).handler(async () => {
 
 export const Route = createRootRoute({
   beforeLoad: async () => ({ sessionUser: await fetchSessionUser() }),
-  staleTime: 60_000,
+  staleTime: 0,
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -25,21 +25,16 @@ export const Route = createRootRoute({
       {
         name: "description",
         content:
-          "Sign in the X account you’ll post with, assign public sources in bulk, sync the full archive, and rewrite every post with OpenRouter.",
+          "Anonymous 16-digit desk. Attach your own X, Telegram, or Reddit account. We do not create a platform login for you.",
       },
       { name: "theme-color", content: "#09090b" },
+      { name: "robots", content: "noindex, nofollow" },
     ],
     links: [
       { rel: "icon", type: "image/svg+xml", href: "/favicon.svg" },
       { rel: "stylesheet", href: appCss },
       { rel: "manifest", href: "/__grok/manifest.webmanifest" },
       { rel: "apple-touch-icon", href: "/__grok/icon-180.png" },
-      { rel: "preconnect", href: "https://fonts.googleapis.com" },
-      { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
-      {
-        rel: "stylesheet",
-        href: "https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Instrument+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap",
-      },
     ],
   }),
   component: () => (
@@ -48,6 +43,9 @@ export const Route = createRootRoute({
         <HeadContent />
       </head>
       <body className="bg-bg text-fg">
+        <a href="#main" className="skip-link">
+          Skip to content
+        </a>
         <PreviewHostBridge />
         <AuthProvider>
           <Outlet />
@@ -55,7 +53,8 @@ export const Route = createRootRoute({
         <NavVeil />
         <Toaster
           theme="dark"
-          position="bottom-right"
+          position="top-center"
+          offset={{ top: "calc(12px + env(safe-area-inset-top, 0px))" }}
           toastOptions={{
             style: {
               background: "#121214",
