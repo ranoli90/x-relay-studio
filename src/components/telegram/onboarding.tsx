@@ -4,6 +4,7 @@ import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { TELEGRAM_CHECKS, requiredChecksPassed } from "@/lib/telegram/checks";
+import { TELEGRAM_APP_FORM, appFormUrl, titleLooksOfficial } from "@/lib/telegram/app-form";
 import {
   telegramFinishOnboardingFn,
   telegramRunAllChecksFn,
@@ -14,15 +15,16 @@ import {
 import type { TelegramOnboardingStep, TelegramStatus } from "@/lib/telegram/types";
 import { cn } from "@/lib/utils";
 
-const STEPS: TelegramOnboardingStep[] = ["welcome", "phone", "code", "password", "checks"];
+const STEPS: TelegramOnboardingStep[] = ["welcome", "app", "phone", "code", "password", "checks"];
 
 const STEP_INDEX: Record<TelegramOnboardingStep, number> = {
   welcome: 0,
-  phone: 1,
-  code: 2,
-  password: 3,
-  checks: 4,
-  done: 5,
+  app: 1,
+  phone: 2,
+  code: 3,
+  password: 4,
+  checks: 5,
+  done: 6,
 };
 
 function initialStep(status: TelegramStatus | null): TelegramOnboardingStep {
@@ -50,6 +52,9 @@ export function TelegramOnboarding({
 }) {
   const [step, setStep] = useState<TelegramOnboardingStep>(() => initialStep(status));
   const [live, setLive] = useState(status);
+  const [apiId, setApiId] = useState("");
+  const [apiHash, setApiHash] = useState("");
+  const needsAppKeys = Boolean(live?.needsAppKeys ?? status?.needsAppKeys);
 
   useEffect(() => {
     setLive(status);
@@ -66,7 +71,7 @@ export function TelegramOnboarding({
       <div className="page-enter w-full max-w-md">
         <Logo />
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">Telegram</p>
-        <StepDots step={step} />
+        <StepDots step={step} needsAppKeys={needsAppKeys} />
         {error ? (
           <p className="mt-4 text-sm text-down" role="alert">
             {error}
@@ -76,15 +81,28 @@ export function TelegramOnboarding({
         {step === "welcome" ? (
           <WelcomeStep
             displayName={displayName}
-            onContinue={() => setStep("phone")}
+            needsAppKeys={needsAppKeys}
+            onContinue={() => setStep(needsAppKeys ? "app" : "phone")}
             onPreview={onPreview}
+          />
+        ) : null}
+        {step === "app" ? (
+          <AppKeysStep
+            apiId={apiId}
+            apiHash={apiHash}
+            onApiId={setApiId}
+            onApiHash={setApiHash}
+            onBack={() => setStep("welcome")}
+            onContinue={() => setStep("phone")}
           />
         ) : null}
         {step === "phone" ? (
           <PhoneStep
-            needsAppKeys={Boolean(live?.needsAppKeys ?? status?.needsAppKeys)}
+            needsAppKeys={needsAppKeys}
+            apiId={apiId}
+            apiHash={apiHash}
             phoneHint={live?.watch?.phoneHint ?? status?.watch?.phoneHint}
-            onBack={() => setStep("welcome")}
+            onBack={() => setStep(needsAppKeys ? "app" : "welcome")}
             onSent={(next) => {
               setLive(next);
               setStep(next.step === "password" ? "password" : "code");
@@ -124,16 +142,17 @@ export function TelegramOnboarding({
   );
 }
 
-function StepDots({ step }: { step: TelegramOnboardingStep }) {
-  const idx = STEP_INDEX[step];
+function StepDots({ step, needsAppKeys }: { step: TelegramOnboardingStep; needsAppKeys: boolean }) {
+  const visible = needsAppKeys ? STEPS : STEPS.filter((id) => id !== "app");
+  const idx = visible.indexOf(step);
   return (
     <ol className="mt-6 flex gap-1.5" aria-label="Setup steps">
-      {STEPS.map((id, i) => (
+      {visible.map((id, i) => (
         <li
           key={id}
           className={cn(
             "h-1 flex-1 rounded-full",
-            i <= idx ? "bg-accent" : "bg-surface-2",
+            i <= Math.max(idx, 0) ? "bg-accent" : "bg-surface-2",
           )}
         />
       ))}
@@ -156,10 +175,12 @@ function Back({ onClick }: { onClick: () => void }) {
 
 function WelcomeStep({
   displayName,
+  needsAppKeys,
   onContinue,
   onPreview,
 }: {
   displayName?: string;
+  needsAppKeys: boolean;
   onContinue: () => void;
   onPreview: () => void;
 }) {
@@ -169,20 +190,22 @@ function WelcomeStep({
       <p className="mt-3 text-sm leading-relaxed text-muted">
         {displayName ? `${displayName}, this ` : "This "}
         is your real account — not a bot. We watch your chats and messages so later you can start
-        automation. Sending still happens as you. OpenRouter is already set.
+        automation. Sending still happens as you.
       </p>
       <ol className="mt-6 grid gap-3 rounded-xl border border-border bg-surface p-4 text-sm leading-relaxed">
+        {needsAppKeys ? (
+          <li>
+            <span className="font-mono text-xs text-subtle">01</span>
+            <p className="mt-1 text-fg">Register this desk as a Web app at my.telegram.org</p>
+          </li>
+        ) : null}
         <li>
-          <span className="font-mono text-xs text-subtle">01</span>
+          <span className="font-mono text-xs text-subtle">{needsAppKeys ? "02" : "01"}</span>
           <p className="mt-1 text-fg">Sign in with the phone on your Telegram</p>
         </li>
         <li>
-          <span className="font-mono text-xs text-subtle">02</span>
+          <span className="font-mono text-xs text-subtle">{needsAppKeys ? "03" : "02"}</span>
           <p className="mt-1 text-fg">Enter the login code Telegram sends you</p>
-        </li>
-        <li>
-          <span className="font-mono text-xs text-subtle">03</span>
-          <p className="mt-1 text-fg">We’ll pull your chats and turn watching on</p>
         </li>
       </ol>
       <div className="mt-8 grid gap-3">
@@ -207,20 +230,163 @@ function WelcomeStep({
   );
 }
 
+function CopyRow({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="rounded-xl border border-border bg-surface px-4 py-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-xs text-subtle">{label}</p>
+          <p className="mt-1 break-all font-mono text-sm text-fg">{value}</p>
+          {hint ? <p className="mt-1 text-xs leading-relaxed text-muted">{hint}</p> : null}
+        </div>
+        <button
+          type="button"
+          className="shrink-0 rounded-md border border-border px-2 py-1 text-xs text-muted hover:text-fg"
+          onClick={() => {
+            void navigator.clipboard.writeText(value).then(() => {
+              setCopied(true);
+              window.setTimeout(() => setCopied(false), 1500);
+            });
+          }}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function AppKeysStep({
+  apiId,
+  apiHash,
+  onApiId,
+  onApiHash,
+  onBack,
+  onContinue,
+}: {
+  apiId: string;
+  apiHash: string;
+  onApiId: (value: string) => void;
+  onApiHash: (value: string) => void;
+  onBack: () => void;
+  onContinue: () => void;
+}) {
+  const origin = typeof window !== "undefined" ? window.location.origin : "";
+  const url = appFormUrl(origin);
+  const ready = apiId.trim().length >= 4 && apiHash.trim().length >= 16;
+  const officialTitle = titleLooksOfficial(TELEGRAM_APP_FORM.title);
+
+  return (
+    <>
+      <Back onClick={onBack} />
+      <h1 className="mt-2 text-3xl font-medium tracking-tight">Create the Web app.</h1>
+      <p className="mt-3 text-sm leading-relaxed text-muted">
+        Telegram requires every third-party desk to register its own numbers. Use the same phone as
+        your Telegram. Type the values below exactly. Then paste the api_id and api_hash it gives
+        you.
+      </p>
+      <a
+        href={TELEGRAM_APP_FORM.toolsPath}
+        target="_blank"
+        rel="noreferrer"
+        className="mt-4 inline-flex h-11 items-center justify-center rounded-md border border-border px-4 text-sm text-fg"
+      >
+        Open my.telegram.org/apps
+      </a>
+      <ol className="mt-6 grid gap-2 text-sm leading-relaxed text-muted">
+        <li>
+          <span className="font-mono text-xs text-subtle">1</span>
+          <p className="mt-1 text-fg">Log in with the phone already on Telegram.</p>
+        </li>
+        <li>
+          <span className="font-mono text-xs text-subtle">2</span>
+          <p className="mt-1 text-fg">Open API development tools → Create new application.</p>
+        </li>
+        <li>
+          <span className="font-mono text-xs text-subtle">3</span>
+          <p className="mt-1 text-fg">Fill the form with these values. Create application.</p>
+        </li>
+      </ol>
+      <div className="mt-5 grid gap-2">
+        <CopyRow label="App title" value={TELEGRAM_APP_FORM.title} hint="Do not type Telegram here." />
+        <CopyRow
+          label="Short name"
+          value={TELEGRAM_APP_FORM.shortName}
+          hint="5–32 letters and numbers. No spaces."
+        />
+        <CopyRow label="URL" value={url} />
+        <CopyRow
+          label="Platform"
+          value={TELEGRAM_APP_FORM.platform}
+          hint="Tap Web. Do not leave Android, iOS, or Desktop selected — that looks like a fake official app and can freeze the account."
+        />
+        <CopyRow label="Description" value={TELEGRAM_APP_FORM.description} />
+      </div>
+      <div className="mt-5 rounded-xl border border-down/40 bg-down/10 p-4 text-sm leading-relaxed">
+        <p className="font-medium text-fg">Stay safe</p>
+        <ul className="mt-2 grid gap-1.5 text-muted">
+          <li>Platform must be Web. Android is the default and it is the wrong choice.</li>
+          <li>Never copy api_id / api_hash from a friend, a blog, or Telegram Desktop.</li>
+          <li>These numbers stay encrypted on this desk. They are not a bot token.</li>
+          {officialTitle ? <li>Title must not be the word Telegram.</li> : null}
+        </ul>
+      </div>
+      <form
+        className="mt-6 grid gap-3"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (ready) onContinue();
+        }}
+      >
+        <p className="text-sm text-fg">After it creates, copy the two values it shows:</p>
+        <Input
+          value={apiId}
+          onChange={(e) => onApiId(e.target.value)}
+          placeholder="api_id  (a number)"
+          autoComplete="off"
+          inputMode="numeric"
+          name="telegram-api-id"
+          aria-label="API ID"
+        />
+        <Input
+          value={apiHash}
+          onChange={(e) => onApiHash(e.target.value)}
+          placeholder="api_hash  (32 letters and numbers)"
+          autoComplete="off"
+          spellCheck={false}
+          name="telegram-api-hash"
+          aria-label="API hash"
+        />
+        <Button
+          type="submit"
+          size="lg"
+          className="h-12 w-full justify-center text-base"
+          disabled={!ready}
+        >
+          I copied both — continue
+        </Button>
+      </form>
+    </>
+  );
+}
+
 function PhoneStep({
   needsAppKeys,
+  apiId,
+  apiHash,
   phoneHint,
   onBack,
   onSent,
 }: {
   needsAppKeys: boolean;
+  apiId: string;
+  apiHash: string;
   phoneHint?: string | null;
   onBack: () => void;
   onSent: (status: TelegramStatus) => void;
 }) {
   const [phone, setPhone] = useState("");
-  const [apiId, setApiId] = useState("");
-  const [apiHash, setApiHash] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -268,30 +434,6 @@ function PhoneStep({
           name="telegram-phone"
           aria-label="Phone number"
         />
-        {needsAppKeys ? (
-          <>
-            <p className="text-xs leading-relaxed text-subtle">
-              One-time: API ID and API hash from my.telegram.org → API development tools. We keep
-              them with this desk.
-            </p>
-            <Input
-              value={apiId}
-              onChange={(e) => setApiId(e.target.value)}
-              placeholder="API ID"
-              autoComplete="off"
-              inputMode="numeric"
-              aria-label="Telegram API ID"
-            />
-            <Input
-              value={apiHash}
-              onChange={(e) => setApiHash(e.target.value)}
-              placeholder="API hash"
-              autoComplete="off"
-              spellCheck={false}
-              aria-label="Telegram API hash"
-            />
-          </>
-        ) : null}
         {err ? (
           <p className="text-sm text-down" role="alert">
             {err}

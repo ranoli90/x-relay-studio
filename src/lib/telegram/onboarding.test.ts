@@ -14,6 +14,7 @@ import {
   TELEGRAM_CHECKS,
 } from "./checks.ts";
 import { decryptSecret, encryptSecret } from "./crypto.server.ts";
+import { TELEGRAM_APP_FORM, isUnsafePlatform, titleLooksOfficial } from "./app-form.ts";
 import { normalizePhone, parseApiHash, parseApiId } from "./phone.ts";
 
 describe("bot token", () => {
@@ -76,5 +77,16 @@ describe("phone and app numbers", () => {
     assert.equal(parseApiId("12"), null);
     assert.equal(parseApiHash("0123456789abcdef0123456789abcdef"), "0123456789abcdef0123456789abcdef");
     assert.equal(parseApiHash("nope"), null);
+  });
+});
+
+describe("my.telegram.org form values", () => {
+  it("does not impersonate Telegram", () => {
+    assert.equal(titleLooksOfficial(TELEGRAM_APP_FORM.title), false);
+    assert.equal(titleLooksOfficial("Telegram"), true);
+    assert.equal(TELEGRAM_APP_FORM.platform, "Web");
+    assert.equal(isUnsafePlatform("Android"), true);
+    assert.equal(isUnsafePlatform("Web"), false);
+    assert.match(TELEGRAM_APP_FORM.shortName, /^[A-Za-z0-9]{5,32}$/);
   });
 });

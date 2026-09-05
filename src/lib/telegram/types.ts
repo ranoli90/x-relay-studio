@@ -8,6 +8,7 @@ export type TelegramFolder = "all" | "personal" | "saved";
 
 export type TelegramOnboardingStep =
   | "welcome"
+  | "app"
   | "phone"
   | "code"
   | "password"
