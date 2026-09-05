@@ -51,6 +51,12 @@ function mapRpc(err: unknown): TelegramError {
   if (msg.includes("AUTH_KEY") || msg.includes("SESSION_REVOKED") || msg.includes("SESSION_EXPIRED")) {
     return new TelegramError("unlinked", "Telegram signed this desk out. Connect again.", 401);
   }
+  if (msg.includes("CANNOT FIND PACKAGE") || msg.includes("CANNOT FIND MODULE")) {
+    return new TelegramError("not_configured", "Telegram client failed to load on this server. Try again in a minute.", 500);
+  }
+  if (msg.includes("TIMEOUT") || msg.includes("ETIMEDOUT") || msg.includes("ECONN")) {
+    return new TelegramError("flood", "Telegram didn’t answer in time. Try again.", 504);
+  }
   console.info("[telegram]", { event: "mtproto_error", message: raw.slice(0, 180) });
   return new TelegramError("invalid", "Telegram didn’t accept that. Try again.", 400);
 }
