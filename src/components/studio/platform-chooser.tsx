@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
   return (
-    <main className="grid min-h-dvh place-items-center bg-bg px-4 py-10 text-fg">
+    <main id="main" className="grid min-h-dvh place-items-center bg-bg px-4 py-10 text-fg">
       <div className="page-enter w-full max-w-4xl">
         <div className="flex items-start justify-between gap-4">
           <Logo />
@@ -20,11 +20,25 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
           Desk {formatDeskNumber(deskNumber)}. Pick a platform.
         </h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
-          That number is the only login we keep. X, Telegram, and Reddit each
-          connect their own account on top of it. Reddit is the orange door.
+          That number is the only login we keep. Operator is the desk OS.
+          X, Telegram, and Reddit each connect their own account on top of it.
         </p>
 
-        <div className="mt-8 grid grid-cols-1 gap-3 min-[520px]:grid-cols-3">
+        <div className="mt-8 grid grid-cols-1 gap-3 min-[520px]:grid-cols-2">
+          <PlatformCard
+            to="/desk"
+            label="Operator"
+            kicker="Primary"
+            description="Telegram-clone desk. Thought stream, diary, catalog, approve or hold. The LLM is a mouth with tools."
+            icon={<DeskTile />}
+          />
+          <PlatformCard
+            to="/telegram"
+            label="Telegram"
+            kicker="Connect"
+            description="Your account. Watch chats. Queued inbound hits the brain."
+            icon={<TelegramTile />}
+          />
           <PlatformCard
             to="/x"
             label="X"
@@ -33,17 +47,10 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
             icon={<XTile />}
           />
           <PlatformCard
-            to="/telegram"
-            label="Telegram"
-            kicker="Open"
-            description="Your account. Watch chats. Send as you."
-            icon={<TelegramTile />}
-          />
-          <PlatformCard
             to="/reddit"
             label="Reddit"
             kicker="Connect"
-            description="Create the Reddit app, Allow, health, then inbox."
+            description="Create the Reddit app, Allow, health, then inbox. Sugar qualify lives on the desk."
             icon={<RedditTile />}
             accent
           />
@@ -61,7 +68,7 @@ function PlatformCard({
   icon,
   accent,
 }: {
-  to: "/x" | "/telegram" | "/reddit";
+  to: "/x" | "/telegram" | "/reddit" | "/desk";
   label: string;
   kicker: string;
   description: string;
@@ -86,6 +93,17 @@ function PlatformCard({
       <h2 className="mt-2 text-xl font-medium tracking-tight">{label}</h2>
       <p className="mt-2 text-sm leading-relaxed text-muted">{description}</p>
     </Link>
+  );
+}
+
+function DeskTile() {
+  return (
+    <span className="grid size-16 place-items-center rounded-lg bg-fg text-bg" aria-hidden="true">
+      <svg viewBox="0 0 24 24" className="size-7" fill="none" stroke="currentColor" strokeWidth="1.7">
+        <rect x="3" y="5" width="18" height="14" rx="2" />
+        <path d="M3 10h18M8 14h4" strokeLinecap="round" />
+      </svg>
+    </span>
   );
 }
 

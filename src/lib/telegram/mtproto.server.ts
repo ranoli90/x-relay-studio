@@ -55,6 +55,9 @@ function mapRpc(err: unknown): TelegramError {
   if (msg.includes("PASSWORD_HASH_INVALID") || msg.includes("PASSWORD_EMPTY")) {
     return new TelegramError("invalid", "That cloud password didn’t match.", 400);
   }
+  if (msg.includes("SESSION_PASSWORD_NEEDED") || msg.includes("PASSWORD_REQUIRED")) {
+    return new TelegramError("password", "Cloud password required.", 401);
+  }
   if (msg.includes("API_ID_INVALID") || msg.includes("API_ID_PUBLISHED_FLOOD")) {
     return new TelegramError(
       "invalid",
@@ -94,4 +97,287 @@ function mapRpc(err: unknown): TelegramError {
   }
   console.info("[telegram]", { event: "mtproto_error", message: raw.slice(0, 180) });
   return new TelegramError("invalid", "Telegram didn’t accept that. Try again.", 400);
+}
+
+type Creds = { apiId: number; apiHash: string; session?: string };
+
+async function openClient(creds: Creds) {
+  const lib = await loadLib();
+  const session = new lib.sessions.StringSession(creds.session ?? "");
+  const client = new lib.TelegramClient(session, creds.apiId, creds.apiHash, clientOpts());
+  await withTimeout(client.connect(), 12_000, "connect");
+  return { lib, client, save: () => String(client.session.save() ?? creds.session ?? "") };
+}
+
+async function closeClient(client: { disconnect?: () => Promise<void> | void }) {
+  try {
+    await client.disconnect?.();
+  } catch {
+    /* ignore */
+  }
+}
+
+export async function sendLoginCode(opts: {
+  apiId: number;
+  apiHash: string;
+  phone: string;
+}): Promise<{ phoneCodeHash: string; session: string }> {
+  const { client, save } = await openClient(opts);
+  try {
+    const sent = await withTimeout(
+      client.sendCode({ apiId: opts.apiId, apiHash: opts.apiHash }, opts.phone),
+      15_000,
+      "send code",
+    );
+    const phoneCodeHash = String(
+      (sent as { phoneCodeHash?: string; phone_code_hash?: string }).phoneCodeHash ??
+        (sent as { phone_code_hash?: string }).phone_code_hash ??
+        "",
+    );
+    if (!phoneCodeHash) {
+      throw new TelegramError("invalid", "Telegram did not send a login code.", 400);
+    }
+    return { phoneCodeHash, session: save() };
+  } catch (err) {
+    throw mapRpc(err);
+  } finally {
+    await closeClient(client);
+  }
+}
+
+export async function signInWithCode(opts: {
+  apiId: number;
+  apiHash: string;
+  session: string;
+  phone: string;
+  phoneCodeHash: string;
+  code: string;
+}): Promise<{ needsPassword: boolean; session: string }> {
+  const { lib, client, save } = await openClient(opts);
+  try {
+    await withTimeout(
+      client.invoke(
+        new lib.Api.auth.SignIn({
+          phoneNumber: opts.phone,
+          phoneCodeHash: opts.phoneCodeHash,
+          phoneCode: opts.code,
+        }),
+      ),
+      15_000,
+      "sign in",
+    );
+    return { needsPassword: false, session: save() };
+  } catch (err) {
+    const mapped = mapRpc(err);
+    if (mapped.code === "password" || /SESSION_PASSWORD_NEEDED/i.test(String(err))) {
+      return { needsPassword: true, session: save() };
+    }
+    throw mapped;
+  } finally {
+    await closeClient(client);
+  }
+}
+
+export async function signInCloudPassword(opts: {
+  apiId: number;
+  apiHash: string;
+  session: string;
+  password: string;
+}): Promise<{ session: string }> {
+  const { client, save } = await openClient(opts);
+  try {
+    await withTimeout(
+      client.signInWithPassword(
+        { apiId: opts.apiId, apiHash: opts.apiHash },
+        {
+          password: async () => opts.password,
+          onError: async () => true,
+        },
+      ),
+      20_000,
+      "cloud password",
+    );
+    return { session: save() };
+  } catch (err) {
+    throw mapRpc(err);
+  } finally {
+    await closeClient(client);
+  }
+}
+
+export async function fetchMe(opts: Creds): Promise<{
+  me: {
+    telegramUserId: number;
+    firstName: string;
+    lastName: string | null;
+    username: string | null;
+  };
+  session: string;
+}> {
+  const { client, save } = await openClient(opts);
+  try {
+    const me = await withTimeout(client.getMe(), 12_000, "me");
+    const raw = me as unknown as {
+      id?: number | string | { toString(): string };
+      firstName?: string;
+      lastName?: string | null;
+      username?: string | null;
+    };
+    const id = Number(raw.id ?? 0);
+    return {
+      me: {
+        telegramUserId: id,
+        firstName: String(raw.firstName ?? "You"),
+        lastName: raw.lastName ?? null,
+        username: raw.username ?? null,
+      },
+      session: save(),
+    };
+  } catch (err) {
+    throw mapRpc(err);
+  } finally {
+    await closeClient(client);
+  }
+}
+
+export type InboxDialog = {
+  chatId: string;
+  title: string;
+  peerId: string;
+  unread: number;
+  pinned: boolean;
+  muted: boolean;
+  lastPreview: string | null;
+  lastAt: string | null;
+};
+
+export type InboxMessage = {
+  fromSelf: boolean;
+  authorName: string;
+  body: string;
+  telegramMessageId: number;
+  createdAt: string;
+};
+
+async function asList(raw: unknown): Promise<unknown[]> {
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "object" && Symbol.asyncIterator in raw) {
+    const out: unknown[] = [];
+    for await (const item of raw as AsyncIterable<unknown>) out.push(item);
+    return out;
+  }
+  return [];
+}
+
+export async function pullInbox(opts: Creds & {
+  selfId: number;
+  dialogLimit?: number;
+  historyLimit?: number;
+  historyChats?: number;
+  skipPhotoPeers?: string[];
+  photoLimit?: number;
+  focusChatId?: string | null;
+}): Promise<{ dialogs: InboxDialog[]; histories: { chatId: string; messages: InboxMessage[] }[]; session: string }> {
+  const { client, save } = await openClient(opts);
+  try {
+    const dialogsRaw = await withTimeout(
+      client.getDialogs({ limit: opts.dialogLimit ?? 40 }),
+      18_000,
+      "dialogs",
+    );
+    const dialogs: InboxDialog[] = [];
+    const histories: { chatId: string; messages: InboxMessage[] }[] = [];
+    const list = await asList(dialogsRaw);
+    for (const d of list) {
+      const entity = (d as { entity?: { id?: number | string; title?: string; firstName?: string; username?: string } }).entity;
+      const id = String(entity?.id ?? (d as { id?: number | string }).id ?? "");
+      if (!id) continue;
+      const title =
+        entity?.title ||
+        entity?.firstName ||
+        entity?.username ||
+        (d as { title?: string }).title ||
+        "Chat";
+      const unread = Number((d as { unreadCount?: number }).unreadCount ?? 0);
+      const pinned = Boolean((d as { pinned?: boolean }).pinned);
+      const message = (d as { message?: { message?: string; date?: number } }).message;
+      dialogs.push({
+        chatId: id,
+        title,
+        peerId: id,
+        unread,
+        pinned,
+        muted: false,
+        lastPreview: message?.message?.slice(0, 140) ?? null,
+        lastAt: message?.date ? new Date(message.date * 1000).toISOString() : null,
+      });
+    }
+
+    const focus = opts.focusChatId ? String(opts.focusChatId).replace(/^.*_/, "") : null;
+    const targets = focus
+      ? dialogs.filter((d) => d.chatId === focus || d.peerId === focus)
+      : dialogs.slice(0, Math.max(1, opts.historyChats ?? 6));
+
+    for (const t of targets) {
+      try {
+        const msgs = await withTimeout(
+          client.getMessages(t.peerId, { limit: opts.historyLimit ?? 40 }),
+          18_000,
+          "history",
+        );
+        const mapped: InboxMessage[] = [];
+        for (const m of await asList(msgs)) {
+          const body = String((m as { message?: string }).message ?? "").trim();
+          if (!body) continue;
+          const sender = (m as { sender?: { firstName?: string; username?: string } }).sender;
+          const out = Boolean((m as { out?: boolean }).out);
+          const mid = Number((m as { id?: number }).id ?? 0);
+          const date = Number((m as { date?: number }).date ?? 0);
+          mapped.push({
+            fromSelf: out,
+            authorName: sender?.firstName || sender?.username || (out ? "You" : t.title),
+            body,
+            telegramMessageId: mid,
+            createdAt: date ? new Date(date * 1000).toISOString() : new Date().toISOString(),
+          });
+        }
+        histories.push({ chatId: t.chatId, messages: mapped.reverse() });
+      } catch (err) {
+        console.info("[telegram]", { event: "history_miss", chatId: t.chatId, err: String(err).slice(0, 80) });
+      }
+    }
+    return { dialogs, histories, session: save() };
+  } catch (err) {
+    throw mapRpc(err);
+  } finally {
+    await closeClient(client);
+  }
+}
+
+export async function sendAsUser(opts: Creds & {
+  peerId: string;
+  body: string;
+}): Promise<{ session: string; telegramMessageId: number }> {
+  const { client, save } = await openClient(opts);
+  try {
+    const sent = await withTimeout(client.sendMessage(opts.peerId, { message: opts.body }), 15_000, "send");
+    const id = Number((sent as { id?: number }).id ?? 0);
+    return { session: save(), telegramMessageId: id };
+  } catch (err) {
+    throw mapRpc(err);
+  } finally {
+    await closeClient(client);
+  }
+}
+
+export async function revokeSession(opts: Creds): Promise<void> {
+  const { lib, client } = await openClient(opts);
+  try {
+    await withTimeout(client.invoke(new lib.Api.auth.LogOut()), 10_000, "logout");
+  } catch (err) {
+    throw mapRpc(err);
+  } finally {
+    await closeClient(client);
+  }
 }

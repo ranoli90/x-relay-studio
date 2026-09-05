@@ -23,6 +23,9 @@ export type ChatOptions = {
     from_date?: string;
     to_date?: string;
   };
+  /** Own the route table. Never pass openrouter/auto. */
+  models?: string[];
+  providerSort?: "price" | "throughput";
 };
 
 export type ChatResult = {
@@ -64,12 +67,12 @@ function isModelUnavailable(status: number, body: string): boolean {
 
 export async function chatOpenRouter(opts: ChatOptions): Promise<ChatResult> {
   requireKey();
-  const models = [DEFAULT_MODEL, ...FALLBACK_MODELS];
+  const models = opts.models?.length ? opts.models : [DEFAULT_MODEL, ...FALLBACK_MODELS];
   let lastErr = "OpenRouter request failed";
 
   for (const model of models) {
     try {
-      return await chatOnce(model, opts);
+      return await chatOnce(model, opts, models);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       lastErr = message;
@@ -81,17 +84,23 @@ export async function chatOpenRouter(opts: ChatOptions): Promise<ChatResult> {
   throw new Error(lastErr);
 }
 
-async function chatOnce(model: string, opts: ChatOptions): Promise<ChatResult> {
+async function chatOnce(model: string, opts: ChatOptions, models: string[]): Promise<ChatResult> {
   const key = requireKey();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 55_000);
 
   const body: Record<string, unknown> = {
     model,
+    models,
     messages: opts.messages,
     max_tokens: opts.maxTokens ?? 1200,
     temperature: opts.temperature ?? 0.2,
     reasoning: { effort: "low" },
+    provider: {
+      sort: opts.providerSort ?? "throughput",
+      data_collection: "deny",
+      allow_fallbacks: true,
+    },
   };
 
   if (opts.json) {

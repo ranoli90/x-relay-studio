@@ -72,6 +72,21 @@
     background: rgb(243 241 234 / 0.18);
     color: var(--color-fg);
   }
+
+  .skip-link {
+    position: absolute;
+    left: 12px;
+    top: -40px;
+    z-index: 80;
+    border-radius: 8px;
+    background: var(--color-fg);
+    color: var(--color-bg);
+    padding: 8px 12px;
+    font-size: 0.875rem;
+  }
+  .skip-link:focus {
+    top: 12px;
+  }
 }
 
 @layer utilities {

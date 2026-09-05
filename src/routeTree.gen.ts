@@ -10,23 +10,33 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as DeskRouteImport } from './routes/desk'
 import { Route as LoginRouteImport } from './routes/login'
+import { Route as PrivacyRouteImport } from './routes/privacy'
 import { Route as RedditRouteImport } from './routes/reddit'
+import { Route as StatusRouteImport } from './routes/status'
 import { Route as TelegramRouteImport } from './routes/telegram'
+import { Route as TermsRouteImport } from './routes/terms'
 import { Route as XRouteImport } from './routes/x'
 import { Route as TelegramIndexRouteImport } from './routes/telegram.index'
 import { Route as TelegramAppRouteImport } from './routes/telegram.app'
 import { Route as ApiAuthSplatRouteImport } from './routes/api/auth/$'
 import { Route as ApiCronStudioRouteImport } from './routes/api/cron/studio'
+import { Route as ApiPaymentsWebhookRouteImport } from './routes/api/payments/webhook'
+import { Route as ApiTelegramPhotoRouteImport } from './routes/api/telegram/photo'
 import { Route as ApiRedditOauthCallbackRouteImport } from './routes/api/reddit/oauth/callback'
 import { Route as ApiRedditOauthStartRouteImport } from './routes/api/reddit/oauth/start'
 import { Route as ApiTelegramBotHookRouteImport } from './routes/api/telegram/bot/hook'
 import { Route as ApiTelegramOidcCallbackRouteImport } from './routes/api/telegram/oidc/callback'
-import { Route as ApiTelegramPhotoRouteImport } from './routes/api/telegram/photo'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DeskRoute = DeskRouteImport.update({
+  id: '/desk',
+  path: '/desk',
   getParentRoute: () => rootRouteImport,
 } as any)
 const LoginRoute = LoginRouteImport.update({
@@ -34,14 +44,29 @@ const LoginRoute = LoginRouteImport.update({
   path: '/login',
   getParentRoute: () => rootRouteImport,
 } as any)
+const PrivacyRoute = PrivacyRouteImport.update({
+  id: '/privacy',
+  path: '/privacy',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const RedditRoute = RedditRouteImport.update({
   id: '/reddit',
   path: '/reddit',
   getParentRoute: () => rootRouteImport,
 } as any)
+const StatusRoute = StatusRouteImport.update({
+  id: '/status',
+  path: '/status',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TelegramRoute = TelegramRouteImport.update({
   id: '/telegram',
   path: '/telegram',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const TermsRoute = TermsRouteImport.update({
+  id: '/terms',
+  path: '/terms',
   getParentRoute: () => rootRouteImport,
 } as any)
 const XRoute = XRouteImport.update({
@@ -69,6 +94,16 @@ const ApiCronStudioRoute = ApiCronStudioRouteImport.update({
   path: '/api/cron/studio',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPaymentsWebhookRoute = ApiPaymentsWebhookRouteImport.update({
+  id: '/api/payments/webhook',
+  path: '/api/payments/webhook',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiTelegramPhotoRoute = ApiTelegramPhotoRouteImport.update({
+  id: '/api/telegram/photo',
+  path: '/api/telegram/photo',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const ApiRedditOauthCallbackRoute = ApiRedditOauthCallbackRouteImport.update({
   id: '/api/reddit/oauth/callback',
   path: '/api/reddit/oauth/callback',
@@ -89,123 +124,153 @@ const ApiTelegramOidcCallbackRoute = ApiTelegramOidcCallbackRouteImport.update({
   path: '/api/telegram/oidc/callback',
   getParentRoute: () => rootRouteImport,
 } as any)
-const ApiTelegramPhotoRoute = ApiTelegramPhotoRouteImport.update({
-  id: '/api/telegram/photo',
-  path: '/api/telegram/photo',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/desk': typeof DeskRoute
   '/login': typeof LoginRoute
+  '/privacy': typeof PrivacyRoute
   '/reddit': typeof RedditRoute
+  '/status': typeof StatusRoute
   '/telegram': typeof TelegramRouteWithChildren
+  '/terms': typeof TermsRoute
   '/x': typeof XRoute
   '/telegram/app': typeof TelegramAppRoute
   '/telegram/': typeof TelegramIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
+  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
   '/api/reddit/oauth/callback': typeof ApiRedditOauthCallbackRoute
   '/api/reddit/oauth/start': typeof ApiRedditOauthStartRoute
   '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
-  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/desk': typeof DeskRoute
   '/login': typeof LoginRoute
+  '/privacy': typeof PrivacyRoute
   '/reddit': typeof RedditRoute
+  '/status': typeof StatusRoute
+  '/terms': typeof TermsRoute
   '/x': typeof XRoute
   '/telegram/app': typeof TelegramAppRoute
   '/telegram': typeof TelegramIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
+  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
   '/api/reddit/oauth/callback': typeof ApiRedditOauthCallbackRoute
   '/api/reddit/oauth/start': typeof ApiRedditOauthStartRoute
   '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
-  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/desk': typeof DeskRoute
   '/login': typeof LoginRoute
+  '/privacy': typeof PrivacyRoute
   '/reddit': typeof RedditRoute
+  '/status': typeof StatusRoute
   '/telegram': typeof TelegramRouteWithChildren
+  '/terms': typeof TermsRoute
   '/x': typeof XRoute
   '/telegram/app': typeof TelegramAppRoute
   '/telegram/': typeof TelegramIndexRoute
   '/api/auth/$': typeof ApiAuthSplatRoute
   '/api/cron/studio': typeof ApiCronStudioRoute
+  '/api/payments/webhook': typeof ApiPaymentsWebhookRoute
+  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
   '/api/reddit/oauth/callback': typeof ApiRedditOauthCallbackRoute
   '/api/reddit/oauth/start': typeof ApiRedditOauthStartRoute
   '/api/telegram/bot/hook': typeof ApiTelegramBotHookRoute
   '/api/telegram/oidc/callback': typeof ApiTelegramOidcCallbackRoute
-  '/api/telegram/photo': typeof ApiTelegramPhotoRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/desk'
     | '/login'
+    | '/privacy'
     | '/reddit'
+    | '/status'
     | '/telegram'
+    | '/terms'
     | '/x'
     | '/telegram/app'
     | '/telegram/'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/payments/webhook'
+    | '/api/telegram/photo'
     | '/api/reddit/oauth/callback'
     | '/api/reddit/oauth/start'
     | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
-    | '/api/telegram/photo'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
+    | '/desk'
     | '/login'
+    | '/privacy'
     | '/reddit'
+    | '/status'
+    | '/terms'
     | '/x'
     | '/telegram/app'
     | '/telegram'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/payments/webhook'
+    | '/api/telegram/photo'
     | '/api/reddit/oauth/callback'
     | '/api/reddit/oauth/start'
     | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
-    | '/api/telegram/photo'
   id:
     | '__root__'
     | '/'
+    | '/desk'
     | '/login'
+    | '/privacy'
     | '/reddit'
+    | '/status'
     | '/telegram'
+    | '/terms'
     | '/x'
     | '/telegram/app'
     | '/telegram/'
     | '/api/auth/$'
     | '/api/cron/studio'
+    | '/api/payments/webhook'
+    | '/api/telegram/photo'
     | '/api/reddit/oauth/callback'
     | '/api/reddit/oauth/start'
     | '/api/telegram/bot/hook'
     | '/api/telegram/oidc/callback'
-    | '/api/telegram/photo'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  DeskRoute: typeof DeskRoute
   LoginRoute: typeof LoginRoute
+  PrivacyRoute: typeof PrivacyRoute
   RedditRoute: typeof RedditRoute
+  StatusRoute: typeof StatusRoute
   TelegramRoute: typeof TelegramRouteWithChildren
+  TermsRoute: typeof TermsRoute
   XRoute: typeof XRoute
   ApiAuthSplatRoute: typeof ApiAuthSplatRoute
   ApiCronStudioRoute: typeof ApiCronStudioRoute
+  ApiPaymentsWebhookRoute: typeof ApiPaymentsWebhookRoute
+  ApiTelegramPhotoRoute: typeof ApiTelegramPhotoRoute
   ApiRedditOauthCallbackRoute: typeof ApiRedditOauthCallbackRoute
   ApiRedditOauthStartRoute: typeof ApiRedditOauthStartRoute
   ApiTelegramBotHookRoute: typeof ApiTelegramBotHookRoute
   ApiTelegramOidcCallbackRoute: typeof ApiTelegramOidcCallbackRoute
-  ApiTelegramPhotoRoute: typeof ApiTelegramPhotoRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -217,11 +282,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/desk': {
+      id: '/desk'
+      path: '/desk'
+      fullPath: '/desk'
+      preLoaderRoute: typeof DeskRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/login': {
       id: '/login'
       path: '/login'
       fullPath: '/login'
       preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/privacy': {
+      id: '/privacy'
+      path: '/privacy'
+      fullPath: '/privacy'
+      preLoaderRoute: typeof PrivacyRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/reddit': {
@@ -231,11 +310,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof RedditRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/status': {
+      id: '/status'
+      path: '/status'
+      fullPath: '/status'
+      preLoaderRoute: typeof StatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/telegram': {
       id: '/telegram'
       path: '/telegram'
       fullPath: '/telegram'
       preLoaderRoute: typeof TelegramRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/terms': {
+      id: '/terms'
+      path: '/terms'
+      fullPath: '/terms'
+      preLoaderRoute: typeof TermsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/x': {
@@ -273,6 +366,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiCronStudioRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/payments/webhook': {
+      id: '/api/payments/webhook'
+      path: '/api/payments/webhook'
+      fullPath: '/api/payments/webhook'
+      preLoaderRoute: typeof ApiPaymentsWebhookRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/telegram/photo': {
+      id: '/api/telegram/photo'
+      path: '/api/telegram/photo'
+      fullPath: '/api/telegram/photo'
+      preLoaderRoute: typeof ApiTelegramPhotoRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/api/reddit/oauth/callback': {
       id: '/api/reddit/oauth/callback'
       path: '/api/reddit/oauth/callback'
@@ -301,13 +408,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiTelegramOidcCallbackRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/api/telegram/photo': {
-      id: '/api/telegram/photo'
-      path: '/api/telegram/photo'
-      fullPath: '/api/telegram/photo'
-      preLoaderRoute: typeof ApiTelegramPhotoRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -327,17 +427,22 @@ const TelegramRouteWithChildren = TelegramRoute._addFileChildren(
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  DeskRoute: DeskRoute,
   LoginRoute: LoginRoute,
+  PrivacyRoute: PrivacyRoute,
   RedditRoute: RedditRoute,
+  StatusRoute: StatusRoute,
   TelegramRoute: TelegramRouteWithChildren,
+  TermsRoute: TermsRoute,
   XRoute: XRoute,
   ApiAuthSplatRoute: ApiAuthSplatRoute,
   ApiCronStudioRoute: ApiCronStudioRoute,
+  ApiPaymentsWebhookRoute: ApiPaymentsWebhookRoute,
+  ApiTelegramPhotoRoute: ApiTelegramPhotoRoute,
   ApiRedditOauthCallbackRoute: ApiRedditOauthCallbackRoute,
   ApiRedditOauthStartRoute: ApiRedditOauthStartRoute,
   ApiTelegramBotHookRoute: ApiTelegramBotHookRoute,
   ApiTelegramOidcCallbackRoute: ApiTelegramOidcCallbackRoute,
-  ApiTelegramPhotoRoute: ApiTelegramPhotoRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
