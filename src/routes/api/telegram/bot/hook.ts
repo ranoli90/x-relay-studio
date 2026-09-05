@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import type { TelegramUpdate } from "@/lib/telegram/bot.server";
 import { findByWebhookSecret, ingestUpdates } from "@/lib/telegram/credentials.server";
-import { takeRate } from "@/lib/telegram/snapshot.server";
+import { takeRate } from "@/lib/telegram/rate.server";
 
 export const Route = createFileRoute("/api/telegram/bot/hook")({
   server: {
@@ -28,7 +28,11 @@ export const Route = createFileRoute("/api/telegram/bot/hook")({
             headers: { "retry-after": "30" },
           });
         }
-        await ingestUpdates(row.user_id, [update]);
+        try {
+          await ingestUpdates(row.user_id, [update]);
+        } catch {
+          return new Response("retry", { status: 500 });
+        }
         return Response.json({ ok: true });
       },
     },

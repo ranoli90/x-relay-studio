@@ -50,6 +50,7 @@ export type TelegramChat = {
   pinned: boolean;
   muted: boolean;
   peerId: string | null;
+  accessHash?: string | null;
 };
 
 export type TelegramMessage = {
@@ -88,6 +89,8 @@ export type TelegramWatch = {
   phoneHint: string | null;
   needsPassword: boolean;
   hasSession: boolean;
+  floodUntil?: string | null;
+  authDead?: boolean;
 };
 
 export type TelegramSnapshot = {
