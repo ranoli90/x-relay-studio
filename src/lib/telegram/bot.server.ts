@@ -71,7 +71,8 @@ async function call<T>(token: string, method: string, body?: Record<string, unkn
   if (!json.ok) {
     const retry = json.parameters?.retry_after;
     if (json.error_code === 429 || retry) {
-      throw new TelegramError("flood", "Telegram asked us to wait.", 429, retry);
+      const wait = retry ?? 30;
+      throw new TelegramError("flood", `Telegram asked us to wait ${wait} seconds.`, 429, wait);
     }
     if (json.error_code === 401) {
       throw new TelegramError("bad_key", "That key didn’t work. Copy it again from BotFather.", 401);

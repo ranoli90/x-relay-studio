@@ -14,6 +14,7 @@ import {
   telegramStartOidcFn,
 } from "@/lib/telegram/fns";
 import type { TelegramOnboardingStep, TelegramStatus } from "@/lib/telegram/types";
+import { useTelegram } from "@/lib/telegram/store";
 import { cn } from "@/lib/utils";
 
 const STEPS: TelegramOnboardingStep[] = ["welcome", "key", "hello", "checks"];
@@ -451,7 +452,8 @@ function ChecksStep({
     setFinishBusy(true);
     setErr(null);
     try {
-      await telegramFinishOnboardingFn();
+      const snap = await telegramFinishOnboardingFn();
+      useTelegram.setState({ snapshot: snap, loading: false, error: null });
       onReady();
     } catch (e: unknown) {
       setErr(e instanceof Error ? e.message : "Could not open the desk yet.");

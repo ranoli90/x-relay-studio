@@ -34,7 +34,7 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
             to="/telegram"
             label="Telegram"
             kicker="Open"
-            description="Connect your Telegram. Set up a helper, check it works, then open the desk."
+            description="Sign in with Telegram. Profile, messages, and the account sitting in this browser."
             icon={<TelegramTile />}
           />
           <PlatformCard

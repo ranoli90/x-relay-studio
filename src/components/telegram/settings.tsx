@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { TelegramAccount, TelegramCredentialPublic } from "@/lib/telegram/types";
@@ -5,11 +6,15 @@ import type { TelegramAccount, TelegramCredentialPublic } from "@/lib/telegram/t
 export function SettingsPane({
   account,
   credential,
+  notify,
+  onNotify,
   onBack,
   onUnlink,
 }: {
   account: TelegramAccount;
   credential?: TelegramCredentialPublic | null;
+  notify: boolean;
+  onNotify: (on: boolean) => void;
   onBack: () => void;
   onUnlink: () => void;
 }) {
@@ -45,9 +50,32 @@ export function SettingsPane({
           </p>
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
-          <h3 className="text-sm font-medium">Notifications</h3>
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium">Notifications</h3>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={notify}
+              onClick={() => onNotify(!notify)}
+              className={`h-7 w-12 rounded-full p-0.5 transition-colors ${
+                notify ? "bg-[var(--tg-primary)]" : "bg-[var(--tg-item-active)]"
+              }`}
+            >
+              <span
+                className={`block size-6 rounded-full bg-[var(--tg-own-text)] transition-transform ${
+                  notify ? "translate-x-5" : "translate-x-0"
+                }`}
+              />
+            </button>
+          </div>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
             Alerts stay in this browser. We do not change Telegram notification settings.
+          </p>
+        </section>
+        <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
+          <h3 className="text-sm font-medium">Identity</h3>
+          <p className="mt-2 font-mono text-xs text-[var(--tg-text-secondary)]">
+            telegram {account.telegramUserId}
           </p>
         </section>
         <Button
@@ -78,11 +106,27 @@ export function UnlinkDialog({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onCancel();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onCancel]);
+
   if (!open) return null;
   return (
     <div className="absolute inset-0 z-20 grid place-items-center bg-black/60 p-4">
-      <div className="w-full max-w-sm rounded-xl border border-border bg-surface p-5 text-fg">
-        <h2 className="text-lg font-medium">Disconnect Telegram?</h2>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="unlink-title"
+        className="w-full max-w-sm rounded-xl border border-border bg-surface p-5 text-fg"
+      >
+        <h2 id="unlink-title" className="text-lg font-medium">
+          Disconnect Telegram?
+        </h2>
         <p className="mt-2 text-sm leading-relaxed text-muted">
           Disconnect Telegram. This studio copy is deleted. Telegram itself is untouched unless you
           also revoke the session in Devices.
@@ -91,7 +135,12 @@ export function UnlinkDialog({
           <Button type="button" className="h-12 w-full justify-center" disabled={busy} onClick={onConfirm}>
             {busy ? "Disconnecting…" : "Disconnect"}
           </Button>
-          <Button type="button" variant="secondary" className="h-12 w-full justify-center" onClick={onCancel}>
+          <Button
+            type="button"
+            variant="secondary"
+            className="h-12 w-full justify-center"
+            onClick={onCancel}
+          >
             Cancel
           </Button>
         </div>

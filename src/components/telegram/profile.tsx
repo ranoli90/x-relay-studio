@@ -18,7 +18,7 @@ export function ProfilePane({
   onSettings: () => void;
   showBack: boolean;
 }) {
-  const username = account.username ? `@${account.username}` : "No username";
+  const username = account.displayUsername ? `@${account.displayUsername}` : "No username";
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg-secondary)] text-[var(--tg-text)]">
       <header className="flex h-14 shrink-0 items-center gap-1 px-2">
@@ -41,7 +41,7 @@ export function ProfilePane({
           <h2 className="mt-4 text-xl font-medium tracking-tight">{account.displayName}</h2>
           <p className="mt-1 font-mono text-xs text-[var(--tg-text-secondary)]">{username}</p>
           {account.preview ? (
-            <p className="mt-3 rounded-full bg-[var(--tg-item-hover)] px-3 py-1 text-[11px] uppercase tracking-widest text-[var(--tg-text-secondary)]">
+            <p className="mt-3 rounded-full bg-[var(--tg-item-hover)] px-3 py-1 text-[length:var(--tg-fs-time)] uppercase tracking-widest text-[var(--tg-text-secondary)]">
               Preview
             </p>
           ) : null}
@@ -75,7 +75,8 @@ export function ProfilePane({
           </Button>
         </div>
         <p className="mt-6 text-xs leading-relaxed text-[var(--tg-text-secondary)]">
-          Path A identity. Private chats with other people stay in Telegram.
+          Telegram only shared your identity with this app. Private chats with other people stay in
+          Telegram.
         </p>
       </div>
     </div>

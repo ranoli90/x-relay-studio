@@ -1,5 +1,5 @@
 import { botGetChat, botGetMe, botSendMessage } from "./bot.server";
-import { notesChatId } from "./bot-token";
+import { helperChatId, notesChatId } from "./bot-token";
 import {
   mergeCheckResults,
   parseChecksJson,
@@ -15,7 +15,7 @@ import {
   saveChecks,
 } from "./credentials.server";
 import { TelegramError } from "./errors";
-import { getAccount, seedStudioNotes, sendNote } from "./snapshot.server";
+import { appendMessage, getAccount, seedStudioNotes, sendNote } from "./snapshot.server";
 
 function stamp(
   results: TelegramCheckResult[],
@@ -78,11 +78,16 @@ export async function runOneCheck(userId: string, id: TelegramCheckId): Promise<
           results = stamp(results, id, false, "Say hello in Telegram first.");
           break;
         }
-        await botSendMessage(
-          token,
-          account.telegramUserId,
-          "Your X Relay desk is connected. This is a check from the studio.",
-        );
+        const ping = "Your X Relay desk is connected. This is a check from the studio.";
+        const sent = await botSendMessage(token, account.telegramUserId, ping);
+        await appendMessage({
+          userId,
+          chatId: helperChatId(userId),
+          fromSelf: false,
+          authorName: cred.bot_name ?? "Helper",
+          body: ping,
+          telegramMessageId: sent.message_id,
+        });
         results = stamp(results, id, true, "Ping sent to your Telegram.");
         break;
       }

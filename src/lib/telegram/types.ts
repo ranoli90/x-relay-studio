@@ -4,7 +4,11 @@ export type TelegramPath = "oidc" | "mtproto";
 
 export type TelegramChatKind = "notes" | "bot" | "user";
 
+export type TelegramFolder = "all" | "personal" | "saved";
+
 export type TelegramOnboardingStep = "welcome" | "key" | "hello" | "checks" | "done";
+
+export type TelegramMessageStatus = "sending" | "sent";
 
 export type TelegramAccount = {
   telegramUserId: number;
@@ -19,8 +23,10 @@ export type TelegramAccount = {
   replicaFirstName: string | null;
   replicaLastName: string | null;
   replicaAbout: string | null;
+  replicaUsername: string | null;
   displayFirstName: string;
   displayLastName: string | null;
+  displayUsername: string | null;
   displayName: string;
 };
 
@@ -43,6 +49,7 @@ export type TelegramMessage = {
   authorName: string;
   body: string;
   createdAt: string;
+  status: TelegramMessageStatus;
 };
 
 export type TelegramCredentialPublic = {

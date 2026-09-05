@@ -4,12 +4,19 @@ import {
   telegramMeFn,
   telegramMessagesFn,
   telegramSendFn,
+  telegramSyncFn,
   telegramUnlinkFn,
   telegramUpdateProfileFn,
 } from "./fns";
-import type { TelegramAccount, TelegramChat, TelegramMessage, TelegramSnapshot } from "./types";
+import type {
+  TelegramAccount,
+  TelegramChat,
+  TelegramFolder,
+  TelegramMessage,
+  TelegramSnapshot,
+} from "./types";
 
-type View = "list" | "chat" | "profile" | "edit" | "settings";
+type View = "list" | "chat" | "profile" | "edit" | "settings" | "peer";
 
 type TelegramState = {
   loading: boolean;
@@ -22,18 +29,33 @@ type TelegramState = {
   messages: TelegramMessage[];
   messagesLoading: boolean;
   profileOpen: boolean;
+  folder: TelegramFolder;
+  notify: boolean;
   load: () => Promise<void>;
+  sync: () => Promise<void>;
   enterPreview: (displayName: string) => Promise<void>;
   selectChat: (id: string | null) => Promise<void>;
   send: (body: string) => Promise<void>;
   setView: (view: View) => void;
   setProfileOpen: (open: boolean) => void;
-  saveProfile: (input: { firstName: string; lastName: string; about: string }) => Promise<void>;
+  setFolder: (folder: TelegramFolder) => void;
+  setNotify: (on: boolean) => void;
+  saveProfile: (input: {
+    firstName: string;
+    lastName: string;
+    about: string;
+    username?: string;
+  }) => Promise<void>;
   unlink: () => Promise<void>;
 };
 
 function isAuthError(err: unknown): boolean {
   return err instanceof Error && err.message === "Unauthorized";
+}
+
+function readNotify(): boolean {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem("xrelay-tg-notify") === "1";
 }
 
 export const useTelegram = create<TelegramState>((set, get) => ({
@@ -47,9 +69,21 @@ export const useTelegram = create<TelegramState>((set, get) => ({
   messages: [],
   messagesLoading: false,
   profileOpen: false,
+  folder: "all",
+  notify: readNotify(),
 
   setView: (view) => set({ view }),
   setProfileOpen: (profileOpen) => set({ profileOpen }),
+  setFolder: (folder) => set({ folder }),
+  setNotify: (on) => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem("xrelay-tg-notify", on ? "1" : "0");
+      if (on && "Notification" in window && Notification.permission === "default") {
+        void Notification.requestPermission();
+      }
+    }
+    set({ notify: on });
+  },
 
   load: async () => {
     const keep = Boolean(get().snapshot?.account);
@@ -67,6 +101,34 @@ export const useTelegram = create<TelegramState>((set, get) => ({
         loading: false,
         error: err instanceof Error ? err.message : "Could not load Telegram.",
       });
+    }
+  },
+
+  sync: async () => {
+    const { snapshot, selectedChatId, notify, messages } = get();
+    if (!snapshot?.account) return;
+    try {
+      const next = await telegramSyncFn({ data: { chatId: selectedChatId } });
+      const prevUnread = (snapshot.chats ?? []).reduce((n, c) => n + (c.unread ?? 0), 0);
+      const nextUnread = next.chats.reduce((n, c) => n + (c.unread ?? 0), 0);
+      set({
+        snapshot: { ...snapshot, chats: next.chats },
+        messages: selectedChatId ? next.messages : messages,
+      });
+      if (
+        notify &&
+        nextUnread > prevUnread &&
+        typeof window !== "undefined" &&
+        "Notification" in window &&
+        Notification.permission === "granted"
+      ) {
+        const incoming = next.chats.find((c) => c.unread > 0);
+        new Notification(incoming?.title ?? "Telegram", {
+          body: incoming?.lastPreview ?? "New message",
+        });
+      }
+    } catch {
+      // keep last good snapshot
     }
   },
 
@@ -90,7 +152,15 @@ export const useTelegram = create<TelegramState>((set, get) => ({
     set({ messagesLoading: true });
     try {
       const messages = await telegramMessagesFn({ data: { chatId: id } });
-      set({ messages, messagesLoading: false });
+      const chats = (get().snapshot?.chats ?? []).map((chat) =>
+        chat.id === id ? { ...chat, unread: 0 } : chat,
+      );
+      const snapshot = get().snapshot;
+      set({
+        messages,
+        messagesLoading: false,
+        snapshot: snapshot ? { ...snapshot, chats } : snapshot,
+      });
     } catch (err) {
       set({
         messagesLoading: false,
@@ -120,7 +190,17 @@ export const useTelegram = create<TelegramState>((set, get) => ({
   send: async (body) => {
     const chatId = get().selectedChatId;
     if (!chatId) return;
-    set({ sending: true, error: null });
+    const account = get().snapshot?.account;
+    const temp: TelegramMessage = {
+      id: `tmp_${Date.now()}`,
+      chatId,
+      fromSelf: true,
+      authorName: account?.displayName ?? "You",
+      body: body.trim(),
+      createdAt: new Date().toISOString(),
+      status: "sending",
+    };
+    set({ sending: true, error: null, messages: [...get().messages, temp] });
     try {
       const message = await telegramSendFn({ data: { chatId, body } });
       const chats = (get().snapshot?.chats ?? []).map((chat) =>
@@ -131,12 +211,13 @@ export const useTelegram = create<TelegramState>((set, get) => ({
       const snapshot = get().snapshot;
       set({
         sending: false,
-        messages: [...get().messages, message],
+        messages: [...get().messages.filter((m) => m.id !== temp.id), message],
         snapshot: snapshot ? { ...snapshot, chats } : snapshot,
       });
     } catch (err) {
       set({
         sending: false,
+        messages: get().messages.filter((m) => m.id !== temp.id),
         error: err instanceof Error ? err.message : "Could not send.",
       });
     }

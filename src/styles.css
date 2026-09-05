@@ -118,11 +118,31 @@
   --tg-text: #ffffff;
   --tg-text-secondary: #aaaaaa;
   --tg-own-bubble: #766ac8;
+  --tg-own-text: #ffffff;
+  --tg-tick: #c6bff5;
   --tg-item-hover: #2c2c2c;
   --tg-item-active: #292929;
+  --tg-fs-title: 16px;
+  --tg-fs-body: 15px;
+  --tg-fs-sub: 14px;
+  --tg-fs-meta: 13px;
+  --tg-fs-time: 11px;
+  --tg-fs-micro: 10px;
   color: var(--tg-text);
   background: var(--tg-bg);
   min-height: 0;
+  font-family: ui-sans-serif, system-ui, sans-serif;
+}
+
+.tg-replica .tg-title {
+  font-size: var(--tg-fs-title);
+  font-weight: 500;
+}
+
+.tg-replica .tg-thread {
+  background-color: var(--tg-bg);
+  background-image: radial-gradient(rgb(255 255 255 / 0.035) 0.6px, transparent 0.6px);
+  background-size: 10px 10px;
 }
 
 @media (prefers-reduced-motion: reduce) {

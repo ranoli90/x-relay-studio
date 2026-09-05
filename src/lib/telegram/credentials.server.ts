@@ -2,12 +2,13 @@ import { randomBytes } from "node:crypto";
 import { getSql } from "@/lib/db";
 import { decryptSecret, encryptSecret } from "./crypto.server";
 import { botDeleteWebhook, botGetMe, botGetUpdates, botSetWebhook, type TelegramUpdate } from "./bot.server";
-import { helloDeepLink, maskBotToken, parseBotToken, parseStartPayload } from "./bot-token";
+import { helloDeepLink, helperChatId, maskBotToken, parseBotToken, parseStartPayload } from "./bot-token";
 import { parseChecksJson, type TelegramCheckResult } from "./checks";
 import { TelegramError } from "./errors";
 import { publicOrigin } from "./config.server";
-import { seedHelperChat, seedStudioNotes, upsertLinkedAccount } from "./snapshot.server";
+import { appendMessage, seedHelperChat, seedStudioNotes, upsertLinkedAccount } from "./snapshot.server";
 import type { TelegramCredentialPublic, TelegramOnboardingStep } from "./types";
+import { pickCredentialFields } from "./validate";
 
 export type CredentialRow = {
   user_id: string;
@@ -99,14 +100,15 @@ async function writeRow(
   fields: Record<string, unknown>,
 ): Promise<CredentialRow> {
   const sql = await getSql();
-  const keys = Object.keys(fields);
+  const safe = pickCredentialFields(fields);
+  const keys = Object.keys(safe);
   if (keys.length === 0) {
     const existing = await getCredentialRow(userId);
     if (!existing) throw new TelegramError("invalid", "No helper key saved yet.", 400);
     return existing;
   }
   const sets = keys.map((k, i) => `${k} = $${i + 2}`).join(", ");
-  const values = keys.map((k) => fields[k]);
+  const values = keys.map((k) => safe[k]);
   await sql.query(
     `update telegram_credentials set ${sets}, updated_at = now() where user_id = $1`,
     [userId, ...values],
@@ -138,7 +140,7 @@ export async function saveBotToken(userId: string, rawToken: string, request: Re
   const enc = encryptSecret(parsed.token);
   const hint = maskBotToken(parsed.token);
   const origin = publicOrigin(request);
-  const hookUrl = `${origin}/api/telegram/bot/hook?s=${webhookSecret}`;
+  const hookUrl = `${origin}/api/telegram/bot/hook`;
   const https = origin.startsWith("https://");
   let webhookActive = false;
   if (https) {
@@ -233,16 +235,38 @@ export async function ingestUpdates(userId: string, updates: TelegramUpdate[]): 
   let hello = Boolean(row.hello_at);
   let maxId = num(row.last_update_id) ?? 0;
   const payload = row.start_payload;
+  const chatId = helperChatId(userId);
 
   for (const update of updates) {
     if (update.update_id > maxId) maxId = update.update_id;
     const msg = messageOf(update);
-    if (!msg?.from || msg.from.is_bot) continue;
-    const text = msg.text ?? "";
-    const got = parseStartPayload(text);
-    if (!hello && payload && got === payload) {
-      await applyHelloFromUser(userId, msg.from);
-      hello = true;
+    if (!msg?.from) continue;
+    const text = (msg.text ?? "").trim();
+    if (!text) continue;
+
+    if (!hello && !msg.from.is_bot) {
+      const got = parseStartPayload(text);
+      if (payload && got === payload) {
+        await applyHelloFromUser(userId, msg.from);
+        hello = true;
+      }
+    }
+
+    if (!hello) continue;
+
+    try {
+      await appendMessage({
+        userId,
+        chatId,
+        fromSelf: !msg.from.is_bot,
+        authorName: msg.from.is_bot
+          ? (row.bot_name ?? "Helper")
+          : msg.from.first_name,
+        body: text,
+        telegramMessageId: msg.message_id,
+      });
+    } catch {
+      // chat may not exist until hello seeds it; ignore a single miss
     }
   }
 
@@ -263,7 +287,7 @@ export async function pullUpdates(userId: string): Promise<boolean> {
     const updates = await botGetUpdates(token, offset ? offset + 1 : undefined);
     return ingestUpdates(userId, updates);
   } catch (err) {
-    if (err instanceof TelegramError && err.code === "invalid") {
+    if (err instanceof TelegramError && (err.code === "invalid" || err.code === "bad_key")) {
       return Boolean(row.hello_at);
     }
     throw err;
@@ -271,6 +295,7 @@ export async function pullUpdates(userId: string): Promise<boolean> {
 }
 
 export async function findByWebhookSecret(secret: string): Promise<CredentialRow | null> {
+  if (!secret) return null;
   const sql = await getSql();
   const rows = await sql.query<CredentialRow>(
     `select user_id, bot_token_enc, bot_id, bot_username, bot_name, token_hint,

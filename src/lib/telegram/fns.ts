@@ -12,6 +12,15 @@ import type {
   TelegramSnapshot,
   TelegramStatus,
 } from "./types";
+import {
+  MessagesSchema,
+  PreviewNameSchema,
+  ProfileSchema,
+  SaveKeySchema,
+  SendSchema,
+  SyncSchema,
+  parseOrThrow,
+} from "./validate";
 
 const CHECK_ID_SET = new Set<string>(TELEGRAM_CHECK_IDS);
 
@@ -101,7 +110,7 @@ export const telegramStartOidcFn = createServerFn({ method: "POST" })
 
 export const telegramSaveKeyFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { token: string }) => ({ token: String(input?.token ?? "") }))
+  .validator((input: unknown) => parseOrThrow(SaveKeySchema, input))
   .handler(async ({ context, data }): Promise<TelegramCredentialPublic> => {
     const { getRequest } = await import("@tanstack/react-start/server");
     const { takeRate } = await import("./snapshot.server");
@@ -161,7 +170,7 @@ export const telegramFinishOnboardingFn = createServerFn({ method: "POST" })
 
 export const telegramEnterPreviewFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { displayName?: string }) => input)
+  .validator((input: unknown) => parseOrThrow(PreviewNameSchema, input ?? {}))
   .handler(async ({ context, data }): Promise<TelegramSnapshot> => {
     const { getAccount, enterPreviewAccount, listChats } = await import("./snapshot.server");
     const existing = await getAccount(context.userId);
@@ -191,7 +200,7 @@ export const telegramEnterPreviewFn = createServerFn({ method: "POST" })
 
 export const telegramMessagesFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { chatId: string }) => input)
+  .validator((input: unknown) => parseOrThrow(MessagesSchema, input))
   .handler(async ({ context, data }): Promise<TelegramMessage[]> => {
     const { listMessages } = await import("./snapshot.server");
     return listMessages(context.userId, data.chatId);
@@ -199,7 +208,7 @@ export const telegramMessagesFn = createServerFn({ method: "POST" })
 
 export const telegramSendFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { chatId: string; body: string }) => input)
+  .validator((input: unknown) => parseOrThrow(SendSchema, input))
   .handler(async ({ context, data }): Promise<TelegramMessage> => {
     const { takeRate, sendNote, getAccount, getChatKind, appendMessage } = await import(
       "./snapshot.server"
@@ -212,17 +221,19 @@ export const telegramSendFn = createServerFn({ method: "POST" })
       return sendNote(context.userId, data.chatId, data.body, account.displayName);
     }
     if (kind === "bot") {
-      const { getDecryptedToken } = await import("./credentials.server");
+      const { getDecryptedToken, getCredentialRow } = await import("./credentials.server");
       const { botSendMessage } = await import("./bot.server");
       const token = await getDecryptedToken(context.userId);
       if (!token) throw new TelegramError("invalid", "Save a helper key first.", 400);
-      await botSendMessage(token, account.telegramUserId, data.body.trim());
+      const cred = await getCredentialRow(context.userId);
+      const sent = await botSendMessage(token, account.telegramUserId, data.body);
       return appendMessage({
         userId: context.userId,
         chatId: data.chatId || helperChatId(context.userId),
-        fromSelf: true,
-        authorName: account.displayName,
+        fromSelf: false,
+        authorName: cred?.bot_name ?? "Helper",
         body: data.body,
+        telegramMessageId: sent.message_id,
       });
     }
     throw new TelegramError("invalid", "This path can only write Studio notes or helper chats.", 400);
@@ -230,7 +241,7 @@ export const telegramSendFn = createServerFn({ method: "POST" })
 
 export const telegramUpdateProfileFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((input: { firstName: string; lastName: string; about: string }) => input)
+  .validator((input: unknown) => parseOrThrow(ProfileSchema, input))
   .handler(async ({ context, data }) => {
     const { takeRate, updateReplicaProfile } = await import("./snapshot.server");
     await takeRate(context.userId, "profile", 30, 60 * 1000);
@@ -253,3 +264,24 @@ export const telegramChatsFn = createServerFn({ method: "GET" })
     const { listChats } = await import("./snapshot.server");
     return listChats(context.userId);
   });
+
+export const telegramSyncFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => parseOrThrow(SyncSchema, input ?? {}))
+  .handler(
+    async ({
+      context,
+      data,
+    }): Promise<{ chats: TelegramChat[]; messages: TelegramMessage[] }> => {
+      try {
+        const { pullUpdates } = await import("./credentials.server");
+        await pullUpdates(context.userId);
+      } catch {
+        // webhook-only or no key — still return stored chats
+      }
+      const { listChats, listMessages } = await import("./snapshot.server");
+      const chats = await listChats(context.userId);
+      const messages = data.chatId ? await listMessages(context.userId, data.chatId) : [];
+      return { chats, messages };
+    },
+  );

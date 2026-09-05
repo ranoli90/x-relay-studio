@@ -5,6 +5,7 @@ import { UserButton } from "@/lib/auth/gates";
 import { useTelegram } from "@/lib/telegram/store";
 import { ChatList, useChatQuery } from "./chat-list";
 import { Conversation } from "./conversation";
+import { PeerProfile } from "./peer-profile";
 import { ProfileEdit } from "./profile-edit";
 import { ProfilePane } from "./profile";
 import { SettingsPane, UnlinkDialog } from "./settings";
@@ -19,12 +20,15 @@ export function ReplicaShell() {
   const sending = useTelegram((s) => s.sending);
   const saving = useTelegram((s) => s.saving);
   const error = useTelegram((s) => s.error);
-  const profileOpen = useTelegram((s) => s.profileOpen);
+  const folder = useTelegram((s) => s.folder);
+  const notify = useTelegram((s) => s.notify);
   const load = useTelegram((s) => s.load);
+  const sync = useTelegram((s) => s.sync);
   const selectChat = useTelegram((s) => s.selectChat);
   const send = useTelegram((s) => s.send);
   const setView = useTelegram((s) => s.setView);
-  const setProfileOpen = useTelegram((s) => s.setProfileOpen);
+  const setFolder = useTelegram((s) => s.setFolder);
+  const setNotify = useTelegram((s) => s.setNotify);
   const saveProfile = useTelegram((s) => s.saveProfile);
   const unlink = useTelegram((s) => s.unlink);
   const { query, setQuery } = useChatQuery();
@@ -34,6 +38,13 @@ export function ReplicaShell() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      void sync();
+    }, 8000);
+    return () => window.clearInterval(id);
+  }, [sync]);
 
   useEffect(() => {
     const mq = window.matchMedia("(max-width: 839px)");
@@ -58,10 +69,26 @@ export function ReplicaShell() {
     setConfirmUnlink(true);
   }
 
+  const list = (
+    <ChatList
+      chats={chats}
+      selectedId={selectedChatId}
+      onSelect={(id) => void selectChat(id)}
+      query={query}
+      onQuery={setQuery}
+      folder={folder}
+      onFolder={setFolder}
+      account={account}
+      onSelf={() => setView("profile")}
+    />
+  );
+
   const settings = account ? (
     <SettingsPane
       account={account}
       credential={credential}
+      notify={notify}
+      onNotify={setNotify}
       onBack={() => setView("profile")}
       onUnlink={requestUnlink}
     />
@@ -81,6 +108,13 @@ export function ReplicaShell() {
         onSettings={() => setView("settings")}
         onUnlink={requestUnlink}
       />
+    ) : view === "peer" && selected ? (
+      <PeerProfile
+        chat={selected}
+        credential={credential}
+        showBack
+        onBack={() => setView("chat")}
+      />
     ) : view === "chat" ? (
       <Conversation
         chat={selected}
@@ -91,17 +125,11 @@ export function ReplicaShell() {
         onBack={() => {
           void selectChat(null);
         }}
-        onProfile={() => setView("profile")}
+        onProfile={() => setView("peer")}
         onSend={(body) => void send(body)}
       />
     ) : (
-      <ChatList
-        chats={chats}
-        selectedId={selectedChatId}
-        onSelect={(id) => void selectChat(id)}
-        query={query}
-        onQuery={setQuery}
-      />
+      list
     );
 
   if (!loading && snapshot && !snapshot.account) {
@@ -122,7 +150,7 @@ export function ReplicaShell() {
           </span>
         </Link>
         {account?.preview ? (
-          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-subtle">
+          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[length:var(--tg-fs-micro)] uppercase tracking-widest text-subtle">
             Preview
           </span>
         ) : null}
@@ -145,18 +173,12 @@ export function ReplicaShell() {
             Connect Telegram first.
           </div>
         ) : (
-          <div className="tg-replica h-full min-h-0 font-[ui-sans-serif,system-ui,sans-serif]">
+          <div className="tg-replica h-full min-h-0">
             {narrow ? (
               mobileMain
             ) : (
               <div className="grid h-full min-h-0 grid-cols-[minmax(0,420px)_minmax(0,1fr)_minmax(0,360px)]">
-                <ChatList
-                  chats={chats}
-                  selectedId={selectedChatId}
-                  onSelect={(id) => void selectChat(id)}
-                  query={query}
-                  onQuery={setQuery}
-                />
+                {list}
                 {view === "edit" ? (
                   <ProfileEdit
                     account={account}
@@ -166,6 +188,15 @@ export function ReplicaShell() {
                   />
                 ) : view === "settings" ? (
                   settings
+                ) : view === "profile" ? (
+                  <ProfilePane
+                    account={account}
+                    showBack={false}
+                    onBack={() => undefined}
+                    onEdit={() => setView("edit")}
+                    onSettings={() => setView("settings")}
+                    onUnlink={requestUnlink}
+                  />
                 ) : (
                   <Conversation
                     chat={selected}
@@ -174,33 +205,29 @@ export function ReplicaShell() {
                     sending={sending}
                     showBack={false}
                     onBack={() => undefined}
-                    onProfile={() => setProfileOpen(true)}
+                    onProfile={() => setView("peer")}
                     onSend={(body) => void send(body)}
                   />
                 )}
-                {view === "edit" || view === "settings" ? (
-                  <ProfilePane
-                    account={account}
+                {view === "edit" || view === "settings" || view === "profile" ? (
+                  <div className="grid place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)]">
+                    <div>
+                      <p className="text-[var(--tg-text)]">{account.displayName}</p>
+                      <p className="mt-2 text-xs">Saved in this studio. Telegram itself is unchanged.</p>
+                    </div>
+                  </div>
+                ) : selected ? (
+                  <PeerProfile
+                    chat={selected}
+                    credential={credential}
                     showBack={false}
                     onBack={() => undefined}
-                    onEdit={() => setView("edit")}
-                    onSettings={() => setView("settings")}
-                    onUnlink={requestUnlink}
-                  />
-                ) : profileOpen ? (
-                  <ProfilePane
-                    account={account}
-                    showBack={false}
-                    onBack={() => setProfileOpen(false)}
-                    onEdit={() => setView("edit")}
-                    onSettings={() => setView("settings")}
-                    onUnlink={requestUnlink}
                   />
                 ) : (
                   <div className="grid place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)]">
                     <div>
                       <p className="text-[var(--tg-text)]">{account.displayName}</p>
-                      <p className="mt-2 text-xs">Open profile from the conversation header.</p>
+                      <p className="mt-2 text-xs">Open a chat, or your profile from the list.</p>
                     </div>
                   </div>
                 )}

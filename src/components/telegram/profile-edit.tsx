@@ -16,10 +16,11 @@ export function ProfileEdit({
   account: TelegramAccount;
   saving: boolean;
   onBack: () => void;
-  onSave: (input: { firstName: string; lastName: string; about: string }) => void;
+  onSave: (input: { firstName: string; lastName: string; about: string; username?: string }) => void;
 }) {
   const [firstName, setFirstName] = useState(account.displayFirstName);
   const [lastName, setLastName] = useState(account.displayLastName ?? "");
+  const [username, setUsername] = useState(account.displayUsername ?? "");
   const [about, setAbout] = useState(account.replicaAbout ?? "");
   const used = graphemeCount(about);
 
@@ -35,7 +36,7 @@ export function ProfileEdit({
         className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-8"
         onSubmit={(e) => {
           e.preventDefault();
-          onSave({ firstName, lastName, about });
+          onSave({ firstName, lastName, about, username });
         }}
       >
         <label className="grid gap-1.5 text-xs text-[var(--tg-text-secondary)]">
@@ -58,6 +59,16 @@ export function ProfileEdit({
           />
         </label>
         <label className="grid gap-1.5 text-xs text-[var(--tg-text-secondary)]">
+          Username
+          <Input
+            value={username}
+            onChange={(e) => setUsername(e.target.value.replace(/^@/, ""))}
+            maxLength={32}
+            placeholder="optional"
+            className="bg-[var(--tg-item-hover)] text-[var(--tg-text)]"
+          />
+        </label>
+        <label className="grid gap-1.5 text-xs text-[var(--tg-text-secondary)]">
           Bio
           <Textarea
             value={about}
@@ -70,7 +81,8 @@ export function ProfileEdit({
           </span>
         </label>
         <p className="text-xs leading-relaxed text-[var(--tg-text-secondary)]">
-          Saved in this studio. Your Telegram profile was not changed.
+          Saved in this studio. Your Telegram profile was not changed. Photo stays the one Telegram
+          sent.
         </p>
         <Button type="submit" className="mt-auto h-12 w-full justify-center" disabled={saving || !firstName.trim()}>
           {saving ? "Saving…" : "Save"}

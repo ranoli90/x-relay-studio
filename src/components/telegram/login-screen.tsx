@@ -30,12 +30,13 @@ export function TelegramLoginScreen({
         <Logo />
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">Telegram</p>
         <h1 className="mt-3 text-3xl font-medium tracking-tight">
-          Sign in, then connect the Telegram you’ll use here.
+          Sign in the Telegram account you’ll use here.
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-muted">
           First, sign in to this studio (X or Google). Next you’ll make a small helper in
-          Telegram, check that it works, and open your desk. We never see your Telegram
-          password.
+          Telegram, check that it works, and open your desk. Telegram confirms. We never see
+          your cloud password. This is not the official Telegram app. Revoke anytime in Telegram
+          → Settings → Devices (or Connected websites).
         </p>
 
         {message ? (

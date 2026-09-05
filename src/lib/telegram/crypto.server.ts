@@ -1,10 +1,14 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from "node:crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from "node:crypto";
 
 const PREFIX = "v1";
 
 function secretMaterial(): string {
   const env = process.env.BETTER_AUTH_SECRET?.trim();
   if (env) return env;
+  const prod = Boolean(process.env.VERCEL) || process.env.NODE_ENV === "production";
+  if (prod) {
+    throw new Error("BETTER_AUTH_SECRET is required to store Telegram helper keys.");
+  }
   const g = globalThis as typeof globalThis & { __grokAuthPreviewSecret__?: string };
   g.__grokAuthPreviewSecret__ ??= randomBytes(32).toString("hex");
   return g.__grokAuthPreviewSecret__;
@@ -36,4 +40,11 @@ export function decryptSecret(blob: string): string {
   const decipher = createDecipheriv("aes-256-gcm", key(), iv);
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
+}
+
+export function timingSafeEqualString(a: string, b: string): boolean {
+  const left = Buffer.from(a);
+  const right = Buffer.from(b);
+  if (left.length !== right.length) return false;
+  return timingSafeEqual(left, right);
 }

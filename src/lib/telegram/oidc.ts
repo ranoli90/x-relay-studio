@@ -2,12 +2,14 @@ import { createHash, randomBytes } from "node:crypto";
 import * as jose from "jose";
 import { TelegramError } from "./errors";
 import type { TelegramOidcConfig } from "./config.server";
+import { assertOidcPayload, type TelegramOidcProfile } from "./oidc-claims";
+
+export type { TelegramOidcProfile };
 
 const AUTH_URL = "https://oauth.telegram.org/auth";
 const TOKEN_URL = "https://oauth.telegram.org/token";
 const JWKS_URL = "https://oauth.telegram.org/.well-known/jwks.json";
 const ISSUER = "https://oauth.telegram.org";
-const LOGIN_MAX_AGE_SEC = 5 * 60;
 
 const jwks = jose.createRemoteJWKSet(new URL(JWKS_URL));
 
@@ -16,15 +18,6 @@ export type OidcStart = {
   state: string;
   nonce: string;
   verifier: string;
-};
-
-export type TelegramOidcProfile = {
-  telegramUserId: number;
-  firstName: string;
-  lastName: string | null;
-  username: string | null;
-  photoUrl: string | null;
-  botCanWrite: boolean;
 };
 
 export function createPkcePair(): { verifier: string; challenge: string } {
@@ -97,49 +90,5 @@ export async function exchangeTelegramCode(opts: {
     clockTolerance: 30,
   });
 
-  if (typeof payload.nonce === "string" && payload.nonce !== opts.nonce) {
-    throw new TelegramError("telegram_login_expired", "Telegram login expired.", 401);
-  }
-
-  const now = Math.floor(Date.now() / 1000);
-  const iat = typeof payload.iat === "number" ? payload.iat : now;
-  const authDate =
-    typeof payload.auth_date === "number"
-      ? payload.auth_date
-      : typeof payload.auth_date === "string"
-        ? Number(payload.auth_date)
-        : iat;
-  if (now - authDate > LOGIN_MAX_AGE_SEC || now - iat > LOGIN_MAX_AGE_SEC) {
-    throw new TelegramError("telegram_login_expired", "Telegram login expired.", 401);
-  }
-
-  const idRaw = payload.id ?? payload.sub;
-  const telegramUserId = Number(idRaw);
-  if (!Number.isFinite(telegramUserId) || telegramUserId <= 0) {
-    throw new TelegramError("invalid", "Telegram identity was incomplete.", 400);
-  }
-
-  const given = typeof payload.given_name === "string" ? payload.given_name : "";
-  const name = typeof payload.name === "string" ? payload.name : "";
-  const firstName = given || name.split(" ")[0] || "Telegram";
-  const lastName =
-    typeof payload.family_name === "string"
-      ? payload.family_name
-      : name.includes(" ")
-        ? name.split(" ").slice(1).join(" ")
-        : null;
-  const username =
-    typeof payload.preferred_username === "string"
-      ? payload.preferred_username.replace(/^@/, "")
-      : null;
-  const photoUrl = typeof payload.picture === "string" ? payload.picture : null;
-
-  return {
-    telegramUserId,
-    firstName,
-    lastName: lastName || null,
-    username,
-    photoUrl,
-    botCanWrite: false,
-  };
+  return assertOidcPayload(payload as Record<string, unknown>, opts.nonce);
 }

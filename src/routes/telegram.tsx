@@ -1,8 +1,7 @@
-import { createFileRoute, Navigate } from "@tanstack/react-router";
+import { createFileRoute, Navigate, Outlet, useNavigate, useRouterState } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { TelegramLoginScreen } from "@/components/telegram/login-screen";
 import { TelegramOnboarding } from "@/components/telegram/onboarding";
-import { ReplicaShell } from "@/components/telegram/replica-shell";
 import { useCurrentUserState } from "@/lib/auth/use-current-user";
 import { telegramStatusFn } from "@/lib/telegram/fns";
 import { useTelegram } from "@/lib/telegram/store";
@@ -18,15 +17,19 @@ export const Route = createFileRoute("/telegram")({
 });
 
 function TelegramDoor() {
+  const navigate = useNavigate();
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  const onDesk = pathname === "/telegram/app" || pathname.startsWith("/telegram/app/");
   const { sessionUser } = Route.useRouteContext();
   const { user, isPending } = useCurrentUserState();
   const signedIn = Boolean(user) || (isPending && Boolean(sessionUser));
   const { error } = Route.useSearch();
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [ready, setReady] = useState(false);
-  const [goApp, setGoApp] = useState(false);
+  const [previewErr, setPreviewErr] = useState<string | null>(null);
 
   useEffect(() => {
+    if (onDesk) return;
     if (!signedIn || isPending) {
       setReady(!isPending);
       return;
@@ -36,7 +39,9 @@ function TelegramDoor() {
       .then((s) => {
         if (cancelled) return;
         setStatus(s);
-        if (s.onboarded || (s.linked && !s.hasOwnKey)) setGoApp(true);
+        if (s.onboarded || (s.linked && !s.hasOwnKey)) {
+          void navigate({ to: "/telegram/app" });
+        }
         setReady(true);
       })
       .catch(() => {
@@ -45,23 +50,16 @@ function TelegramDoor() {
     return () => {
       cancelled = true;
     };
-  }, [signedIn, isPending]);
+  }, [signedIn, isPending, navigate, onDesk]);
 
-  useEffect(() => {
-    if (!goApp) return;
-    if (window.location.pathname !== "/telegram/app") {
-      window.history.replaceState(null, "", "/telegram/app");
-    }
-  }, [goApp]);
-
+  if (onDesk) return <Outlet />;
   if (!signedIn && !isPending) return <Navigate to="/" />;
 
-  if (goApp) return <ReplicaShell />;
-  const displayName = undefined;
+  const displayName = user?.displayName ?? undefined;
 
   if (!signedIn || isPending || (signedIn && !ready)) {
     return (
-      <TelegramLoginScreen pending={isPending || (signedIn && !ready)} error={error ?? null} />
+      <TelegramLoginScreen pending={isPending || (signedIn && !ready)} error={error ?? previewErr} />
     );
   }
 
@@ -69,13 +67,19 @@ function TelegramDoor() {
     <TelegramOnboarding
       status={status}
       displayName={displayName}
-      error={error ?? null}
-      onReady={() => setGoApp(true)}
+      error={error ?? previewErr}
+      onReady={() => {
+        void navigate({ to: "/telegram/app" });
+      }}
       onPreview={() => {
+        setPreviewErr(null);
         void useTelegram
           .getState()
           .enterPreview(displayName ?? "You")
-          .then(() => setGoApp(true));
+          .then(() => navigate({ to: "/telegram/app" }))
+          .catch((e: unknown) => {
+            setPreviewErr(e instanceof Error ? e.message : "Could not open preview.");
+          });
       }}
     />
   );
