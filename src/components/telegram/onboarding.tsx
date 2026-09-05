@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Check, LoaderCircle } from "lucide-react";
+import { ArrowLeft, Check, LoaderCircle, X } from "lucide-react";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -653,6 +653,9 @@ function ChecksStep({
   const [busy, setBusy] = useState(false);
   const [finishing, setFinishing] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [elapsed, setElapsed] = useState(0);
+  const failedCount = watchChecks.filter((c) => c.ok === false).length;
+  const anyRan = watchChecks.some((c) => c.ranAt);
 
   const doneCount = watchChecks.filter((c) => {
     const meta = TELEGRAM_CHECKS.find((m) => m.id === c.id);
@@ -660,15 +663,43 @@ function ChecksStep({
   }).length;
   const requiredTotal = TELEGRAM_CHECKS.filter((c) => c.required).length;
 
+  useEffect(() => {
+    if (!busy) {
+      setElapsed(0);
+      return;
+    }
+    const started = Date.now();
+    const tick = window.setInterval(() => setElapsed(Math.floor((Date.now() - started) / 1000)), 250);
+    return () => window.clearInterval(tick);
+  }, [busy]);
+
   async function runAll() {
+    const started = Date.now();
     setBusy(true);
     setErr(null);
-    try {
-      onStatus(await telegramRunAllChecksFn());
-    } catch (e: unknown) {
-      setErr(e instanceof Error ? e.message : "Could not run checks.");
-    } finally {
+    let timedOut = false;
+    const timeout = window.setTimeout(() => {
+      timedOut = true;
       setBusy(false);
+      setErr("Telegram is taking too long. Tap try again.");
+    }, 28_000);
+    try {
+      const next = await telegramRunAllChecksFn();
+      if (timedOut) {
+        onStatus(next);
+        return;
+      }
+      onStatus(next);
+      const failed = (next.checks ?? []).filter((c) => c.ok === false);
+      if (failed.length) {
+        setErr(failed[0]?.detail || "A check failed. Tap try again.");
+      }
+    } catch (e: unknown) {
+      if (!timedOut) setErr(e instanceof Error ? e.message : "Could not run checks.");
+    } finally {
+      window.clearTimeout(timeout);
+      if (!timedOut) setBusy(false);
+      void started;
     }
   }
 
@@ -683,6 +714,16 @@ function ChecksStep({
       setFinishing(false);
     }
   }
+
+  const actionLabel = busy
+    ? elapsed > 8
+      ? `Still checking… ${elapsed}s`
+      : "Checking…"
+    : failedCount
+      ? "Try again"
+      : anyRan
+        ? `Run checks again (${doneCount}/${requiredTotal})`
+        : `Run checks`;
 
   return (
     <>
@@ -699,6 +740,7 @@ function ChecksStep({
         {TELEGRAM_CHECKS.map((meta) => {
           const row = watchChecks.find((c) => c.id === meta.id);
           const ok = row?.ok;
+          const running = busy && ok !== true;
           return (
             <li
               key={meta.id}
@@ -707,10 +749,20 @@ function ChecksStep({
               <span
                 className={cn(
                   "mt-0.5 grid size-5 place-items-center rounded-full",
-                  ok === true ? "bg-accent text-accent-fg" : "bg-surface-2 text-subtle",
+                  ok === true
+                    ? "bg-accent text-accent-fg"
+                    : ok === false
+                      ? "bg-down text-white"
+                      : "bg-surface-2 text-subtle",
                 )}
               >
-                {ok === true ? <Check className="size-3" /> : null}
+                {ok === true ? (
+                  <Check className="size-3" />
+                ) : ok === false ? (
+                  <X className="size-3" />
+                ) : running ? (
+                  <LoaderCircle className="size-3 animate-spin" />
+                ) : null}
               </span>
               <span className="min-w-0">
                 <span className="block text-sm text-fg">
@@ -719,8 +771,17 @@ function ChecksStep({
                     <span className="ml-2 font-mono text-[10px] uppercase text-subtle">saved</span>
                   )}
                 </span>
-                <span className="mt-0.5 block text-xs leading-relaxed text-muted">
-                  {row?.detail || meta.blurb}
+                <span
+                  className={cn(
+                    "mt-0.5 block text-xs leading-relaxed",
+                    ok === false ? "text-down" : "text-muted",
+                  )}
+                >
+                  {running && ok !== false
+                    ? elapsed > 8
+                      ? "Still talking to Telegram…"
+                      : "Checking now…"
+                    : row?.detail || meta.blurb}
                 </span>
               </span>
             </li>
@@ -731,6 +792,8 @@ function ChecksStep({
         <p className="mt-4 text-sm text-down" role="alert">
           {err}
         </p>
+      ) : busy ? (
+        <p className="mt-4 text-sm text-muted">Each check talks to Telegram. This usually takes a few seconds.</p>
       ) : null}
       <div className="mt-6 grid gap-3">
         <Button
@@ -743,10 +806,10 @@ function ChecksStep({
           {busy ? (
             <span className="inline-flex items-center gap-2">
               <LoaderCircle className="size-4 animate-spin" />
-              Checking…
+              {actionLabel}
             </span>
           ) : (
-            `Run checks${doneCount ? ` (${doneCount}/${requiredTotal})` : ""}`
+            actionLabel
           )}
         </Button>
         <Button

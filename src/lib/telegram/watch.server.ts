@@ -44,7 +44,7 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
       apiId: material.apiId,
       apiHash: material.apiHash,
       session: material.session,
-      limit: 40,
+      limit: 20,
     });
     if (session !== material.session) await saveSignedIn({ userId, session });
 
@@ -122,7 +122,7 @@ function pickHistoryTargets(dialogs: PulledDialog[], selectedChatId: string | nu
     const match = dialogs.find((d) => selectedChatId.endsWith(d.chatId) || selectedChatId.includes(d.chatId));
     if (match) return [match];
   }
-  return dialogs.slice(0, 8);
+  return dialogs.slice(0, 3);
 }
 
 export async function runWatchChecks(userId: string): Promise<TelegramCheckResult[]> {
@@ -139,31 +139,39 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
     }
   };
 
-  try {
-    const material = await decryptSessionMaterial(row);
-    const { me, session } = await fetchMe(material);
-    if (session !== material.session) await saveSignedIn({ userId, session });
-    await upsertLinkedAccount({
-      userId,
-      telegramUserId: me.telegramUserId,
-      firstName: me.firstName,
-      lastName: me.lastName,
-      username: me.username,
-      photoUrl: null,
-      botCanWrite: false,
-      path: "mtproto",
-      preview: false,
-    });
-    set("signed_in", true, me.username ? `@${me.username}` : me.firstName);
-  } catch (err) {
-    set("signed_in", false, err instanceof Error ? err.message : "Could not sign in.");
-    await saveChecks(userId, mergeCheckResults(results));
-    return mergeCheckResults(results);
+  const account = await getAccount(userId);
+  if (row.session_enc && account && !account.preview) {
+    set("signed_in", true, account.username ? `@${account.username}` : account.firstName);
+  } else {
+    try {
+      const material = await decryptSessionMaterial(row);
+      const { me, session } = await fetchMe(material);
+      if (session !== material.session) await saveSignedIn({ userId, session });
+      await upsertLinkedAccount({
+        userId,
+        telegramUserId: me.telegramUserId,
+        firstName: me.firstName,
+        lastName: me.lastName,
+        username: me.username,
+        photoUrl: null,
+        botCanWrite: false,
+        path: "mtproto",
+        preview: false,
+      });
+      set("signed_in", true, me.username ? `@${me.username}` : me.firstName);
+    } catch (err) {
+      set("signed_in", false, err instanceof Error ? err.message : "Could not reach Telegram.");
+      await saveChecks(userId, mergeCheckResults(results));
+      return mergeCheckResults(results);
+    }
   }
 
+  await saveChecks(userId, mergeCheckResults(results));
+
   try {
-    const { chats } = await syncWatch(userId, { historyLimit: 12 });
+    const { chats } = await syncWatch(userId, { historyLimit: 8 });
     const real = chats.filter((c) => c.kind === "user");
+    const withPreview = real.filter((c) => c.lastPreview);
     set(
       "chats_visible",
       real.length > 0,
@@ -175,15 +183,20 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
       [userId],
     );
     const n = msgCount[0]?.n ?? 0;
+    const readable = n > 0 || withPreview.length > 0;
     set(
       "messages_readable",
-      n > 0,
-      n ? `${n} messages stored` : "We listed chats but didn’t get message text yet.",
+      readable,
+      n
+        ? `${n} messages stored`
+        : withPreview.length
+          ? `Previews from ${withPreview.length} chats`
+          : "We listed chats but didn’t get message text yet.",
     );
     const latest = await getUserSession(userId);
     set(
       "watching_on",
-      Boolean(latest?.watching) && Boolean(latest?.last_sync_at),
+      Boolean(latest?.watching) && (Boolean(latest?.last_sync_at) || real.length > 0),
       latest?.last_error ? latest.last_error : "Watching is on. New messages will land here.",
     );
   } catch (err) {

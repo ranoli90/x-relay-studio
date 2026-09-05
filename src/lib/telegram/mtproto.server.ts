@@ -18,9 +18,10 @@ function loadLib(): Promise<Teleproto> {
 
 function clientOpts() {
   return {
-    connectionRetries: 1,
-    timeout: 12,
+    connectionRetries: 0,
+    timeout: 8,
     autoReconnect: false,
+    retryDelay: 0,
     useWSS: true,
     deviceModel: "X Relay",
     appVersion: "1.0",
@@ -29,7 +30,26 @@ function clientOpts() {
   };
 }
 
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new TelegramError("flood", `Telegram took too long (${label}). Tap try again.`, 504));
+    }, ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 function mapRpc(err: unknown): TelegramError {
+  if (err instanceof TelegramError) return err;
   const raw = err instanceof Error ? err.message : String(err);
   const msg = raw.toUpperCase();
   if (msg.includes("PHONE_NUMBER_INVALID") || msg.includes("PHONE_NUMBER_BANNED")) {
@@ -51,17 +71,25 @@ function mapRpc(err: unknown): TelegramError {
       400,
     );
   }
-  if (msg.includes("FLOOD") || msg.includes("WAIT")) {
+  if (msg.includes("FLOOD") || (msg.includes("WAIT") && msg.includes("SECOND"))) {
     return new TelegramError("flood", "Telegram asked us to wait. Try again in a few minutes.", 429);
   }
   if (msg.includes("AUTH_KEY") || msg.includes("SESSION_REVOKED") || msg.includes("SESSION_EXPIRED")) {
     return new TelegramError("unlinked", "Telegram signed this desk out. Connect again.", 401);
   }
+  if (
+    msg.includes("CONNECTION") ||
+    msg.includes("NETSOCKET") ||
+    msg.includes("WAS LOST") ||
+    msg.includes("TOOK TOO LONG") ||
+    msg.includes("ECONN") ||
+    msg.includes("ETIMEDOUT") ||
+    msg.includes("TIMEOUT")
+  ) {
+    return new TelegramError("flood", "Telegram dropped the connection. Tap try again.", 503);
+  }
   if (msg.includes("CANNOT FIND PACKAGE") || msg.includes("CANNOT FIND MODULE")) {
     return new TelegramError("not_configured", "Telegram client failed to load on this server. Try again in a minute.", 500);
-  }
-  if (msg.includes("TIMEOUT") || msg.includes("ETIMEDOUT") || msg.includes("ECONN")) {
-    return new TelegramError("flood", "Telegram didn’t answer in time. Try again.", 504);
   }
   console.info("[telegram]", { event: "mtproto_error", message: raw.slice(0, 180) });
   return new TelegramError("invalid", "Telegram didn’t accept that. Try again.", 400);
@@ -74,11 +102,14 @@ async function withClient<T>(
   const lib = await loadLib();
   const sessionObj = new lib.sessions.StringSession(opts.session);
   const client = new lib.TelegramClient(sessionObj, opts.apiId, opts.apiHash, clientOpts());
-  try {
+  const work = (async () => {
     await client.connect();
     const result = await fn({ client, lib });
     const session = String(client.session.save() ?? opts.session);
     return { result, session };
+  })();
+  try {
+    return await withTimeout(work, 18_000, "connect");
   } catch (err) {
     if (err instanceof TelegramError) throw err;
     if (err instanceof lib.errors.SessionPasswordNeededError) {
@@ -90,7 +121,7 @@ async function withClient<T>(
     throw mapRpc(err);
   } finally {
     try {
-      await client.disconnect();
+      await withTimeout(client.disconnect(), 2_000, "disconnect").catch(() => undefined);
     } catch {
       /* ignore */
     }
