@@ -1,4 +1,5 @@
 const BANNED = /\breddit\b|\bsnoo\b/i;
+const APP_VERSION = "v0.2.0";
 
 export function deskParts(deskNumber: string) {
   const d = deskNumber.replace(/\D/g, "");
@@ -38,5 +39,5 @@ export function userAgentFor(redditUsername: string, appId: string) {
   const handle = redditUsername.replace(/^u\//, "").trim() || "unknown";
   const id = appId.replace(/[^a-z0-9._-]/gi, "") || "desk.mail";
   assertSafeAppName(id);
-  return `web:${id}:v1.0.0 (by /u/${handle})`;
+  return `web:${id}:${APP_VERSION} (by /u/${handle})`;
 }
