@@ -34,6 +34,7 @@ export function AnonymousDesk({
         email,
         password: deskNumber,
         name: "Desk",
+        rememberMe: true,
       });
       if (signError) throw new Error(signError.message ?? "Could not open a desk.");
       await authClient.getSession();
@@ -58,6 +59,7 @@ export function AnonymousDesk({
       const { error: signError } = await authClient.signIn.email({
         email: deskEmail(deskNumber),
         password: deskNumber,
+        rememberMe: true,
       });
       if (signError) throw new Error("No desk with that number.");
       await authClient.getSession();
