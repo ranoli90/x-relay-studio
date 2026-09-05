@@ -9,7 +9,8 @@ export const PERSONA_UNLOCK_CENTS = 50_000;
 export const TOPUP_THREADS = 250;
 export const TOPUP_PRICE_CENTS = 2900;
 
-export type Rail = "cryptobot" | "plisio";
+/** Single rail. CryptoBot is gone — US desks pay on the website. */
+export type Rail = "plisio";
 export type SkuKind = "pack" | "topup" | "refill";
 
 export type CatalogSku = {
@@ -51,8 +52,8 @@ export function skuById(id: string): CatalogSku | null {
   return BY_ID.get(id) ?? null;
 }
 
-export function pickRail(priceCents: number): Rail {
-  return priceCents >= 24_900 ? "plisio" : "cryptobot";
+export function pickRail(_priceCents?: number): Rail {
+  return "plisio";
 }
 
 /** Quantity-first: snap to a defined pack, else N × 250 top-ups. Never a custom unit price. */
