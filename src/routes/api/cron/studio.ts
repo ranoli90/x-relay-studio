@@ -1,5 +1,6 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { timingSafeEqual } from "node:crypto";
+import { cronJobsEnabled } from "@/lib/flags";
 
 function allowed(request: Request): boolean {
   const secret = process.env.CRON_SECRET?.trim();
@@ -19,6 +20,11 @@ export const Route = createFileRoute("/api/cron/studio")({
         if (!allowed(request)) {
           return new Response(JSON.stringify({ ok: false, error: "unauthorized" }), {
             status: 401,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (!cronJobsEnabled()) {
+          return new Response(JSON.stringify({ ok: true, skipped: "flag" }), {
             headers: { "content-type": "application/json" },
           });
         }
