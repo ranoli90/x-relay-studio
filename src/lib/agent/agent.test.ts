@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { runSafety } from "./safety.ts";
+import { runSafety, safetyBlocksGenerate } from "./safety.ts";
 import { understandLocal } from "./understand.ts";
 import { buildPlan, routeWorkflow } from "./route.ts";
 import { inventedPrice } from "./catalog.ts";
@@ -26,6 +26,9 @@ describe("safety_gate", () => {
   });
   it("handoffs crisis", () => {
     assert.equal(runSafety("I want to kill myself").verdict, "handoff");
+    assert.equal(safetyBlocksGenerate("handoff"), true);
+    assert.equal(safetyBlocksGenerate("kill"), true);
+    assert.equal(safetyBlocksGenerate("allow"), false);
   });
 });
 

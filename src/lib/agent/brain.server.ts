@@ -158,17 +158,24 @@ export async function processInbound(opts: {
 
   if (safetyBlocksGenerate(safety.verdict)) {
     const refuse = SAFETY_REFUSALS[safety.codes[0] ?? "minor"] ?? SAFETY_REFUSALS.minor;
+    const killed = safety.verdict === "kill";
     await sql.query(
       `insert into agent_messages (id, user_id, thread_id, role, body, workflow, status)
-       values ($1,$2,$3,'system',$4,'W2_SAFETY','sent')`,
+       values ($1,$2,$3,'system',$4,'W2_SAFETY','held')`,
       [newId("msg"), opts.userId, threadId, refuse],
     );
     await sql.query(
-      `update agent_threads set workflow = 'W15_HANDOFF', state = 'killed', takeover = true where id = $1`,
-      [threadId],
+      `update agent_threads set workflow = 'W15_HANDOFF', state = $1, takeover = true where id = $2`,
+      [killed ? "killed" : "handoff", threadId],
     );
-    await thought(sql, opts.userId, threadId, "handoff", "Thread killed. Writer never ran.");
-    return { threadId, workflow: "W15_HANDOFF", held: true, killed: true };
+    await thought(
+      sql,
+      opts.userId,
+      threadId,
+      "handoff",
+      killed ? "Thread killed. Writer never ran." : "Handoff. Writer never ran.",
+    );
+    return { threadId, workflow: "W15_HANDOFF", held: true, killed };
   }
 
   const countRows = await sql.query<{ n: number }>(
@@ -308,6 +315,15 @@ export async function processInbound(opts: {
     return { threadId, workflow: "W15_HANDOFF", held: true, killed: false };
   }
 
+  if (workflow === "W15_HANDOFF") {
+    await sql.query(
+      `update agent_threads set workflow = 'W15_HANDOFF', state = 'handoff', takeover = true where id = $1`,
+      [threadId],
+    );
+    await thought(sql, opts.userId, threadId, "handoff", "Handoff workflow. Writer skipped.");
+    return { threadId, workflow: "W15_HANDOFF", held: true, killed: false };
+  }
+
   const catalog = await sql.query<{
     id: string;
     sku: string;
@@ -348,6 +364,7 @@ export async function processInbound(opts: {
     await thought(sql, opts.userId, threadId, "plan", "GFE seat held. First contract stays human.");
   }
 
+  let proofReady = false;
   if (workflow === "W13_PROOF") {
     const asset = (
       await sql.query<{ id: string; label: string }>(
@@ -361,6 +378,7 @@ export async function processInbound(opts: {
       await sql.query(`update agent_proof_assets set used_fan_id = $1 where id = $2`, [fanId, asset.id]);
       await thought(sql, opts.userId, threadId, "plan", `Proof reserved: ${asset.label}. 1 asset / fan.`);
     }
+    proofReady = Boolean(asset);
   }
 
   const written = await writeWithGateway(opts.userId, threadId, {
@@ -374,6 +392,8 @@ export async function processInbound(opts: {
     catalog: catalogRows,
     fanName: fan.display_name,
     inbound: opts.text,
+    proofAvailable: proofReady,
+    deliveryConfirmed: Number(justDelivered?.n ?? 0) > 0,
   });
   await thought(
     sql,
@@ -385,10 +405,9 @@ export async function processInbound(opts: {
       : `Writer ${written.model}. ${written.bubbles.length} bubble(s).`,
   );
 
-  const inQuiet = hour >= persona.quiet_start || hour < persona.quiet_end;
-  const auto = plan.autonomy === "auto" && !inQuiet && !written.dropped && written.bubbles.length > 0;
-  const state: ThreadState =
-    workflow === "W15_HANDOFF" ? "handoff" : auto ? "open" : "held";
+  // Draft-only: never label a local save as sent. Human send is a different path.
+  const auto = false;
+  const state: ThreadState = "held";
 
   if (written.bubbles.length === 0) {
     await sql.query(
@@ -511,8 +530,21 @@ export async function tickAgentJobs(userId?: string): Promise<number> {
       }
     } catch (err) {
       console.info("[agent]", { event: "job_fail", id: job.id, err: String(err).slice(0, 120) });
+      await sql.query(
+        `update agent_jobs
+            set status = 'retry_wait',
+                attempt_count = coalesce(attempt_count, 0) + 1,
+                last_error = $2,
+                run_at = now() + interval '2 minutes'
+          where id = $1 and done_at is null`,
+        [job.id, String(err).slice(0, 240)],
+      );
+      continue;
     }
-    await sql.query(`update agent_jobs set done_at = now() where id = $1`, [job.id]);
+    await sql.query(
+      `update agent_jobs set done_at = now(), status = 'succeeded' where id = $1 and done_at is null`,
+      [job.id],
+    );
     n += 1;
   }
   return n;

@@ -5,6 +5,7 @@ import {
   telegramMessagesFn,
   telegramSendFn,
   telegramSetWatchingFn,
+  telegramSetAutomationFn,
   telegramSyncFn,
   telegramUnlinkFn,
   telegramUpdateProfileFn,
@@ -50,6 +51,7 @@ type TelegramState = {
   }) => Promise<void>;
   unlink: () => Promise<void>;
   setWatching: (watching: boolean) => Promise<void>;
+  setAutomationArmed: (armed: boolean) => Promise<void>;
   clearError: () => void;
 };
 
@@ -125,7 +127,7 @@ export const useTelegram = create<TelegramState>((set, get) => ({
         snapshot: {
           ...snapshot,
           chats: next.chats,
-          watch: next.watch ?? snapshot.watch,
+          watch: snapshot.watch,
         },
         messages: nextMessages,
         messageCache: selectedChatId
@@ -299,6 +301,16 @@ export const useTelegram = create<TelegramState>((set, get) => ({
       set({ snapshot });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : "Could not change watching." });
+    }
+  },
+
+  setAutomationArmed: async (armed) => {
+    set({ error: null });
+    try {
+      const snapshot = await telegramSetAutomationFn({ data: { armed } });
+      set({ snapshot });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Could not change AI processing." });
     }
   },
 }));

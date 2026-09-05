@@ -17,7 +17,7 @@ export type TelegramOnboardingStep =
 
 export type TelegramMessageStatus = "sending" | "sent";
 
-export type TelegramAiStatus = "queued" | "outbound" | "held";
+export type TelegramAiStatus = "queued" | "outbound" | "held" | "retry_wait" | "suppressed";
 
 export type TelegramAccount = {
   telegramUserId: number;

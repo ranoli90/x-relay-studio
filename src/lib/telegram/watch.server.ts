@@ -133,7 +133,7 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
             telegramMessageId: msg.telegramMessageId,
             createdAt: msg.createdAt,
             bumpUnread: false,
-            aiStatus: msg.fromSelf ? "outbound" : "queued",
+            aiStatus: msg.fromSelf ? "outbound" : row.automation_armed ? "queued" : "held",
           });
           if (saved) ingested += 1;
         }

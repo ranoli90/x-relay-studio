@@ -23,6 +23,7 @@ import {
   SubmitPasswordSchema,
   SyncSchema,
   WatchToggleSchema,
+  AutomationToggleSchema,
   parseOrThrow,
   parsedStartLogin,
 } from "./validate";
@@ -402,8 +403,9 @@ export const telegramSendFn = createServerFn({ method: "POST" })
       } = await import("./session.server");
       const { sendAsUser } = await import("./mtproto.server");
       const row = await getUserSession(context.userId);
-      assertSessionLive(row);
-      if (!row.session_enc || !peer?.peerId) {
+      const session = assertSessionLive(row);
+      const peerId = peer?.peerId;
+      if (!session.session_enc || !peerId) {
         throw new TelegramError("invalid", "Connect your Telegram account first.", 400);
       }
       try {
@@ -411,7 +413,7 @@ export const telegramSendFn = createServerFn({ method: "POST" })
       } catch (err) {
         if (err && typeof err === "object" && "code" in err) throw err;
       }
-      const material = await decryptSessionMaterial(row);
+      const material = await decryptSessionMaterial(session);
       const { withMtprotoLease } = await import("./lease.server");
       try {
         const sent = await withMtprotoLease(context.userId, () =>
@@ -419,7 +421,7 @@ export const telegramSendFn = createServerFn({ method: "POST" })
             apiId: material.apiId,
             apiHash: material.apiHash,
             session: material.session,
-            peerId: peer.peerId,
+            peerId,
             body: data.body,
           }),
         );
@@ -499,6 +501,15 @@ export const telegramSetWatchingFn = createServerFn({ method: "POST" })
   .handler(async ({ context, data }): Promise<TelegramSnapshot> => {
     const { setWatching } = await import("./session.server");
     await setWatching(context.userId, data.watching);
+    return buildSnapshot(context.userId);
+  });
+
+export const telegramSetAutomationFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => parseOrThrow(AutomationToggleSchema, input))
+  .handler(async ({ context, data }): Promise<TelegramSnapshot> => {
+    const { setAutomationArmed } = await import("./session.server");
+    await setAutomationArmed(context.userId, data.armed);
     return buildSnapshot(context.userId);
   });
 

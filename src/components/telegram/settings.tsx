@@ -9,6 +9,7 @@ export function SettingsPane({
   notify,
   onNotify,
   onWatching,
+  onAutomation,
   onBack,
   onUnlink,
 }: {
@@ -17,6 +18,7 @@ export function SettingsPane({
   notify: boolean;
   onNotify: (on: boolean) => void;
   onWatching: (on: boolean) => void;
+  onAutomation: (on: boolean) => void;
   onBack: () => void;
   onUnlink: () => void;
 }) {
@@ -66,25 +68,47 @@ export function SettingsPane({
           ) : null}
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
-          <h3 className="text-sm font-medium">Automation</h3>
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium">Draft replies</h3>
+            {account.preview ? null : (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={Boolean(watch?.automationArmed)}
+                onClick={() => onAutomation(!watch?.automationArmed)}
+                className={`h-7 w-12 rounded-full p-0.5 transition-colors ${
+                  watch?.automationArmed ? "bg-[var(--tg-primary)]" : "bg-[var(--tg-item-active)]"
+                }`}
+              >
+                <span
+                  className={`block size-6 rounded-full bg-[var(--tg-own-text)] transition-transform ${
+                    watch?.automationArmed ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            )}
+          </div>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
-            Not started. Watching queues messages. The decision layer is not connected yet.
+            {account.preview
+              ? "Preview is local. Nothing is sent to a model."
+              : watch?.automationArmed
+                ? "On. Stored chats can be drafted locally. You still send every message yourself. Watching is not this switch."
+                : "Off. Watching stores chats. This switch is the consent to draft. Nothing is auto-sent."}
           </p>
           <p className="mt-2 font-mono text-xs text-[var(--tg-text-secondary)]">
-            {watch?.pendingForAi ?? 0} queued
+            {watch?.pendingForAi ?? 0} queued for drafting
           </p>
-          <button
-            type="button"
-            disabled
-            className="mt-3 h-10 w-full rounded-md border border-border text-sm text-[var(--tg-text-secondary)] opacity-50"
-          >
-            Start automation
-          </button>
+        </section>
+        <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
+          <h3 className="text-sm font-medium">Catalog and checkout</h3>
+          <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
+            Not in this screen yet. Payments stay off until the settlement path is verified.
+          </p>
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
           <h3 className="text-sm font-medium">OpenRouter</h3>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
-            Already set for this product. Nothing is sent until you start automation.
+            Used only when Draft replies is on. Still never auto-sends.
           </p>
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">

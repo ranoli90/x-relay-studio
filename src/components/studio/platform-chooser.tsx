@@ -41,8 +41,9 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
         <DeskNumberLockup deskNumber={deskNumber} />
         <h1 className="mt-6 text-3xl font-medium tracking-tight">Pick a platform.</h1>
         <p className="mt-3 max-w-xl text-sm leading-relaxed text-muted">
-          That number is the only login we keep. Telegram is the live inbox — real chats,
-          drafts, send. X and Reddit stay their own accounts.
+          That number is the only login we keep. Telegram is the live inbox — you read and send.
+          Drafts only appear if you turn on drafting in Settings. X and Reddit stay their own
+          accounts.
         </p>
 
         <div className="mt-8 grid grid-cols-1 gap-3 min-[520px]:grid-cols-2">
@@ -50,7 +51,7 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
             to="/telegram"
             label="Telegram"
             kicker="Live inbox"
-            description="Your real chats. Drafts sit here until you approve. Catalog and rails live in Settings."
+            description="Your real chats. You send. Catalog, rails, and checkout are not in Settings yet."
             icon={<TelegramTile />}
           />
           <PlatformCard

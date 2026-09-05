@@ -115,6 +115,8 @@ export type WriteInput = {
   catalog: CatalogRow[];
   fanName: string;
   inbound: string;
+  proofAvailable?: boolean;
+  deliveryConfirmed?: boolean;
 };
 
 export type WriteResult = {

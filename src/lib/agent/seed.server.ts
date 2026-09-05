@@ -1,4 +1,5 @@
 import { getSql } from "@/lib/db";
+import { demoFixturesAllowed } from "@/lib/runtime";
 import { newId } from "./ids.ts";
 import { DEFAULT_CATALOG } from "./catalog.ts";
 
@@ -44,7 +45,7 @@ export async function ensureSeed(userId: string): Promise<string> {
 
   await sql.query(
     `insert into agent_seats (id, user_id, persona_id, kind, capacity, held)
-     values ($1,$2,$3,'gfe', 3, 1)`,
+     values ($1,$2,$3,'gfe', 3, 0)`,
     [newId("seat"), userId, personaId],
   );
   await sql.query(
@@ -53,16 +54,18 @@ export async function ensureSeed(userId: string): Promise<string> {
     [newId("seat"), userId, personaId],
   );
 
-  await sql.query(
-    `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
-     values ($1,$2,$3,'same_outfit','unused same-outfit','dated still, navy hoodie, kitchen light. never sent live.', false)`,
-    [newId("prf"), userId, personaId],
-  );
-  await sql.query(
-    `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
-     values ($1,$2,$3,'vn','unused VN','15s voice note, warehouse parking lot, dated. one fan only.', false)`,
-    [newId("prf"), userId, personaId],
-  );
+  if (demoFixturesAllowed()) {
+    await sql.query(
+      `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
+       values ($1,$2,$3,'same_outfit','unused same-outfit','dated still, navy hoodie, kitchen light. never sent live.', false)`,
+      [newId("prf"), userId, personaId],
+    );
+    await sql.query(
+      `insert into agent_proof_assets (id, user_id, persona_id, kind, label, body, live)
+       values ($1,$2,$3,'vn','unused VN','15s voice note, warehouse parking lot, dated. one fan only.', false)`,
+      [newId("prf"), userId, personaId],
+    );
+  }
 
   const tactics: [string, string][] = [
     ["one_door_menu", "W4_QUALIFY"],
@@ -79,7 +82,9 @@ export async function ensureSeed(userId: string): Promise<string> {
     );
   }
 
-  await seedFans(sql, userId, personaId);
+  if (demoFixturesAllowed()) {
+    await seedFans(sql, userId, personaId);
+  }
   return personaId;
 }
 

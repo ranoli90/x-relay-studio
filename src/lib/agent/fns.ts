@@ -1,11 +1,22 @@
 import { createServerFn } from "@tanstack/react-start";
 import { authMiddleware } from "@/lib/auth/middleware";
-import { getSql } from "@/lib/db";
+import { getSql, withTransaction } from "@/lib/db";
+import { assertSimulatorAllowed } from "@/lib/runtime";
 import { ensureSeed } from "./seed.server.ts";
 import { processInbound, markPaid, tickAgentJobs } from "./brain.server.ts";
 import { goldSummary } from "./eval.ts";
 import { clockLabel, clockParts, inWindow } from "./clock.ts";
 import { formatUsd } from "./catalog.ts";
+import {
+  applyApproveDraft,
+  applyMarkDelivered,
+  MessageIdSchema,
+  OfferIdSchema,
+  OperatorSendSchema,
+  SimulateInboundSchema,
+  ThreadToggleSchema,
+} from "./owned.ts";
+import { newId } from "./ids.ts";
 import type {
   CatalogRow,
   ClockSlot,
@@ -359,8 +370,9 @@ function safeJson(raw: string): string[] {
 
 export const simulateInbound = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { threadId?: string; text: string; scenario?: string }) => d)
+  .validator((d: unknown) => SimulateInboundSchema.parse(d))
   .handler(async ({ context, data }) => {
+    assertSimulatorAllowed("Inbound simulation");
     const text = (data.text || scenarioText(data.scenario)).slice(0, 2000);
     if (!text.trim()) throw new Error("Empty message.");
     return processInbound({
@@ -394,34 +406,18 @@ function scenarioText(id?: string): string {
 
 export const approveDraft = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { messageId: string; body?: string }) => d)
+  .validator((d: unknown) => MessageIdSchema.parse(d))
   .handler(async ({ context, data }) => {
-    const sql = await getSql();
-    const row = (
-      await sql.query<{ id: string; thread_id: string; body: string }>(
-        `select id, thread_id, body from agent_messages
-          where id = $1 and user_id = $2 and role = 'draft'`,
-        [data.messageId, context.userId],
-      )
-    )[0];
-    if (!row) throw new Error("Draft not found.");
-    const body = (data.body ?? row.body).trim();
-    await sql.query(
-      `update agent_messages set role = 'persona', status = 'sent', body = $1, auto = false
-        where id = $2`,
-      [body, row.id],
-    );
-    await sql.query(
-      `update agent_threads set last_outbound_at = now(), state = 'open', unread = 0
-        where id = $1 and user_id = $2`,
-      [row.thread_id, context.userId],
-    );
-    return { ok: true };
+    return withTransaction(async (sql) => {
+      const result = await applyApproveDraft(sql, context.userId, data.messageId, data.body);
+      if (!result.ok) throw new Error("Draft not found.");
+      return { ok: true as const, status: "approved" as const };
+    });
   });
 
 export const dropDraft = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { messageId: string }) => d)
+  .validator((d: unknown) => MessageIdSchema.parse(d))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql.query(
@@ -434,7 +430,7 @@ export const dropDraft = createServerFn({ method: "POST" })
 
 export const setTakeover = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { threadId: string; on: boolean }) => d)
+  .validator((d: unknown) => ThreadToggleSchema.parse(d))
   .handler(async ({ context, data }) => {
     const sql = await getSql();
     await sql.query(
@@ -447,7 +443,7 @@ export const setTakeover = createServerFn({ method: "POST" })
 
 export const operatorSend = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { threadId: string; body: string }) => d)
+  .validator((d: unknown) => OperatorSendSchema.parse(d))
   .handler(async ({ context, data }) => {
     const body = data.body.trim().slice(0, 2000);
     if (!body) throw new Error("Empty.");
@@ -459,24 +455,24 @@ export const operatorSend = createServerFn({ method: "POST" })
       )
     )[0];
     if (!owned) throw new Error("Thread not found.");
-    const { newId } = await import("./ids.ts");
     await sql.query(
       `insert into agent_messages (id, user_id, thread_id, role, body, status, auto)
-       values ($1,$2,$3,'persona',$4,'sent', false)`,
+       values ($1,$2,$3,'persona',$4,'local', false)`,
       [newId("msg"), context.userId, data.threadId, body],
     );
     await sql.query(
-      `update agent_threads set last_outbound_at = now(), takeover = true, unread = 0
-        where id = $1`,
-      [data.threadId],
+      `update agent_threads set takeover = true, unread = 0
+        where id = $1 and user_id = $2`,
+      [data.threadId, context.userId],
     );
-    return { ok: true };
+    return { ok: true, status: "local" as const };
   });
 
 export const simulatePay = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { offerId: string }) => d)
+  .validator((d: unknown) => OfferIdSchema.parse(d))
   .handler(async ({ context, data }) => {
+    assertSimulatorAllowed("Payment simulation");
     const sql = await getSql();
     const offer = (
       await sql.query<{ id: string; price_cents: number }>(
@@ -485,7 +481,6 @@ export const simulatePay = createServerFn({ method: "POST" })
       )
     )[0];
     if (!offer) throw new Error("Offer not found.");
-    const { newId } = await import("./ids.ts");
     return markPaid({
       userId: context.userId,
       offerId: offer.id,
@@ -497,20 +492,13 @@ export const simulatePay = createServerFn({ method: "POST" })
 
 export const markDelivered = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { offerId: string }) => d)
+  .validator((d: unknown) => OfferIdSchema.parse(d))
   .handler(async ({ context, data }) => {
-    const sql = await getSql();
-    await sql.query(
-      `update agent_offers set status = 'delivered', delivered_at = now()
-        where id = $1 and user_id = $2`,
-      [data.offerId, context.userId],
-    );
-    await sql.query(
-      `update agent_threads set workflow = 'W10_AFTERCARE', state = 'aftercare'
-        where id = (select thread_id from agent_offers where id = $1)`,
-      [data.offerId],
-    );
-    return { ok: true };
+    return withTransaction(async (sql) => {
+      const result = await applyMarkDelivered(sql, context.userId, data.offerId);
+      if (!result.ok) return { ok: false as const };
+      return { ok: true as const, attested: true as const };
+    });
   });
 
 export const patchDiary = createServerFn({ method: "POST" })

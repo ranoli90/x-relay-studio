@@ -193,7 +193,7 @@ export async function appendMessage(opts: {
   const id = newId("msg");
   const status: TelegramMessageStatus = opts.status ?? "sent";
   const aiStatus: TelegramAiStatus =
-    opts.aiStatus ?? (opts.fromSelf ? "outbound" : "queued");
+    opts.aiStatus ?? (opts.fromSelf ? "outbound" : "held");
   await sql.query(
     `insert into telegram_messages (id, user_id, chat_id, from_self, author_name, body, created_at, telegram_message_id, status, ai_status)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,

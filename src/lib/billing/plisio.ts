@@ -64,10 +64,10 @@ export async function createPlisioInvoice(input: {
     };
     message?: string;
   };
-  if (!res.ok || body.status !== "success" || !body.data?.txn_id || !body.data.invoice_url) {
+  const data = body.data;
+  if (!res.ok || body.status !== "success" || !data?.txn_id || !data.invoice_url) {
     throw new Error(body.message || "Plisio did not open an invoice.");
   }
-  const data = body.data;
   return {
     txnId: data.txn_id,
     invoiceUrl: data.invoice_url,

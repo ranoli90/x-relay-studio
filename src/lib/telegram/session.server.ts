@@ -253,6 +253,26 @@ export async function setWatching(userId: string, watching: boolean): Promise<Us
   return next;
 }
 
+export async function setAutomationArmed(userId: string, armed: boolean): Promise<UserSessionRow> {
+  const row = await getUserSession(userId);
+  assertSessionLive(row);
+  const sql = await getSql();
+  await sql.query(
+    `update telegram_user_sessions set automation_armed = $2, updated_at = now() where user_id = $1`,
+    [userId, armed],
+  );
+  if (!armed) {
+    await sql.query(
+      `update telegram_messages set ai_status = 'held'
+        where user_id = $1 and ai_status = 'queued'`,
+      [userId],
+    );
+  }
+  const next = await getUserSession(userId);
+  if (!next) throw new TelegramError("invalid", "Connect Telegram first.", 404);
+  return next;
+}
+
 export async function recordSync(opts: {
   userId: string;
   chatsWatched: number;
@@ -280,7 +300,7 @@ export async function saveChecks(userId: string, checks: TelegramCheckResult[]):
 export async function finishUserOnboarding(userId: string): Promise<void> {
   const sql = await getSql();
   await sql.query(
-    `update telegram_user_sessions set onboarded_at = now(), watching = true, updated_at = now()
+    `update telegram_user_sessions set onboarded_at = now(), updated_at = now()
       where user_id = $1 and coalesce(auth_dead, false) = false`,
     [userId],
   );

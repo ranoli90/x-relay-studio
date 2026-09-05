@@ -3,6 +3,7 @@ import { findSku, formatUsd, inventedPrice } from "./catalog.ts";
 import type { CatalogRow, ClockSlot, ReplyPlan, WriteInput, WriteResult } from "./types.ts";
 
 const LEAK = /\b(strategy=|trust_score|gfe_ready|as an ai|as a language model|openrouter|system prompt)\b/i;
+const BYPASS = /\bgift card if the app flags|if the app flags you|workaround (the|a) (ban|flag|restriction)\b/i;
 
 export function validateDraft(
   text: string,
@@ -11,6 +12,7 @@ export function validateDraft(
   claims: ClockSlot[],
 ): string | null {
   if (LEAK.test(text)) return "leaked internal field";
+  if (BYPASS.test(text)) return "restriction workaround";
   const price = inventedPrice(text, catalog);
   if (price != null) return `price $${price} is not on the allowlist`;
   const clock = clockContradiction(text, hour, claims);
@@ -34,6 +36,17 @@ function usSlice(input: WriteInput): string {
   return input.diary.find((d) => d.voice === "US")?.body ?? "";
 }
 
+function railPhrase(catalog: CatalogRow[], skuRail?: string | null): string | null {
+  const rails = [
+    ...new Set(
+      [skuRail, ...catalog.map((c) => c.rail)].filter((r): r is string => Boolean(r && r.trim())),
+    ),
+  ];
+  if (rails.length === 0) return null;
+  if (rails.length === 1) return rails[0];
+  return `${rails.slice(0, -1).join(", ")} or ${rails[rails.length - 1]}`;
+}
+
 export function writeLocal(input: WriteInput): WriteResult {
   const { plan } = input;
   const sku = findSku(input.catalog, plan.sku);
@@ -41,6 +54,7 @@ export function writeLocal(input: WriteInput): WriteResult {
   const him = himSlice(input);
   const us = usSlice(input);
   const name = input.fanName.split(" ")[0] ?? "you";
+  const rails = railPhrase(input.catalog, sku?.rail);
 
   let text = localLine(plan, {
     name,
@@ -48,11 +62,14 @@ export function writeLocal(input: WriteInput): WriteResult {
     price,
     him,
     us,
+    rails,
+    proofAvailable: Boolean(input.proofAvailable),
+    deliveryConfirmed: Boolean(input.deliveryConfirmed),
   });
 
   const drop = validateDraft(text, input.catalog, input.hour, input.clock);
   if (drop) {
-    text = fallbackSafe(plan, price);
+    text = fallbackSafe();
     const drop2 = validateDraft(text, input.catalog, input.hour, input.clock);
     if (drop2) {
       return { bubbles: [], dropped: true, dropReason: drop2, model: "local/understand" };
@@ -64,7 +81,16 @@ export function writeLocal(input: WriteInput): WriteResult {
 
 function localLine(
   plan: ReplyPlan,
-  x: { name: string; skuTitle: string | null; price: string | null; him: string; us: string },
+  x: {
+    name: string;
+    skuTitle: string | null;
+    price: string | null;
+    him: string;
+    us: string;
+    rails: string | null;
+    proofAvailable: boolean;
+    deliveryConfirmed: boolean;
+  },
 ): string {
   switch (plan.workflow) {
     case "W4_QUALIFY":
@@ -81,15 +107,23 @@ function localLine(
       if (plan.sku === "custom_clip" || plan.tactic === "discover_custom") {
         return `yeah i can do a custom. what do you want me to do in it, and how long?\n\nonce i know that i'll tell you the price and a rail`;
       }
-      return x.skuTitle && x.price
-        ? `yeah ${x.skuTitle.toLowerCase()} is ${x.price}. you got cashapp or throne?`
-        : `what are you wanting exactly? then i can tell you the price`;
+      if (x.skuTitle && x.price && x.rails) {
+        return `yeah ${x.skuTitle.toLowerCase()} is ${x.price} on ${x.rails}`;
+      }
+      if (x.skuTitle && x.price) {
+        return `yeah ${x.skuTitle.toLowerCase()} is ${x.price}. i'll send the listed rail for that item once it's on the order`;
+      }
+      return `what are you wanting exactly? then i can tell you the price`;
     case "W7_GFE":
       return `yeah we can talk about that. i like talking first so it doesn't feel fake — what are you wanting out of it this week?`;
     case "W8_OFFER":
-      return `if you sent it i'll see it when it lands. cashapp / throne / paypal — or an email gift card if the app flags you. screenshot isn't the receipt here`;
+      return x.rails
+        ? `if it lands on ${x.rails} i'll see it. a screenshot isn't the receipt here`
+        : `if a payment lands on the listed rail i'll see it. a screenshot isn't the receipt here`;
     case "W10_AFTERCARE":
-      return `got it to you. how you feeling, still good?`;
+      return x.deliveryConfirmed
+        ? `got it to you. how you feeling, still good?`
+        : `if it went through you'll have it. if not, tell me and i'll check — i won't mark it delivered from a screenshot`;
     case "W11_REACTIVATE": {
       const mem = x.us || x.him;
       return mem ? `still think about ${mem.toLowerCase()}. how've you been` : `hey, been a minute. how's your week`;
@@ -99,7 +133,9 @@ function localLine(
         ? `ugh yeah that sucks, i'm not her. we can start small or just talk a bit first so you're not guessing. what did you actually want?`
         : `we can figure price after i know what you want. what are you thinking?`;
     case "W13_PROOF":
-      return `fair, i get it. i can send a quick same-outfit so you're not guessing — not a whole custom`;
+      return x.proofAvailable
+        ? `fair, i get it. i have one reserved still if you want that — not a recycled live`
+        : `i hear you. i don't have a proof asset ready for this, so i won't pretend i do. give me a minute`;
     case "W14_MEDIA_IN":
       return `got the pic. i wait for the rail to ping before i mark it paid`;
     case "W15_HANDOFF":
@@ -115,6 +151,6 @@ function localLine(
   }
 }
 
-function fallbackSafe(_plan: ReplyPlan, _price: string | null): string {
+function fallbackSafe(): string {
   return `give me a second — what did you have in mind?`;
 }

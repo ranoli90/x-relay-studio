@@ -32,6 +32,7 @@ export function ReplicaShell() {
   const setNotify = useTelegram((s) => s.setNotify);
   const saveProfile = useTelegram((s) => s.saveProfile);
   const setWatching = useTelegram((s) => s.setWatching);
+  const setAutomationArmed = useTelegram((s) => s.setAutomationArmed);
   const unlink = useTelegram((s) => s.unlink);
   const clearError = useTelegram((s) => s.clearError);
   const { query, setQuery } = useChatQuery();
@@ -120,6 +121,7 @@ export function ReplicaShell() {
       notify={notify}
       onNotify={setNotify}
       onWatching={(on) => void setWatching(on)}
+      onAutomation={(on) => void setAutomationArmed(on)}
       onBack={() => setView("profile")}
       onUnlink={requestUnlink}
     />
