@@ -368,7 +368,9 @@ export async function listChats(userId: string): Promise<TelegramChat[]> {
     id: row.id,
     kind: row.kind,
     title: row.title,
-    photoUrl: row.photo_url?.startsWith("/") ? row.photo_url : safeHttpUrl(row.photo_url) || chatPhotoUrl(row.peer_id),
+    photoUrl: row.photo_url?.startsWith("/api/telegram/photo")
+      ? row.photo_url
+      : safeHttpUrl(row.photo_url),
     lastPreview: redactPreview(row.last_preview),
     lastAt: iso(row.last_at),
     unread: row.unread,

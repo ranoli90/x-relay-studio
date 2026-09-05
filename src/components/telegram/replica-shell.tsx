@@ -177,12 +177,6 @@ export function ReplicaShell() {
         )}
       </header>
 
-      {watch?.lastError ? (
-        <div className="shrink-0 border-b border-border px-3 py-1.5 text-xs text-down">
-          {watch.lastError}
-        </div>
-      ) : null}
-
       <div className="relative min-h-0 flex-1 bg-bg">
         {loading && !account ? (
           <div className="grid h-full place-items-center bg-bg px-4">

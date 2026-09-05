@@ -90,7 +90,7 @@ function mapRpc(err: unknown): TelegramError {
     msg.includes("TIMEOUT") ||
     msg.includes(" DC ")
   ) {
-    return new TelegramError("flood", "Telegram dropped the connection. Tap try again.", 503);
+    return new TelegramError("flood", "Couldn't refresh Telegram just now.", 503);
   }
   if (msg.includes("CANNOT FIND PACKAGE") || msg.includes("CANNOT FIND MODULE")) {
     return new TelegramError("not_configured", "Telegram client failed to load on this server. Try again in a minute.", 500);

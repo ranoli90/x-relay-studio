@@ -18,7 +18,7 @@ import {
 } from "./session.server";
 import { fetchMe, pullInbox } from "./mtproto.server";
 import { redactPreview } from "./preview";
-import { appendMessage, getAccount, listPhotoPeers, savePeerPhoto, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
+import { appendMessage, getAccount, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
 
 function scopedChatId(userId: string, dialogChatId: string): string {
   const uid = userId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 36);
@@ -43,26 +43,19 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
   try {
     const account = await getAccount(userId);
     const selfId = account?.telegramUserId ?? 0;
-    const skipPhotos = await listPhotoPeers(userId);
-    const { dialogs, histories, photos, session } = await pullInbox({
+    const { dialogs, histories, session } = await pullInbox({
       apiId: material.apiId,
       apiHash: material.apiHash,
       session: material.session,
       selfId,
-      dialogLimit: 50,
+      dialogLimit: 40,
       historyLimit: opts?.historyLimit ?? 40,
       historyChats: 0,
-      skipPhotoPeers: skipPhotos,
-      photoLimit: 6,
+      skipPhotoPeers: [],
+      photoLimit: 0,
       focusChatId: opts?.chatId ?? null,
     });
     if (session !== material.session) await saveSignedIn({ userId, session });
-
-    const havePhoto = new Set(skipPhotos);
-    for (const photo of photos) {
-      await savePeerPhoto(userId, photo.peerId, photo.bytes);
-      havePhoto.add(photo.peerId);
-    }
 
     for (const dialog of dialogs) {
       const chatId = scopedChatId(userId, dialog.chatId);
@@ -76,9 +69,7 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
         muted: dialog.muted,
         lastPreview: redactPreview(dialog.lastPreview),
         lastAt: dialog.lastAt,
-        photoUrl: havePhoto.has(dialog.peerId)
-          ? `/api/telegram/photo?p=${encodeURIComponent(dialog.peerId)}`
-          : null,
+        photoUrl: null,
       });
     }
 
@@ -108,11 +99,12 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
     });
   } catch (err) {
     const message = err instanceof TelegramError ? err.message : "Could not refresh Telegram.";
+    const hadChats = (row.chats_watched || 0) > 0;
     await recordSync({
       userId,
       chatsWatched: row.chats_watched || 0,
       messagesIngested: row.messages_ingested || 0,
-      error: message,
+      error: hadChats ? null : message,
     });
   }
 

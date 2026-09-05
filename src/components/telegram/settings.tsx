@@ -57,8 +57,12 @@ export function SettingsPane({
                 ? `On. ${watch.chatsWatched || 0} chats, ${watch.messagesIngested || 0} messages stored.`
                 : "Paused. Turn it on to keep pulling your real chats."}
           </p>
-          {watch?.lastError ? (
+          {watch?.lastError && (watch.chatsWatched || 0) === 0 ? (
             <p className="mt-2 text-sm text-down">{watch.lastError}</p>
+          ) : watch?.lastError ? (
+            <p className="mt-2 text-sm text-[var(--tg-text-secondary)]">
+              Last live refresh missed. Chats already on this desk stay here.
+            </p>
           ) : null}
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
