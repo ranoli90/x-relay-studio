@@ -36,7 +36,7 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
             to="/telegram"
             label="Telegram"
             kicker="Open"
-            description="Sign in with Telegram. Profile and messages."
+            description="Your account. Watch chats. Send as you."
             icon={<TelegramTile />}
           />
           <PlatformCard

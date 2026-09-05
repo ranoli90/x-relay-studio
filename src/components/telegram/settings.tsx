@@ -1,26 +1,46 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { TelegramAccount, TelegramCredentialPublic } from "@/lib/telegram/types";
+import { Input } from "@/components/ui/input";
+import type { TelegramAccount, TelegramWatch } from "@/lib/telegram/types";
 
 export function SettingsPane({
   account,
-  credential,
+  watch,
   notify,
+  saving,
   onNotify,
+  onWatching,
+  onSaveOpenRouter,
   onBack,
   onUnlink,
 }: {
   account: TelegramAccount;
-  credential?: TelegramCredentialPublic | null;
+  watch?: TelegramWatch | null;
   notify: boolean;
+  saving: boolean;
   onNotify: (on: boolean) => void;
+  onWatching: (on: boolean) => void;
+  onSaveOpenRouter: (key: string) => Promise<void>;
   onBack: () => void;
   onUnlink: () => void;
 }) {
-  const helper = credential?.botUsername
-    ? `@${credential.botUsername}`
-    : credential?.botName ?? null;
+  const [orKey, setOrKey] = useState("");
+  const [orErr, setOrErr] = useState<string | null>(null);
+  const [orBusy, setOrBusy] = useState(false);
+
+  async function saveKey() {
+    setOrBusy(true);
+    setOrErr(null);
+    try {
+      await onSaveOpenRouter(orKey);
+      setOrKey("");
+    } catch (e: unknown) {
+      setOrErr(e instanceof Error ? e.message : "Could not save that key.");
+    } finally {
+      setOrBusy(false);
+    }
+  }
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg-secondary)] text-[var(--tg-text)]">
@@ -31,23 +51,96 @@ export function SettingsPane({
         <h2 className="text-sm font-medium">Settings</h2>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-8">
-        {helper ? (
-          <section className="rounded-xl bg-[var(--tg-item-hover)] p-4">
-            <h3 className="text-sm font-medium">Your helper</h3>
-            <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
-              Connected through {helper}
-              {credential?.tokenHint ? ` · key ${credential.tokenHint}` : ""}. Disconnect to paste a
-              different key.
-            </p>
-          </section>
-        ) : null}
-        <section className={`${helper ? "mt-3" : ""} rounded-xl bg-[var(--tg-item-hover)] p-4`}>
+        <section className="rounded-xl bg-[var(--tg-item-hover)] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-sm font-medium">Watching</h3>
+            {account.preview ? null : (
+              <button
+                type="button"
+                role="switch"
+                aria-checked={Boolean(watch?.watching)}
+                onClick={() => onWatching(!watch?.watching)}
+                className={`h-7 w-12 rounded-full p-0.5 transition-colors ${
+                  watch?.watching ? "bg-[var(--tg-primary)]" : "bg-[var(--tg-item-active)]"
+                }`}
+              >
+                <span
+                  className={`block size-6 rounded-full bg-[var(--tg-own-text)] transition-transform ${
+                    watch?.watching ? "translate-x-5" : "translate-x-0"
+                  }`}
+                />
+              </button>
+            )}
+          </div>
+          <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
+            {account.preview
+              ? "Preview is local. Telegram itself is not connected."
+              : watch?.watching
+                ? `On. ${watch.chatsWatched || 0} chats, ${watch.messagesIngested || 0} messages stored.`
+                : "Paused. Turn it on to keep pulling your real chats."}
+          </p>
+          {watch?.lastError ? (
+            <p className="mt-2 text-sm text-down">{watch.lastError}</p>
+          ) : null}
+        </section>
+        <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
+          <h3 className="text-sm font-medium">Automation</h3>
+          <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
+            Not started. Watching queues messages. The decision layer is not connected yet.
+          </p>
+          <p className="mt-2 font-mono text-xs text-[var(--tg-text-secondary)]">
+            {watch?.pendingForAi ?? 0} queued
+          </p>
+          <button
+            type="button"
+            disabled
+            className="mt-3 h-10 w-full rounded-md border border-border text-sm text-[var(--tg-text-secondary)] opacity-50"
+          >
+            Start automation
+          </button>
+        </section>
+        <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
+          <h3 className="text-sm font-medium">OpenRouter</h3>
+          <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
+            {watch?.openRouterReady
+              ? "Key is saved and tested. Nothing is sent until automation starts."
+              : "Paste your key so the decision layer can use it later. We only test it now."}
+          </p>
+          <form
+            className="mt-3 grid gap-2"
+            onSubmit={(e) => {
+              e.preventDefault();
+              void saveKey();
+            }}
+          >
+            <Input
+              value={orKey}
+              onChange={(e) => setOrKey(e.target.value)}
+              placeholder="sk-or-…"
+              autoComplete="off"
+              spellCheck={false}
+              aria-label="OpenRouter API key"
+            />
+            {orErr ? <p className="text-xs text-down">{orErr}</p> : null}
+            <Button
+              type="submit"
+              size="sm"
+              disabled={orBusy || saving || orKey.trim().length < 8}
+            >
+              {orBusy ? "Testing…" : watch?.openRouterReady ? "Replace key" : "Save and test"}
+            </Button>
+          </form>
+        </section>
+        <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
           <h3 className="text-sm font-medium">Devices</h3>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
             {account.preview
               ? "Preview is local to this studio. Telegram itself has no new device."
-              : "This is a website login, not an unofficial Telegram app session. Revoke it in Telegram → Settings → Devices → Connected websites."}
+              : "This desk is a new device on your Telegram. Revoke it in Telegram → Settings → Devices."}
           </p>
+          {watch?.phoneHint ? (
+            <p className="mt-2 font-mono text-xs text-[var(--tg-text-secondary)]">{watch.phoneHint}</p>
+          ) : null}
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
           <div className="flex items-center justify-between gap-3">
@@ -87,8 +180,8 @@ export function SettingsPane({
           Disconnect Telegram
         </Button>
         <p className="mt-3 text-xs leading-relaxed text-[var(--tg-text-secondary)]">
-          Disconnect Telegram. This studio copy is deleted. Telegram itself is untouched unless you
-          also revoke the session in Devices.
+          Disconnect Telegram. This studio copy is deleted. Also revoke the device in Telegram if
+          you want the session gone there too.
         </p>
       </div>
     </div>
@@ -128,20 +221,15 @@ export function UnlinkDialog({
           Disconnect Telegram?
         </h2>
         <p className="mt-2 text-sm leading-relaxed text-muted">
-          Disconnect Telegram. This studio copy is deleted. Telegram itself is untouched unless you
-          also revoke the session in Devices.
+          This desk copy is deleted. Revoke the device in Telegram if you want the session gone
+          there too.
         </p>
-        <div className="mt-5 grid gap-2">
-          <Button type="button" className="h-12 w-full justify-center" disabled={busy} onClick={onConfirm}>
-            {busy ? "Disconnecting…" : "Disconnect"}
-          </Button>
-          <Button
-            type="button"
-            variant="secondary"
-            className="h-12 w-full justify-center"
-            onClick={onCancel}
-          >
+        <div className="mt-5 grid grid-cols-2 gap-2">
+          <Button type="button" variant="secondary" onClick={onCancel} disabled={busy}>
             Cancel
+          </Button>
+          <Button type="button" onClick={onConfirm} disabled={busy}>
+            {busy ? "Disconnecting…" : "Disconnect"}
           </Button>
         </div>
       </div>

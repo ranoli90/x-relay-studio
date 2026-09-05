@@ -36,7 +36,7 @@ export function ChatList({
     const q = query.trim().toLowerCase();
     return chats.filter((c) => {
       if (folder === "saved" && c.kind !== "notes") return false;
-      if (folder === "personal" && c.kind !== "bot") return false;
+      if (folder === "personal" && c.kind !== "user") return false;
       if (!q) return true;
       return c.title.toLowerCase().includes(q) || (c.lastPreview ?? "").toLowerCase().includes(q);
     });

@@ -8,6 +8,7 @@ import type {
   TelegramMessage,
   TelegramMessageStatus,
   TelegramPath,
+  TelegramAiStatus,
 } from "./types";
 import { assertBioLimit, clampBio, safeHttpUrl, sanitizeUsername } from "./validate";
 
@@ -114,7 +115,7 @@ export async function seedStudioNotes(userId: string, displayName: string): Prom
     `select id from telegram_chats where user_id = $1 and id = $2`,
     [userId, chatId],
   );
-  const body = `You’re connected as ${displayName}. Telegram only shared your identity with this app. Private chats with other people stay in Telegram.`;
+  const body = `You’re connected as ${displayName}. This desk watches your real Telegram chats. Automation is not started.`;
   const now = new Date().toISOString();
   if (!existing[0]) {
     await sql.query(
@@ -165,6 +166,9 @@ export async function appendMessage(opts: {
   body: string;
   telegramMessageId?: number | null;
   status?: TelegramMessageStatus;
+  createdAt?: string;
+  bumpUnread?: boolean;
+  aiStatus?: TelegramAiStatus;
 }): Promise<TelegramMessage> {
   const text = opts.body.trim();
   if (!text) throw new TelegramError("invalid", "Message is empty.", 400);
@@ -204,12 +208,14 @@ export async function appendMessage(opts: {
     }
   }
 
-  const now = new Date().toISOString();
+  const now = opts.createdAt ?? new Date().toISOString();
   const id = newId("msg");
   const status: TelegramMessageStatus = opts.status ?? "sent";
+  const aiStatus: TelegramAiStatus =
+    opts.aiStatus ?? (opts.fromSelf ? "outbound" : "queued");
   await sql.query(
-    `insert into telegram_messages (id, user_id, chat_id, from_self, author_name, body, created_at, telegram_message_id, status)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    `insert into telegram_messages (id, user_id, chat_id, from_self, author_name, body, created_at, telegram_message_id, status, ai_status)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
     [
       id,
       opts.userId,
@@ -220,17 +226,25 @@ export async function appendMessage(opts: {
       now,
       opts.telegramMessageId ?? null,
       status,
+      aiStatus,
     ],
   );
+  const bump = opts.bumpUnread !== false && !opts.fromSelf;
   if (opts.fromSelf) {
     await sql.query(
       `update telegram_chats set last_preview = $1, last_at = $2 where user_id = $3 and id = $4`,
       [text.slice(0, 140), now, opts.userId, opts.chatId],
     );
-  } else {
+  } else if (bump) {
     await sql.query(
       `update telegram_chats
           set last_preview = $1, last_at = $2, unread = unread + 1
+        where user_id = $3 and id = $4`,
+      [text.slice(0, 140), now, opts.userId, opts.chatId],
+    );
+  } else {
+    await sql.query(
+      `update telegram_chats set last_preview = coalesce($1, last_preview), last_at = coalesce($2, last_at)
         where user_id = $3 and id = $4`,
       [text.slice(0, 140), now, opts.userId, opts.chatId],
     );
@@ -415,6 +429,57 @@ export async function getChatKind(
     [userId, chatId],
   );
   return rows[0]?.kind ?? null;
+}
+
+export async function getChatPeer(
+  userId: string,
+  chatId: string,
+): Promise<{ kind: TelegramChat["kind"]; peerId: string | null } | null> {
+  const sql = await getSql();
+  const rows = await sql.query<{ kind: TelegramChat["kind"]; peer_id: string | null }>(
+    `select kind, peer_id from telegram_chats where user_id = $1 and id = $2`,
+    [userId, chatId],
+  );
+  const row = rows[0];
+  if (!row) return null;
+  return { kind: row.kind, peerId: row.peer_id };
+}
+
+export async function upsertUserChat(opts: {
+  id: string;
+  userId: string;
+  title: string;
+  peerId: string;
+  unread: number;
+  pinned: boolean;
+  muted: boolean;
+  lastPreview: string | null;
+  lastAt: string | null;
+}): Promise<void> {
+  const sql = await getSql();
+  await sql.query(
+    `insert into telegram_chats (id, user_id, kind, title, last_preview, last_at, unread, pinned, muted, peer_id)
+     values ($1,$2,'user',$3,$4,$5,$6,$7,$8,$9)
+     on conflict (id) do update set
+       title = excluded.title,
+       last_preview = coalesce(excluded.last_preview, telegram_chats.last_preview),
+       last_at = coalesce(excluded.last_at, telegram_chats.last_at),
+       unread = excluded.unread,
+       pinned = excluded.pinned,
+       muted = excluded.muted,
+       peer_id = excluded.peer_id`,
+    [
+      opts.id,
+      opts.userId,
+      opts.title.slice(0, 120),
+      opts.lastPreview,
+      opts.lastAt,
+      opts.unread,
+      opts.pinned,
+      opts.muted,
+      opts.peerId,
+    ],
+  );
 }
 
 export async function sendNote(

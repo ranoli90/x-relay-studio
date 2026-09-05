@@ -39,13 +39,15 @@ export function PeerProfile({
           <TgAvatar name={chat.title} src={chat.photoUrl} size="lg" />
           <h2 className="mt-4 text-xl font-medium tracking-tight">{chat.title}</h2>
           <p className="mt-1 font-mono text-xs text-[var(--tg-text-secondary)]">
-            {notes ? "Studio notes" : helper}
+            {notes ? "Studio notes" : chat.kind === "user" ? "Telegram" : helper}
           </p>
         </div>
         <p className="mt-6 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
           {notes
             ? "Saved in this studio. Your Telegram profile and chats were not changed."
-            : "Private thread with your helper. Telegram only shows messages this helper can see — not chats with other people."}
+            : chat.kind === "user"
+              ? "This is a real chat from your Telegram. Messages here are yours. Watching stores them so automation can start later."
+              : "Private thread with your helper."}
         </p>
       </div>
     </div>

@@ -1,4 +1,4 @@
-/** Server-only Telegram Path A credentials. Never import from client code. */
+/** Server-only Telegram credentials. Never import from client code. */
 
 function env(key: string): string | undefined {
   const value = process.env[key]?.trim();
@@ -11,8 +11,22 @@ export type TelegramOidcConfig = {
   botToken: string | null;
 };
 
+export type TelegramUserApp = {
+  apiId: number;
+  apiHash: string;
+};
+
 export function telegramMtprotoEnabled(): boolean {
-  return env("TELEGRAM_MTPROTO_ENABLED") === "true";
+  return env("TELEGRAM_MTPROTO_ENABLED") !== "false";
+}
+
+export function telegramUserApp(): TelegramUserApp | null {
+  const idRaw = env("TELEGRAM_API_ID");
+  const apiHash = env("TELEGRAM_API_HASH");
+  const apiId = idRaw ? Number(idRaw) : NaN;
+  if (!Number.isInteger(apiId) || apiId < 1000 || apiId > 99_999_999) return null;
+  if (!apiHash || apiHash.length < 16) return null;
+  return { apiId, apiHash };
 }
 
 export function telegramOidcConfig(): TelegramOidcConfig | null {
@@ -27,7 +41,7 @@ export function telegramOidcConfig(): TelegramOidcConfig | null {
 }
 
 export function telegramConfigured(): boolean {
-  return telegramOidcConfig() !== null;
+  return telegramOidcConfig() !== null || telegramUserApp() !== null;
 }
 
 export function publicOrigin(request: Request): string {

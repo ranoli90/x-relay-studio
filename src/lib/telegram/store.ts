@@ -3,7 +3,9 @@ import {
   telegramEnterPreviewFn,
   telegramMeFn,
   telegramMessagesFn,
+  telegramSaveOpenRouterFn,
   telegramSendFn,
+  telegramSetWatchingFn,
   telegramSyncFn,
   telegramUnlinkFn,
   telegramUpdateProfileFn,
@@ -47,6 +49,8 @@ type TelegramState = {
     username?: string;
   }) => Promise<void>;
   unlink: () => Promise<void>;
+  setWatching: (watching: boolean) => Promise<void>;
+  saveOpenRouter: (key: string) => Promise<void>;
 };
 
 function isAuthError(err: unknown): boolean {
@@ -112,7 +116,11 @@ export const useTelegram = create<TelegramState>((set, get) => ({
       const prevUnread = (snapshot.chats ?? []).reduce((n, c) => n + (c.unread ?? 0), 0);
       const nextUnread = next.chats.reduce((n, c) => n + (c.unread ?? 0), 0);
       set({
-        snapshot: { ...snapshot, chats: next.chats },
+        snapshot: {
+          ...snapshot,
+          chats: next.chats,
+          watch: next.watch ?? snapshot.watch,
+        },
         messages: selectedChatId ? next.messages : messages,
       });
       if (
@@ -236,6 +244,7 @@ export const useTelegram = create<TelegramState>((set, get) => ({
           account: null,
           chats: [],
           credential: null,
+          watch: null,
         },
         view: "list",
         selectedChatId: null,
@@ -246,6 +255,30 @@ export const useTelegram = create<TelegramState>((set, get) => ({
         loading: false,
         error: err instanceof Error ? err.message : "Could not disconnect.",
       });
+    }
+  },
+
+  setWatching: async (watching) => {
+    set({ error: null });
+    try {
+      const snapshot = await telegramSetWatchingFn({ data: { watching } });
+      set({ snapshot });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : "Could not change watching." });
+    }
+  },
+
+  saveOpenRouter: async (key) => {
+    set({ saving: true, error: null });
+    try {
+      const snapshot = await telegramSaveOpenRouterFn({ data: { key } });
+      set({ snapshot, saving: false });
+    } catch (err) {
+      set({
+        saving: false,
+        error: err instanceof Error ? err.message : "Could not save that OpenRouter key.",
+      });
+      throw err;
     }
   },
 }));

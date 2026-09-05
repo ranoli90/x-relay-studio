@@ -172,3 +172,15 @@ export function extractJson(text: string): unknown {
     throw new Error("Could not parse a JSON payload from the model.");
   }
 }
+
+export function openRouterKey(): string {
+  return OPENROUTER_API_KEY;
+}
+
+export async function pingOpenRouter(): Promise<boolean> {
+  const res = await fetch("https://openrouter.ai/api/v1/key", {
+    headers: { Authorization: `Bearer ${OPENROUTER_API_KEY}` },
+    signal: AbortSignal.timeout(12_000),
+  });
+  return res.ok;
+}

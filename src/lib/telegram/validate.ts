@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { TelegramError } from "./errors.ts";
 import { graphemeCount, sliceGraphemes } from "./graphemes.ts";
+import { normalizePhone, parseApiHash, parseApiId } from "./phone.ts";
 import { BIO_GRAPHEME_LIMIT } from "./types.ts";
 
 const CHAT_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{1,159}$/;
@@ -34,6 +35,31 @@ export const SaveKeySchema = z.object({
   token: z.string().min(1).max(200),
 });
 
+export const StartLoginSchema = z.object({
+  phone: z.string().min(1).max(24),
+  apiId: z.string().max(12).optional(),
+  apiHash: z.string().max(64).optional(),
+});
+
+export const SubmitCodeSchema = z.object({
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{4,8}$/, "That code should be 4–8 digits."),
+});
+
+export const SubmitPasswordSchema = z.object({
+  password: z.string().min(1, "Password is required.").max(128),
+});
+
+export const OpenRouterKeySchema = z.object({
+  key: z.string().min(8).max(256),
+});
+
+export const WatchToggleSchema = z.object({
+  watching: z.boolean(),
+});
+
 export const ProfileSchema = z.object({
   firstName: z.string().trim().min(1, "First name is required.").max(64),
   lastName: z.string().trim().max(64),
@@ -50,6 +76,28 @@ export function parseOrThrow<S extends z.ZodType>(schema: S, input: unknown): z.
     throw new TelegramError("invalid", issue?.message || "That request was invalid.", 400);
   }
   return result.data;
+}
+
+export function parsedStartLogin(
+  input: z.infer<typeof StartLoginSchema>,
+  platform?: { apiId: number; apiHash: string } | null,
+): {
+  apiId: number;
+  apiHash: string;
+  phone: string;
+} {
+  const phone = normalizePhone(input.phone);
+  if (!phone) throw new TelegramError("invalid", "Use a full phone number with country code.", 400);
+  const apiId = platform?.apiId ?? (input.apiId ? parseApiId(input.apiId) : null);
+  const apiHash = platform?.apiHash ?? (input.apiHash ? parseApiHash(input.apiHash) : null);
+  if (!apiId || !apiHash) {
+    throw new TelegramError(
+      "not_configured",
+      "This desk still needs Telegram app numbers (API ID and API hash from my.telegram.org).",
+      400,
+    );
+  }
+  return { apiId, apiHash, phone };
 }
 
 /** Only http(s) URLs. Drops javascript:, data:, and malformed picture claims. */

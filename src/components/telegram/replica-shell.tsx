@@ -30,6 +30,8 @@ export function ReplicaShell() {
   const setFolder = useTelegram((s) => s.setFolder);
   const setNotify = useTelegram((s) => s.setNotify);
   const saveProfile = useTelegram((s) => s.saveProfile);
+  const setWatching = useTelegram((s) => s.setWatching);
+  const saveOpenRouter = useTelegram((s) => s.saveOpenRouter);
   const unlink = useTelegram((s) => s.unlink);
   const { query, setQuery } = useChatQuery();
   const [confirmUnlink, setConfirmUnlink] = useState(false);
@@ -56,6 +58,7 @@ export function ReplicaShell() {
 
   const account = snapshot?.account ?? null;
   const credential = snapshot?.credential ?? null;
+  const watch = snapshot?.watch ?? null;
   const chats = snapshot?.chats ?? [];
   const selected = chats.find((c) => c.id === selectedChatId) ?? null;
 
@@ -86,9 +89,12 @@ export function ReplicaShell() {
   const settings = account ? (
     <SettingsPane
       account={account}
-      credential={credential}
+      watch={watch}
       notify={notify}
+      saving={saving}
       onNotify={setNotify}
+      onWatching={(on) => void setWatching(on)}
+      onSaveOpenRouter={(key) => saveOpenRouter(key)}
       onBack={() => setView("profile")}
       onUnlink={requestUnlink}
     />
@@ -153,6 +159,10 @@ export function ReplicaShell() {
           <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[length:var(--tg-fs-micro)] uppercase tracking-widest text-subtle">
             Preview
           </span>
+        ) : watch?.watching ? (
+          <span className="rounded-full border border-border px-2 py-0.5 font-mono text-[length:var(--tg-fs-micro)] uppercase tracking-widest text-subtle">
+            Watching
+          </span>
         ) : null}
         <Link
           to="/"
@@ -164,6 +174,20 @@ export function ReplicaShell() {
           <UserButton />
         </div>
       </header>
+
+      {account && !account.preview ? (
+        <div className="flex h-9 shrink-0 items-center gap-3 overflow-hidden border-b border-border px-4 font-mono text-[11px] text-subtle">
+          <span className={watch?.watching ? "text-up" : ""}>
+            {watch?.watching ? "Watching your Telegram" : "Watching paused"}
+          </span>
+          <span className="truncate">
+            {watch?.chatsWatched ?? 0} chats · {watch?.messagesIngested ?? 0} stored ·{" "}
+            {watch?.pendingForAi ?? 0} queued
+          </span>
+          {watch?.openRouterReady ? <span>OpenRouter ready</span> : <span>OpenRouter not set</span>}
+          {watch?.lastError ? <span className="truncate text-down">{watch.lastError}</span> : null}
+        </div>
+      ) : null}
 
       <div className="relative min-h-0 flex-1">
         {loading && !account ? (

@@ -41,10 +41,10 @@ export function Composer({
   }
 
   const placeholder =
-    disabled && kind !== "notes" && kind !== "bot"
+    disabled && kind === "bot"
       ? "This chat is read-only on this path."
-      : kind === "bot"
-        ? "Message as helper"
+      : kind === "user"
+        ? "Message as you"
         : "Message";
 
   return (

@@ -39,7 +39,7 @@ function TelegramDoor() {
       .then((s) => {
         if (cancelled) return;
         setStatus(s);
-        if (s.onboarded || (s.linked && !s.hasOwnKey)) {
+        if (s.onboarded) {
           void navigate({ to: "/telegram/app" });
         }
         setReady(true);

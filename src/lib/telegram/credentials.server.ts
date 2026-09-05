@@ -48,7 +48,7 @@ function freshPayload(): { payload: string; exp: string } {
 
 export function deriveStep(row: CredentialRow | null): TelegramOnboardingStep {
   if (!row) return "welcome";
-  if (!row.hello_at) return "hello";
+  if (!row.hello_at) return "phone";
   if (!row.onboarded_at) return "checks";
   return "done";
 }

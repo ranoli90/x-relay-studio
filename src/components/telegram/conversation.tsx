@@ -39,7 +39,7 @@ export function Conversation({
     );
   }
 
-  const writable = chat.kind === "notes" || chat.kind === "bot";
+  const writable = chat.kind === "notes" || chat.kind === "user" || chat.kind === "bot";
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[var(--tg-bg)]">
@@ -63,7 +63,7 @@ export function Conversation({
           <span className="min-w-0">
             <span className="tg-title block truncate text-[var(--tg-text)]">{chat.title}</span>
             <span className="block truncate text-[length:var(--tg-fs-time)] text-[var(--tg-text-secondary)]">
-              {chat.kind === "notes" ? "Saved in this studio" : "Helper · Telegram"}
+              {chat.kind === "notes" ? "Saved in this studio" : chat.kind === "user" ? "Telegram · you" : "Helper · Telegram"}
             </span>
           </span>
         </button>
@@ -75,7 +75,9 @@ export function Conversation({
           <p className="py-8 text-center text-sm text-[var(--tg-text-secondary)]">
             {chat.kind === "notes"
               ? "Studio notes live here. Telegram itself is unchanged."
-              : "No messages yet. Open the helper in Telegram or write as the helper."}
+              : chat.kind === "user"
+                ? "No messages pulled yet. Watching will fill this in."
+                : "No messages yet."}
           </p>
         ) : (
           messages.map((msg, i) => {

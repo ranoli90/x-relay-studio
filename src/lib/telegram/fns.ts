@@ -14,20 +14,31 @@ import type {
 } from "./types";
 import {
   MessagesSchema,
+  OpenRouterKeySchema,
   PreviewNameSchema,
   ProfileSchema,
   SaveKeySchema,
   SendSchema,
+  StartLoginSchema,
+  SubmitCodeSchema,
+  SubmitPasswordSchema,
   SyncSchema,
+  WatchToggleSchema,
   parseOrThrow,
+  parsedStartLogin,
 } from "./validate";
 
 const CHECK_ID_SET = new Set<string>(TELEGRAM_CHECK_IDS);
 
 async function buildStatus(userId: string): Promise<TelegramStatus> {
-  const { telegramConfigured, telegramMtprotoEnabled } = await import("./config.server");
+  const { telegramConfigured, telegramMtprotoEnabled, telegramUserApp } = await import(
+    "./config.server"
+  );
   const { getAccount } = await import("./snapshot.server");
   const { getCredentialRow, toPublic, deriveStep } = await import("./credentials.server");
+  const { getUserSession, deriveUserStep, toWatch, pendingForAiCount, sessionChecks } = await import(
+    "./session.server"
+  );
   const account = await getAccount(userId);
   let cred = null;
   try {
@@ -35,19 +46,26 @@ async function buildStatus(userId: string): Promise<TelegramStatus> {
   } catch {
     cred = null;
   }
+  const session = await getUserSession(userId);
   const publicCred = toPublic(cred);
-  const platformLogin = telegramConfigured();
-  const onboarded = Boolean(publicCred?.onboarded);
+  const watch = toWatch(session, await pendingForAiCount(userId).catch(() => 0));
+  const onboarded = Boolean(session?.onboarded_at) || Boolean(publicCred?.onboarded);
+  const step = (session
+    ? deriveUserStep(session)
+    : (publicCred?.step ?? deriveStep(cred))) as TelegramOnboardingStep;
   return {
-    configured: Boolean(publicCred?.hasToken) || platformLogin,
+    configured: Boolean(session?.session_enc) || Boolean(publicCred?.hasToken) || telegramConfigured(),
     mtprotoEnabled: telegramMtprotoEnabled(),
     linked: Boolean(account) && !account?.preview,
     preview: account?.preview ?? false,
     onboarded,
-    hasOwnKey: Boolean(publicCred?.hasToken),
-    platformLogin,
-    step: (publicCred?.step ?? deriveStep(cred)) as TelegramOnboardingStep,
+    hasOwnKey: Boolean(session?.session_enc) || Boolean(publicCred?.hasToken),
+    platformLogin: telegramConfigured(),
+    needsAppKeys: telegramUserApp() === null,
+    step,
     credential: publicCred,
+    watch,
+    checks: sessionChecks(session),
   };
 }
 
@@ -55,22 +73,25 @@ async function buildSnapshot(userId: string): Promise<TelegramSnapshot> {
   const { telegramConfigured, telegramMtprotoEnabled } = await import("./config.server");
   const { getAccount, listChats } = await import("./snapshot.server");
   const { getCredentialRow, toPublic } = await import("./credentials.server");
+  const { getUserSession, toWatch, pendingForAiCount } = await import("./session.server");
   let cred = null;
   try {
     cred = await getCredentialRow(userId);
   } catch {
     cred = null;
   }
+  const session = await getUserSession(userId);
   const account = await getAccount(userId);
   const chats = account ? await listChats(userId) : [];
   const publicCred = toPublic(cred);
   return {
-    configured: Boolean(publicCred?.hasToken) || telegramConfigured(),
+    configured: Boolean(session?.session_enc) || Boolean(publicCred?.hasToken) || telegramConfigured(),
     mtprotoEnabled: telegramMtprotoEnabled(),
-    onboarded: Boolean(publicCred?.onboarded),
+    onboarded: Boolean(session?.onboarded_at) || Boolean(publicCred?.onboarded),
     account,
     chats,
     credential: publicCred,
+    watch: toWatch(session, await pendingForAiCount(userId).catch(() => 0)),
   };
 }
 
@@ -83,6 +104,113 @@ export const telegramMeFn = createServerFn({ method: "POST" })
   .handler(async ({ context }): Promise<TelegramSnapshot> => {
     console.info("[telegram]", { event: "me", userId: context.userId });
     return buildSnapshot(context.userId);
+  });
+
+export const telegramStartLoginFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => parseOrThrow(StartLoginSchema, input))
+  .handler(async ({ context, data }): Promise<TelegramStatus> => {
+    const { takeRate } = await import("./snapshot.server");
+    const { telegramUserApp } = await import("./config.server");
+    const { sendLoginCode } = await import("./mtproto.server");
+    const { upsertLoginStart } = await import("./session.server");
+    await takeRate(context.userId, "tg_login", 8, 15 * 60 * 1000);
+    const parsed = parsedStartLogin(data, telegramUserApp());
+    const sent = await sendLoginCode(parsed);
+    await upsertLoginStart({
+      userId: context.userId,
+      apiId: parsed.apiId,
+      apiHash: parsed.apiHash,
+      phone: parsed.phone,
+      phoneCodeHash: sent.phoneCodeHash,
+      session: sent.session,
+    });
+    return buildStatus(context.userId);
+  });
+
+export const telegramSubmitCodeFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => parseOrThrow(SubmitCodeSchema, input))
+  .handler(async ({ context, data }): Promise<TelegramStatus> => {
+    const { takeRate, upsertLinkedAccount } = await import("./snapshot.server");
+    const { getUserSession, decryptSessionMaterial, saveSignedIn, markNeedsPassword } = await import(
+      "./session.server"
+    );
+    const { signInWithCode, fetchMe } = await import("./mtproto.server");
+    await takeRate(context.userId, "tg_code", 12, 15 * 60 * 1000);
+    const row = await getUserSession(context.userId);
+    if (!row) throw new TelegramError("invalid", "Start with your phone number first.", 400);
+    const material = await decryptSessionMaterial(row);
+    if (!material.phoneCodeHash) {
+      throw new TelegramError("telegram_login_expired", "That login code expired. Send a new one.", 401);
+    }
+    const signed = await signInWithCode({
+      apiId: material.apiId,
+      apiHash: material.apiHash,
+      session: material.session,
+      phone: material.phone,
+      phoneCodeHash: material.phoneCodeHash,
+      code: data.code,
+    });
+    if (signed.needsPassword) {
+      await markNeedsPassword(context.userId, signed.session);
+      return buildStatus(context.userId);
+    }
+    await saveSignedIn({ userId: context.userId, session: signed.session });
+    const { me } = await fetchMe({
+      apiId: material.apiId,
+      apiHash: material.apiHash,
+      session: signed.session,
+    });
+    await upsertLinkedAccount({
+      userId: context.userId,
+      telegramUserId: me.telegramUserId,
+      firstName: me.firstName,
+      lastName: me.lastName,
+      username: me.username,
+      photoUrl: null,
+      botCanWrite: false,
+      path: "mtproto",
+      preview: false,
+    });
+    return buildStatus(context.userId);
+  });
+
+export const telegramSubmitPasswordFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => parseOrThrow(SubmitPasswordSchema, input))
+  .handler(async ({ context, data }): Promise<TelegramStatus> => {
+    const { takeRate, upsertLinkedAccount } = await import("./snapshot.server");
+    const { getUserSession, decryptSessionMaterial, saveSignedIn } = await import("./session.server");
+    const { signInCloudPassword, fetchMe } = await import("./mtproto.server");
+    await takeRate(context.userId, "tg_password", 8, 15 * 60 * 1000);
+    const row = await getUserSession(context.userId);
+    if (!row) throw new TelegramError("invalid", "Start with your phone number first.", 400);
+    const material = await decryptSessionMaterial(row);
+    const signed = await signInCloudPassword({
+      apiId: material.apiId,
+      apiHash: material.apiHash,
+      session: material.session,
+      password: data.password,
+    });
+    await saveSignedIn({ userId: context.userId, session: signed.session });
+    const { me } = await fetchMe({
+      apiId: material.apiId,
+      apiHash: material.apiHash,
+      session: signed.session,
+    });
+    await upsertLinkedAccount({
+      userId: context.userId,
+      telegramUserId: me.telegramUserId,
+      firstName: me.firstName,
+      lastName: me.lastName,
+      username: me.username,
+      photoUrl: null,
+      botCanWrite: false,
+      path: "mtproto",
+      preview: false,
+    });
+    return buildStatus(context.userId);
   });
 
 export const telegramStartOidcFn = createServerFn({ method: "POST" })
@@ -104,7 +232,6 @@ export const telegramStartOidcFn = createServerFn({ method: "POST" })
       nonce: start.nonce,
       verifier: start.verifier,
     });
-    console.info("[telegram]", { event: "oidc_start", userId: context.userId });
     return { url: start.url };
   });
 
@@ -142,11 +269,11 @@ export const telegramRunCheckFn = createServerFn({ method: "POST" })
     if (!id || !CHECK_ID_SET.has(id)) throw new TelegramError("invalid", "Unknown check.", 400);
     return { id };
   })
-  .handler(async ({ context, data }): Promise<TelegramStatus> => {
+  .handler(async ({ context }): Promise<TelegramStatus> => {
     const { takeRate } = await import("./snapshot.server");
-    const { runOneCheck } = await import("./checks.server");
-    await takeRate(context.userId, "check", 40, 60 * 1000);
-    await runOneCheck(context.userId, data.id);
+    const { runWatchChecks } = await import("./watch.server");
+    await takeRate(context.userId, "check", 20, 60 * 1000);
+    await runWatchChecks(context.userId);
     return buildStatus(context.userId);
   });
 
@@ -154,17 +281,18 @@ export const telegramRunAllChecksFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<TelegramStatus> => {
     const { takeRate } = await import("./snapshot.server");
-    const { runAllChecks } = await import("./checks.server");
+    const { runWatchChecks } = await import("./watch.server");
     await takeRate(context.userId, "check_all", 10, 60 * 1000);
-    await runAllChecks(context.userId);
+    await runWatchChecks(context.userId);
     return buildStatus(context.userId);
   });
 
 export const telegramFinishOnboardingFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .handler(async ({ context }): Promise<TelegramSnapshot> => {
-    const { finishOnboarding } = await import("./checks.server");
-    await finishOnboarding(context.userId);
+    const { finishWatchOnboarding, syncWatch } = await import("./watch.server");
+    await finishWatchOnboarding(context.userId);
+    await syncWatch(context.userId, { historyLimit: 20 }).catch(() => null);
     return buildSnapshot(context.userId);
   });
 
@@ -174,28 +302,12 @@ export const telegramEnterPreviewFn = createServerFn({ method: "POST" })
   .handler(async ({ context, data }): Promise<TelegramSnapshot> => {
     const { getAccount, enterPreviewAccount, listChats } = await import("./snapshot.server");
     const existing = await getAccount(context.userId);
-    if (existing && !existing.preview) {
-      const chats = await listChats(context.userId);
-      return {
-        configured: true,
-        mtprotoEnabled: false,
-        onboarded: true,
-        account: existing,
-        chats,
-        credential: null,
-      };
-    }
+    if (existing && !existing.preview) return buildSnapshot(context.userId);
     const name = data.displayName?.trim() || "You";
-    const account = await enterPreviewAccount(context.userId, name);
+    await enterPreviewAccount(context.userId, name);
     const chats = await listChats(context.userId);
-    return {
-      configured: true,
-      mtprotoEnabled: false,
-      onboarded: false,
-      account,
-      chats,
-      credential: null,
-    };
+    const snap = await buildSnapshot(context.userId);
+    return { ...snap, chats };
   });
 
 export const telegramMessagesFn = createServerFn({ method: "POST" })
@@ -210,7 +322,7 @@ export const telegramSendFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => parseOrThrow(SendSchema, input))
   .handler(async ({ context, data }): Promise<TelegramMessage> => {
-    const { takeRate, sendNote, getAccount, getChatKind, appendMessage } = await import(
+    const { takeRate, sendNote, getAccount, getChatKind, getChatPeer, appendMessage } = await import(
       "./snapshot.server"
     );
     await takeRate(context.userId, "send", 60, 60 * 1000);
@@ -220,11 +332,40 @@ export const telegramSendFn = createServerFn({ method: "POST" })
     if (kind === "notes") {
       return sendNote(context.userId, data.chatId, data.body, account.displayName);
     }
+    if (kind === "user") {
+      const peer = await getChatPeer(context.userId, data.chatId);
+      const { getUserSession, decryptSessionMaterial, saveSignedIn } = await import("./session.server");
+      const { sendAsUser } = await import("./mtproto.server");
+      const row = await getUserSession(context.userId);
+      if (!row?.session_enc || !peer?.peerId) {
+        throw new TelegramError("invalid", "Connect your Telegram account first.", 400);
+      }
+      const material = await decryptSessionMaterial(row);
+      const sent = await sendAsUser({
+        apiId: material.apiId,
+        apiHash: material.apiHash,
+        session: material.session,
+        peerId: peer.peerId,
+        body: data.body,
+      });
+      if (sent.session !== material.session) {
+        await saveSignedIn({ userId: context.userId, session: sent.session });
+      }
+      return appendMessage({
+        userId: context.userId,
+        chatId: data.chatId,
+        fromSelf: true,
+        authorName: account.displayName,
+        body: data.body,
+        telegramMessageId: sent.telegramMessageId,
+        aiStatus: "outbound",
+      });
+    }
     if (kind === "bot") {
       const { getDecryptedToken, getCredentialRow } = await import("./credentials.server");
       const { botSendMessage } = await import("./bot.server");
       const token = await getDecryptedToken(context.userId);
-      if (!token) throw new TelegramError("invalid", "Save a helper key first.", 400);
+      if (!token) throw new TelegramError("invalid", "This chat isn’t available.", 400);
       const cred = await getCredentialRow(context.userId);
       const sent = await botSendMessage(token, account.telegramUserId, data.body);
       return appendMessage({
@@ -236,7 +377,7 @@ export const telegramSendFn = createServerFn({ method: "POST" })
         telegramMessageId: sent.message_id,
       });
     }
-    throw new TelegramError("invalid", "This path can only write Studio notes or helper chats.", 400);
+    throw new TelegramError("invalid", "This chat isn’t available.", 400);
   });
 
 export const telegramUpdateProfileFn = createServerFn({ method: "POST" })
@@ -253,9 +394,35 @@ export const telegramUnlinkFn = createServerFn({ method: "POST" })
   .handler(async ({ context }) => {
     const { unlinkAccount } = await import("./snapshot.server");
     const { deleteCredentials } = await import("./credentials.server");
+    const { deleteUserSession } = await import("./session.server");
+    await deleteUserSession(context.userId);
     await deleteCredentials(context.userId);
     await unlinkAccount(context.userId);
     return { ok: true as const };
+  });
+
+export const telegramSetWatchingFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => parseOrThrow(WatchToggleSchema, input))
+  .handler(async ({ context, data }): Promise<TelegramSnapshot> => {
+    const { setWatching } = await import("./session.server");
+    await setWatching(context.userId, data.watching);
+    return buildSnapshot(context.userId);
+  });
+
+export const telegramSaveOpenRouterFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => parseOrThrow(OpenRouterKeySchema, input))
+  .handler(async ({ context, data }): Promise<TelegramSnapshot> => {
+    const { takeRate } = await import("./snapshot.server");
+    const { getUserSession, saveOpenRouterKey } = await import("./session.server");
+    const { testOpenRouterKey } = await import("./openrouter-user.server");
+    await takeRate(context.userId, "or_key", 8, 15 * 60 * 1000);
+    const row = await getUserSession(context.userId);
+    if (!row) throw new TelegramError("invalid", "Connect Telegram first.", 400);
+    await testOpenRouterKey(data.key);
+    await saveOpenRouterKey(context.userId, data.key);
+    return buildSnapshot(context.userId);
   });
 
 export const telegramChatsFn = createServerFn({ method: "GET" })
@@ -272,16 +439,27 @@ export const telegramSyncFn = createServerFn({ method: "POST" })
     async ({
       context,
       data,
-    }): Promise<{ chats: TelegramChat[]; messages: TelegramMessage[] }> => {
+    }): Promise<{
+      chats: TelegramChat[];
+      messages: TelegramMessage[];
+      watch: TelegramSnapshot["watch"];
+    }> => {
+      const { getUserSession } = await import("./session.server");
+      const session = await getUserSession(context.userId);
+      if (session?.session_enc && session.watching) {
+        const { syncWatch } = await import("./watch.server");
+        const pulled = await syncWatch(context.userId, { chatId: data.chatId ?? null });
+        return { ...pulled, watch: (await buildSnapshot(context.userId)).watch };
+      }
       try {
         const { pullUpdates } = await import("./credentials.server");
         await pullUpdates(context.userId);
       } catch {
-        // webhook-only or no key — still return stored chats
+        /* no helper key */
       }
       const { listChats, listMessages } = await import("./snapshot.server");
       const chats = await listChats(context.userId);
       const messages = data.chatId ? await listMessages(context.userId, data.chatId) : [];
-      return { chats, messages };
+      return { chats, messages, watch: (await buildSnapshot(context.userId)).watch };
     },
   );

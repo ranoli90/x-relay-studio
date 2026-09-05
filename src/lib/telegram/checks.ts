@@ -1,9 +1,9 @@
 export const TELEGRAM_CHECK_IDS = [
-  "helper_alive",
-  "its_you",
-  "studio_notes",
-  "helper_message",
-  "see_chat",
+  "signed_in",
+  "chats_visible",
+  "messages_readable",
+  "watching_on",
+  "openrouter_ready",
 ] as const;
 
 export type TelegramCheckId = (typeof TELEGRAM_CHECK_IDS)[number];
@@ -17,33 +17,33 @@ export type TelegramCheckMeta = {
 
 export const TELEGRAM_CHECKS: TelegramCheckMeta[] = [
   {
-    id: "helper_alive",
-    title: "Helper is online",
-    blurb: "We can reach the helper you just made.",
+    id: "signed_in",
+    title: "This is your Telegram",
+    blurb: "We can see the account you just signed in with.",
     required: true,
   },
   {
-    id: "its_you",
-    title: "We know it’s you",
-    blurb: "You tapped Start, so this desk is tied to your Telegram.",
+    id: "chats_visible",
+    title: "Chats are visible",
+    blurb: "Your real conversations can be listed here.",
     required: true,
   },
   {
-    id: "studio_notes",
-    title: "Notes work here",
-    blurb: "Your studio notes thread can save a message.",
+    id: "messages_readable",
+    title: "Messages can be read",
+    blurb: "Recent messages from Telegram landed on this desk.",
     required: true,
   },
   {
-    id: "helper_message",
-    title: "Helper can write you",
-    blurb: "A short ping from the helper to your Telegram.",
+    id: "watching_on",
+    title: "Watching is on",
+    blurb: "New messages will keep arriving while this desk is open.",
     required: true,
   },
   {
-    id: "see_chat",
-    title: "Helper can see the chat",
-    blurb: "We can open the private chat between you and the helper.",
+    id: "openrouter_ready",
+    title: "OpenRouter key works",
+    blurb: "Saved for the decision layer. Nothing is sent to it yet.",
     required: false,
   },
 ];

@@ -6,9 +6,17 @@ export type TelegramChatKind = "notes" | "bot" | "user";
 
 export type TelegramFolder = "all" | "personal" | "saved";
 
-export type TelegramOnboardingStep = "welcome" | "key" | "hello" | "checks" | "done";
+export type TelegramOnboardingStep =
+  | "welcome"
+  | "phone"
+  | "code"
+  | "password"
+  | "checks"
+  | "done";
 
 export type TelegramMessageStatus = "sending" | "sent";
+
+export type TelegramAiStatus = "queued" | "outbound" | "held";
 
 export type TelegramAccount = {
   telegramUserId: number;
@@ -66,6 +74,20 @@ export type TelegramCredentialPublic = {
   step: TelegramOnboardingStep;
 };
 
+export type TelegramWatch = {
+  watching: boolean;
+  lastSyncAt: string | null;
+  lastError: string | null;
+  chatsWatched: number;
+  messagesIngested: number;
+  pendingForAi: number;
+  openRouterReady: boolean;
+  automationArmed: boolean;
+  phoneHint: string | null;
+  needsPassword: boolean;
+  hasSession: boolean;
+};
+
 export type TelegramSnapshot = {
   configured: boolean;
   mtprotoEnabled: boolean;
@@ -73,6 +95,7 @@ export type TelegramSnapshot = {
   account: TelegramAccount | null;
   chats: TelegramChat[];
   credential: TelegramCredentialPublic | null;
+  watch: TelegramWatch | null;
 };
 
 export type TelegramStatus = {
@@ -83,8 +106,11 @@ export type TelegramStatus = {
   onboarded: boolean;
   hasOwnKey: boolean;
   platformLogin: boolean;
+  needsAppKeys: boolean;
   step: TelegramOnboardingStep;
   credential: TelegramCredentialPublic | null;
+  watch: TelegramWatch | null;
+  checks: TelegramCheckResult[];
 };
 
 export const STUDIO_NOTES_CHAT_ID = "studio-notes";

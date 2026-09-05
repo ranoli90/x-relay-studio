@@ -3,13 +3,14 @@ import { Logo } from "@/components/logo";
 import { Skeleton } from "@/components/ui/skeleton";
 
 const ERRORS: Record<string, string> = {
-  telegram_login_expired: "Telegram login expired. Start again.",
+  telegram_login_expired: "That login code expired. Send a new one.",
   telegram_denied: "Telegram login was cancelled.",
   telegram_in_use: "That Telegram account is already linked to another desk.",
   unauthorized: "Open a desk first.",
-  not_configured: "Telegram connect isn’t configured.",
+  not_configured: "Telegram connect isn’t configured yet.",
   flood: "Telegram asked us to wait. Try again in a few minutes.",
-  bad_key: "That key didn’t work. Copy it again from BotFather.",
+  bad_key: "That didn’t work. Try again.",
+  password: "This account uses a cloud password.",
 };
 
 export function TelegramLoginScreen({
@@ -27,11 +28,11 @@ export function TelegramLoginScreen({
         <Logo />
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">Telegram</p>
         <h1 className="mt-3 text-3xl font-medium tracking-tight">
-          Open a desk, then connect Telegram.
+          Open a desk, then connect your Telegram.
         </h1>
         <p className="mt-3 text-sm leading-relaxed text-muted">
-          This door does not sign in with X or Google. Your desk number is the account. After
-          that you’ll make a small helper in Telegram, say hello, and open the desk.
+          You’ll sign in as yourself — the account you already use. We watch your real chats so
+          later you can start automation. This is not a bot.
         </p>
 
         {message ? (
@@ -53,11 +54,6 @@ export function TelegramLoginScreen({
             Open a desk
           </Link>
         )}
-
-        <p className="mt-8 text-xs leading-relaxed text-subtle">
-          Connecting Telegram is a linked identity on this desk. We never see your Telegram
-          password.
-        </p>
       </div>
     </main>
   );

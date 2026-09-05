@@ -14,6 +14,7 @@ import {
   TELEGRAM_CHECKS,
 } from "./checks.ts";
 import { decryptSecret, encryptSecret } from "./crypto.server.ts";
+import { normalizePhone, parseApiHash, parseApiId } from "./phone.ts";
 
 describe("bot token", () => {
   it("accepts a BotFather-shaped key", () => {
@@ -41,7 +42,7 @@ describe("bot token", () => {
 });
 
 describe("checks catalog", () => {
-  it("has four required checks and one optional", () => {
+  it("has four required checks and one optional OpenRouter check", () => {
     assert.equal(TELEGRAM_CHECKS.filter((c) => c.required).length, 4);
     assert.equal(TELEGRAM_CHECKS.filter((c) => !c.required).length, 1);
     assert.equal(requiredChecksPassed(emptyCheckResults()), false);
@@ -60,5 +61,20 @@ describe("credential crypto", () => {
     assert.equal(blob.startsWith("v1."), true);
     assert.equal(blob.includes(token), false);
     assert.equal(decryptSecret(blob), token);
+  });
+});
+
+describe("phone and app numbers", () => {
+  it("normalizes E.164", () => {
+    assert.equal(normalizePhone("+1 (555) 123-4567"), "+15551234567");
+    assert.equal(normalizePhone("15551234567"), "+15551234567");
+    assert.equal(normalizePhone("123"), null);
+  });
+
+  it("parses api id and hash", () => {
+    assert.equal(parseApiId("123456"), 123456);
+    assert.equal(parseApiId("12"), null);
+    assert.equal(parseApiHash("0123456789abcdef0123456789abcdef"), "0123456789abcdef0123456789abcdef");
+    assert.equal(parseApiHash("nope"), null);
   });
 });
