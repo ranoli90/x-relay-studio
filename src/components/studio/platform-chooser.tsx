@@ -1,21 +1,28 @@
 import { Link } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Logo } from "@/components/logo";
+import { UserButton } from "@/lib/auth/gates";
+import { formatDeskNumber } from "@/lib/desk/number";
 import { cn } from "@/lib/utils";
 
-export function PlatformChooser() {
+export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
   return (
     <main className="grid min-h-dvh place-items-center bg-bg px-4 py-10 text-fg">
-      <div className="page-enter w-full max-w-xl">
-        <Logo />
+      <div className="page-enter w-full max-w-3xl">
+        <div className="flex items-start justify-between gap-4">
+          <Logo />
+          <UserButton />
+        </div>
         <p className="mt-8 font-mono text-xs uppercase tracking-widest text-subtle">X Relay</p>
         <h1 className="mt-3 text-3xl font-medium tracking-tight">Choose your platform.</h1>
-        <p className="mt-3 max-w-md text-sm leading-relaxed text-muted">
-          Same desk, two doors. Sign in the identity for the platform you’ll use
-          here.
+        <p className="mt-3 max-w-lg text-sm leading-relaxed text-muted">
+          Your desk with us is anonymous — number{" "}
+          <span className="font-mono text-fg">{formatDeskNumber(deskNumber)}</span>
+          . X, Telegram, and Reddit are separate doors. Each one signs in that
+          platform’s account on top of this desk.
         </p>
 
-        <div className="mt-8 grid gap-3 sm:grid-cols-2">
+        <div className="mt-8 grid gap-3 sm:grid-cols-3">
           <PlatformCard
             to="/x"
             label="X"
@@ -30,6 +37,13 @@ export function PlatformChooser() {
             description="Connect your Telegram. Set up a helper, check it works, then open the desk."
             icon={<TelegramTile />}
           />
+          <PlatformCard
+            to="/reddit"
+            label="Reddit"
+            kicker="Open"
+            description="Allow on Reddit. Health checks, then a read-only inbox. No posting yet."
+            icon={<RedditTile />}
+          />
         </div>
       </div>
     </main>
@@ -43,7 +57,7 @@ function PlatformCard({
   description,
   icon,
 }: {
-  to: "/x" | "/telegram";
+  to: "/x" | "/telegram" | "/reddit";
   label: string;
   kicker: string;
   description: string;
@@ -87,6 +101,16 @@ function TelegramTile() {
         height={64}
         className="size-16 object-cover outline outline-1 -outline-offset-1 outline-fg/10"
       />
+    </span>
+  );
+}
+
+function RedditTile() {
+  return (
+    <span className="grid size-16 place-items-center rounded-lg bg-reddit text-reddit-fg" aria-hidden="true">
+      <svg viewBox="0 0 24 24" className="size-8" fill="currentColor">
+        <path d="M12 2 20 14h-5v8H9v-8H4L12 2Z" />
+      </svg>
     </span>
   );
 }

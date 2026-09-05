@@ -17,6 +17,13 @@
   --color-up: #8aa084;
   --color-warn: #c4a574;
   --color-down: #c47a72;
+  --color-reddit: #ff4500;
+  --color-reddit-fg: #fff7f2;
+  --color-card: #121214;
+  --color-lift: #1a1a1e;
+  --color-line: rgb(243 241 234 / 0.12);
+  --color-ok: #8aa084;
+  --color-bad: #c47a72;
 
   --radius-sm: 8px;
   --radius-md: 12px;

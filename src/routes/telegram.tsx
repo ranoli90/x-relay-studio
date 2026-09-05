@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Navigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { TelegramLoginScreen } from "@/components/telegram/login-screen";
 import { TelegramOnboarding } from "@/components/telegram/onboarding";
@@ -54,9 +54,10 @@ function TelegramDoor() {
     }
   }, [goApp]);
 
-  if (goApp) return <ReplicaShell />;
+  if (!signedIn && !isPending) return <Navigate to="/" />;
 
-  const displayName = user?.displayName ?? user?.primaryEmail ?? undefined;
+  if (goApp) return <ReplicaShell />;
+  const displayName = undefined;
 
   if (!signedIn || isPending || (signedIn && !ready)) {
     return (
