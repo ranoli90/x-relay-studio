@@ -14,6 +14,11 @@ import {
   startOauthSchema,
   startOnboardingSchema,
   versionedJobSchema,
+  accountIdQuerySchema,
+  completeFixtureSchema,
+  bindEmailSchema,
+  deleteBindingSchema,
+  generateDraftSchema,
 } from "./schemas.ts";
 import {
   createOrReuseDraft,
@@ -36,18 +41,48 @@ import {
   redditBrowserProvider,
   onboardingFixtureEnabled,
   assistedApprovalStatus,
+  redditDraftingEnabled,
 } from "./config.ts";
 import { ASSISTANCE_CONSENT_VERSION, OnboardingError, REVIEWED_SIGNUP_URL } from "./types.ts";
 import { drainOwnedPreview } from "./worker-core.ts";
 import { isPlausibleOrigin, redirectUriFromOrigin } from "../origin.ts";
-import { getApp, insertTicket, purgeExpiredTickets, toPublicApp, countAccounts, listAccounts } from "../store.ts";
+import { getApp, insertTicket, purgeExpiredTickets, toPublicApp, countAccounts, listAccounts, cancelTicketsForJob, getAccount, upsertApp } from "../store.ts";
 import { authorizeUrl } from "../oauth.ts";
 import { appIdForDesk } from "../naming.ts";
 import type { SqlLike } from "./sql.ts";
 import { runOnboardingTx } from "./sql.ts";
+import { completeFixtureConnect, FIXTURE_APP_CLIENT_ID, FIXTURE_APP_SECRET } from "./fixture-connect.ts";
+import {
+  loadAccountActions,
+  bindRecoveryEmail,
+  removeRecoveryEmail,
+  draftAPost,
+  closeBrowser,
+  deleteRetainedSignIn,
+  confirmDeleteRetainedSignIn,
+} from "./account-actions.ts";
 
 async function sql(): Promise<SqlLike> {
   return getSql();
+}
+
+async function seedFixtureApp(userId: string, redirectUri: string) {
+  if (!onboardingFixtureEnabled()) {
+    throw new OnboardingError("FIXTURE_DISABLED", "Isolated fixture connect is off.");
+  }
+  const existing = await getApp(userId);
+  if (existing) return existing;
+  await upsertApp({
+    userId,
+    clientId: FIXTURE_APP_CLIENT_ID,
+    clientSecret: FIXTURE_APP_SECRET,
+    userAgentName: "x-relay-fixture",
+    redirectUri,
+    appLabel: "Isolated fixture app",
+    appId: "desk.fixture",
+    rotateCredentials: false,
+  });
+  return getApp(userId);
 }
 
 function throwOnboarding(err: unknown): never {
@@ -65,7 +100,11 @@ export const getOnboardingBootstrap = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const db = await sql();
-    const app = await getApp(context.userId);
+    let app = await getApp(context.userId);
+    if (!app && onboardingFixtureEnabled()) {
+      await seedFixtureApp(context.userId, "http://127.0.0.1:8080/api/reddit/oauth/callback");
+      app = await getApp(context.userId);
+    }
     const caps = capabilities({
       appConfigured: Boolean(app),
       connectorEnabled: redditConnectorEnabled(),
@@ -287,6 +326,14 @@ export const getOnboardingControlView = createServerFn({ method: "POST" })
     if (job.control_owner !== "user") {
       throw new Error("Take control first. A live view is not issued while automation is running.");
     }
+    if (onboardingFixtureEnabled()) {
+      return {
+        available: true,
+        url: "/__reddit-onboarding-fixture/",
+        reason: null,
+        fixture: true,
+      };
+    }
     return { available: false, reason: "Use Reddit in your own browser. Embedded typing is not assumed to work on phones." };
   });
 
@@ -342,36 +389,41 @@ export const startJobBoundRedditOAuth = createServerFn({ method: "POST" })
       if (!correlationId) {
         throw new OnboardingError("CORRELATION_REQUIRED", "A correlation identifier is required.");
       }
-      await insertTicket({
-        ticket,
-        userId: context.userId,
-        state,
-        redirectUri,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
-        jobId: job.id,
-        expectedUsername: job.expected_username,
-        expectedRedditId: job.verified_reddit_id,
-        credentialVersion: app.credential_version ?? 1,
-        correlationId,
-        transport: "local",
-        purpose: "connect_account",
-        allowedOrigin: data.origin,
-      });
-      const bound = await db.query<{ ticket: string }>(
-        `select ticket from reddit_oauth_tickets
-          where ticket = $1 and user_id = $2 and job_id = $3 and correlation_id = $4
-          limit 1`,
-        [ticket, context.userId, job.id, correlationId],
-      );
-      if (!bound[0]) {
-        throw new OnboardingError("OAUTH_BIND_FAILED", "Could not bind this Reddit login attempt.", 500);
-      }
-      await transitionJob(db, {
-        userId: context.userId,
-        jobId: job.id,
-        expectedVersion: Number(job.version),
-        event: { type: "OWNER_STARTS_OAUTH" },
-        eventType: "oauth_started",
+      await runOnboardingTx(async (tx) => {
+        await insertTicket(
+          {
+            ticket,
+            userId: context.userId,
+            state,
+            redirectUri,
+            expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+            jobId: job.id,
+            expectedUsername: job.expected_username,
+            expectedRedditId: job.verified_reddit_id,
+            credentialVersion: app.credential_version ?? 1,
+            correlationId,
+            transport: "local",
+            purpose: "connect_account",
+            allowedOrigin: data.origin,
+          },
+          tx,
+        );
+        const bound = await tx.query<{ ticket: string }>(
+          `select ticket from reddit_oauth_tickets
+            where ticket = $1 and user_id = $2 and job_id = $3 and correlation_id = $4
+            limit 1`,
+          [ticket, context.userId, job.id, correlationId],
+        );
+        if (!bound[0]) {
+          throw new OnboardingError("OAUTH_BIND_FAILED", "Could not bind this Reddit login attempt.", 500);
+        }
+        await transitionJob(tx, {
+          userId: context.userId,
+          jobId: job.id,
+          expectedVersion: Number(job.version),
+          event: { type: "OWNER_STARTS_OAUTH" },
+          eventType: "oauth_started",
+        });
       });
       const url = authorizeUrl({
         clientId: app.client_id,
@@ -402,10 +454,18 @@ export const confirmConnectedIdentity = createServerFn({ method: "POST" })
       if (!job.account_id) {
         throw new Error("No account is attached to this setup yet.");
       }
-      const accounts = await listAccounts(context.userId);
-      const account = accounts.find((a) => a.id === job.account_id);
+      if (job.cancel_requested_at || job.finished_at || job.status === "cancelled") {
+        throw new OnboardingError("ATTEMPT_CANCELLED", "This setup was cancelled and cannot be confirmed.");
+      }
+      const account = await getAccount(context.userId, job.account_id);
       if (!account) {
         throw new Error("The connected Reddit account does not match this setup.");
+      }
+      if (account.disabled_at) {
+        throw new Error("This connection is disabled. Reconnect the same account first.");
+      }
+      if (!account.health_ok) {
+        throw new Error("Health is not clear for this connection yet.");
       }
       if (account.name.toLowerCase() !== (job.verified_username || "").toLowerCase()) {
         throw new Error("The connected Reddit account does not match this setup.");
@@ -429,33 +489,37 @@ export const cancelOnboarding = createServerFn({ method: "POST" })
   .validator((d: unknown) => cancelSchema.parse(d))
   .handler(async ({ context, data }) => {
     try {
-      const db = await sql();
-      const job = await requireJob(db, context.userId, data.jobId, data.version);
-      await enqueueCommand(db, {
-        userId: context.userId,
-        jobId: data.jobId,
-        version: data.version,
-        kind: "cancel",
-        idempotencyKey: data.idempotencyKey,
-        payload: {},
-        operation: "cancelOnboarding",
-      });
-      const next = await transitionJob(db, {
-        userId: context.userId,
-        jobId: data.jobId,
-        expectedVersion: data.version,
-        event: { type: "OWNER_CANCELS" },
-        eventType: "cancelled",
-        patch: { cleanup_summary: job.provider_session_id ? "Browser cleanup pending." : "No hosted browser to clean up." },
-      });
-      if (job.provider_session_id) {
-        await enqueueCleanup(db, {
+      const next = await runOnboardingTx(async (tx) => {
+        const job = await requireJob(tx, context.userId, data.jobId, data.version);
+        await enqueueCommand(tx, {
           userId: context.userId,
-          jobId: job.id,
-          kind: "release_session",
-          target: job.provider_session_id,
+          jobId: data.jobId,
+          version: data.version,
+          kind: "cancel",
+          idempotencyKey: data.idempotencyKey,
+          payload: {},
+          operation: "cancelOnboarding",
         });
-      }
+        const cancelled = await transitionJob(tx, {
+          userId: context.userId,
+          jobId: data.jobId,
+          expectedVersion: data.version,
+          event: { type: "OWNER_CANCELS" },
+          eventType: "cancelled",
+          patch: { cleanup_summary: job.provider_session_id ? "Browser cleanup pending." : "No hosted browser to clean up." },
+        });
+        await cancelTicketsForJob(context.userId, data.jobId, tx);
+        if (job.provider_session_id) {
+          await enqueueCleanup(tx, {
+            userId: context.userId,
+            jobId: job.id,
+            kind: "release_session",
+            target: job.provider_session_id,
+          });
+        }
+        return cancelled;
+      });
+      const db = await sql();
       await drainOwnedPreview(db, context.userId, data.jobId);
       const app = await getApp(context.userId);
       const fresh = (await getJob(db, context.userId, data.jobId)) || next;
@@ -488,3 +552,86 @@ export const handoffOnboardingToManual = createServerFn({ method: "POST" })
   });
 
 export { toPublicApp, appIdForDesk };
+
+export const completeFixtureOnboarding = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => completeFixtureSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    try {
+      const { job } = await runOnboardingTx((tx) =>
+        completeFixtureConnect(tx, {
+          userId: context.userId,
+          jobId: data.jobId,
+          version: data.version,
+          username: data.username,
+        }),
+      );
+      const db = await sql();
+      const app = await getApp(context.userId);
+      const fresh = (await getJob(db, context.userId, data.jobId)) || job;
+      return toPublicJob(fresh, { appConfigured: Boolean(app) });
+    } catch (err) {
+      throwOnboarding(err);
+    }
+  });
+
+export const loadRedditAccountActions = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => accountIdQuerySchema.parse(d))
+  .handler(async ({ context, data }) => {
+    const db = await sql();
+    return loadAccountActions(db, context.userId, data.accountId);
+  });
+
+export const bindRedditRecoveryEmail = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => bindEmailSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    const db = await sql();
+    return bindRecoveryEmail(db, context.userId, {
+      accountId: data.accountId,
+      address: data.address,
+      kind: "existing_inbox",
+    });
+  });
+
+export const deleteRedditRecoveryEmail = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => deleteBindingSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    const db = await sql();
+    return removeRecoveryEmail(db, context.userId, data.bindingId);
+  });
+
+export const generateRedditDraft = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => generateDraftSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    if (!redditDraftingEnabled()) throw new Error("Drafting is turned off.");
+    const db = await sql();
+    return draftAPost(db, context.userId, {
+      accountId: data.accountId,
+      communityAllowlist: data.communityAllowlist,
+      topic: data.topic,
+      assertedFacts: data.assertedFacts || "",
+      selectedCommunity: data.selectedCommunity,
+    });
+  });
+
+export const closeRedditBrowser = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => accountIdQuerySchema.parse(d))
+  .handler(async ({ context, data }) => {
+    const db = await sql();
+    return closeBrowser(db, context.userId, data.accountId);
+  });
+
+export const deleteRedditRetainedSignIn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => accountIdQuerySchema.parse(d))
+  .handler(async ({ context, data }) => {
+    const db = await sql();
+    await deleteRetainedSignIn(db, context.userId, data.accountId);
+    return confirmDeleteRetainedSignIn(db, context.userId, data.accountId);
+  });
+

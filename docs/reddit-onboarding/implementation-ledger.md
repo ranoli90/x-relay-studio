@@ -93,3 +93,29 @@ Preserved `feat/reddit-onboarding` (did not reset).
 
 Live Reddit, live Browserbase, production migrate, and merge/deploy were **not** done.
 
+## Continuation — isolated preview + remaining review repairs
+
+Preserved `feat/reddit-onboarding` (did not reset). Unattended Reddit signup remains forbidden.
+
+### Playable isolated preview
+- Fixture HTML: owner-only CAPTCHA, terms, and final submit; posts username back to the coordinator.
+- `completeFixtureConnect` attaches a local identity (no live Reddit). Forced off when `VERCEL` is set.
+- Coordinator: Automate/Manual/existing-account finish through fixture connect + health. Resume no longer dumps `needs_user` into Human Control unless `controlOwner=user`.
+- Dashboard wires close-browser / disconnect / retained-delete / email / draft RPCs.
+- Health and inbox short-circuit when the fixture flag is on.
+
+### Review repairs
+- OAuth callback gate: origin/purpose/correlation/generation/cancel/replay/busy/recover/uncertain. Popup missing correlation is not a wildcard.
+- Reject-grant AAD pins to owner, not job id.
+- Cancel writes `cancelled_at` in the same transaction as the job transition.
+- `disconnectRelay` disables the account and queues cleanup atomically.
+- Ambiguous session create queues `delete_context`. `end_takeover` revokes the control view.
+- `upsertApp({ rotateCredentials: true })` bumps `credential_version`.
+- Confirm refuses disabled / unhealthy / cancelled jobs.
+
+### Tests
+`npm run test:reddit-onboarding`: **122 passed, 0 failed, 3 skipped**. Typecheck clean.
+
+Live Reddit, live Browserbase, production migrate, and merge/deploy were **not** done.
+
+

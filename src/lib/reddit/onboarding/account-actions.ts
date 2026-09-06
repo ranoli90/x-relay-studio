@@ -1,6 +1,6 @@
 import { OnboardingError, type DraftPublic, type EmailBindingPublic, type ReadinessReport } from "./types.ts";
 import type { SqlLike } from "./sql.ts";
-import { queueDisconnectCleanup } from "./cleanup.ts";
+import { disableAndQueueDisconnect } from "./cleanup.ts";
 import {
   createEmailBinding,
   deleteEmailBinding,
@@ -121,8 +121,8 @@ export async function disconnectRelay(
   userId: string,
   accountId: string,
 ): Promise<{ queued: boolean }> {
-  await queueDisconnectCleanup(sql, { userId, accountId });
-  return { queued: true };
+  const row = await disableAndQueueDisconnect(sql, { userId, accountId });
+  return { queued: Boolean(row) };
 }
 
 /** Request deletion of retained browser sign-in only. */

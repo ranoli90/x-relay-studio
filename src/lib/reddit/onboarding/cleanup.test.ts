@@ -350,3 +350,88 @@ describe("expireRetainedProfiles", () => {
     await pg.close();
   });
 });
+
+describe("disableAndQueueDisconnect RC-020/022", () => {
+  it("will not clear cleanup_pending while a required child is still queued", async () => {
+    const { pg, sql } = await boot();
+    await sql.query(
+      `insert into reddit_accounts (id, user_id, reddit_id, name, onboarded_at, cleanup_pending)
+       values ($1,$2,$3,$4, now(), true)`,
+      ["acc-pending", "user-a", "rid-pending", "alice"],
+    );
+    await enqueueCleanup(sql, {
+      userId: "user-a",
+      accountId: "acc-pending",
+      kind: "revoke_oauth",
+      target: "oauth:acc-pending",
+    });
+    await enqueueCleanup(sql, {
+      userId: "user-a",
+      accountId: "acc-pending",
+      kind: "confirm_local_disconnect",
+      target: "account:acc-pending",
+    });
+    const summary = await sql.query<{ id: string }>(
+      `select id from reddit_cleanup_tasks where kind = 'confirm_local_disconnect' and account_id = $1`,
+      ["acc-pending"],
+    );
+    const provider = new FakeBrowserProvider();
+    const result = await runCleanupTask(
+      sql,
+      {
+        id: summary[0].id,
+        user_id: "user-a",
+        job_id: null,
+        account_id: "acc-pending",
+        kind: "confirm_local_disconnect",
+        target_reference: "account:acc-pending",
+        encrypted_revocation_material: null,
+        attempt: 1,
+        status: "leased",
+        lease_owner: "worker-1",
+        lease_generation: 1,
+      },
+      provider,
+    );
+    assert.equal(result.pending, true);
+    const account = await sql.query<{ cleanup_pending: boolean }>(
+      `select cleanup_pending from reddit_accounts where id = $1`,
+      ["acc-pending"],
+    );
+    assert.equal(account[0]?.cleanup_pending, true);
+    await pg.close();
+  });
+
+  it("rolls disable and cleanup back when a later write fails", async () => {
+    const { pg, sql } = await boot();
+    process.env.SECRETS_ENCRYPTION_KEY = "cleanup-test-key";
+    await sql.query(
+      `insert into reddit_accounts (id, user_id, reddit_id, name, onboarded_at)
+       values ($1,$2,$3,$4, now())`,
+      ["acc-tx", "user-a", "rid-tx", "alice"],
+    );
+    let writes = 0;
+    const wrapped = {
+      query: async <T>(text: string, params: unknown[] = []) => {
+        if (/insert into reddit_cleanup_tasks/i.test(text)) {
+          writes += 1;
+          if (writes === 1) throw new Error("injected cleanup failure");
+        }
+        return sql.query<T>(text, params);
+      },
+    };
+    const { disableAndQueueDisconnect } = await import("./cleanup.ts");
+    await assert.rejects(
+      () => disableAndQueueDisconnect(wrapped, { userId: "user-a", accountId: "acc-tx", refreshToken: "r" }),
+      /injected cleanup failure/,
+    );
+    const account = await sql.query<{ disabled_at: string | Date | null }>(
+      `select disabled_at from reddit_accounts where id = $1`,
+      ["acc-tx"],
+    );
+    assert.equal(account[0]?.disabled_at, null);
+    const tasks = await sql.query(`select id from reddit_cleanup_tasks where account_id = $1`, ["acc-tx"]);
+    assert.equal(tasks.length, 0);
+    await pg.close();
+  });
+});

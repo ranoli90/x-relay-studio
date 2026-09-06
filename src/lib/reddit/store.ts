@@ -35,6 +35,7 @@ type AccountRow = {
   health_json: string | null;
   health_ok: boolean;
   onboarded_at: string | Date | null;
+  disabled_at?: string | Date | null;
 };
 
 type TicketRow = {
@@ -133,6 +134,7 @@ export async function upsertApp(opts: {
   appLabel: string;
   appId: string;
   termsAt?: Date | null;
+  rotateCredentials?: boolean;
 }) {
   const sql = await getSql();
   const terms = (opts.termsAt ?? new Date()).toISOString();
@@ -154,6 +156,10 @@ export async function upsertApp(opts: {
       app_label = excluded.app_label,
       app_id = excluded.app_id,
       terms_at = excluded.terms_at,
+      credential_version = case
+        when ${Boolean(opts.rotateCredentials)} then coalesce(reddit_apps.credential_version, 1) + 1
+        else coalesce(reddit_apps.credential_version, 1)
+      end,
       updated_at = now()
   `;
 }
@@ -367,29 +373,33 @@ export async function disableAccount(userId: string, accountId: string) {
   return rows[0] ? decodeAccount(rows[0]) : null;
 }
 
-export async function insertTicket(opts: {
-  ticket: string;
-  userId: string;
-  state: string;
-  redirectUri: string;
-  expiresAt: Date;
-  jobId?: string | null;
-  expectedUsername?: string | null;
-  expectedRedditId?: string | null;
-  credentialVersion?: number | null;
-  correlationId?: string | null;
-  transport?: string;
-  purpose?: string;
-  allowedOrigin?: string | null;
-}) {
-  const sql = await getSql();
-  await sql.query(
+export async function insertTicket(
+  opts: {
+    ticket: string;
+    userId: string;
+    state: string;
+    redirectUri: string;
+    expiresAt: Date;
+    jobId?: string | null;
+    expectedUsername?: string | null;
+    expectedRedditId?: string | null;
+    credentialVersion?: number | null;
+    correlationId?: string | null;
+    transport?: string;
+    purpose?: string;
+    allowedOrigin?: string | null;
+  },
+  exec?: { query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> },
+) {
+  const sql = exec ?? (await getSql());
+  const rows = await sql.query<{ ticket: string }>(
     `insert into reddit_oauth_tickets (
        ticket, user_id, state, redirect_uri, expires_at,
        job_id, expected_username, expected_reddit_id, credential_version,
        transport, correlation_id, processing_state, app_credential_version,
        purpose, allowed_origin
-     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open',$9,$12,$13)`,
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open',$9,$12,$13)
+     returning ticket`,
     [
       opts.ticket,
       opts.userId,
@@ -406,16 +416,45 @@ export async function insertTicket(opts: {
       opts.allowedOrigin ?? null,
     ],
   );
+  if (!rows[0]) throw new Error("Could not bind this Reddit login attempt.");
+  return rows[0];
+}
+
+export async function cancelTicketsForJob(
+  userId: string,
+  jobId: string,
+  exec?: { query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> },
+) {
+  const sql = exec ?? (await getSql());
+  await sql.query(
+    `update reddit_oauth_tickets
+        set cancelled_at = coalesce(cancelled_at, now())
+      where user_id = $1 and job_id = $2 and cancelled_at is null`,
+    [userId, jobId],
+  );
 }
 
 export async function getTicket(ticket: string) {
   const sql = await getSql();
-  const rows = await sql<TicketRow>`
-    select ticket, user_id, state, redirect_uri, expires_at
-    from reddit_oauth_tickets
-    where ticket = ${ticket}
-    limit 1
-  `;
+  const rows = await sql.query<{
+    ticket: string;
+    user_id: string;
+    state: string;
+    redirect_uri: string;
+    expires_at: string | Date;
+    job_id: string | null;
+    correlation_id: string | null;
+    purpose: string | null;
+    cancelled_at: string | Date | null;
+    allowed_origin: string | null;
+  }>(
+    `select ticket, user_id, state, redirect_uri, expires_at, job_id, correlation_id,
+            purpose, cancelled_at, allowed_origin
+       from reddit_oauth_tickets
+      where ticket = $1
+      limit 1`,
+    [ticket],
+  );
   return rows[0] ?? null;
 }
 

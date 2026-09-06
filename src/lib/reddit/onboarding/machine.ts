@@ -29,6 +29,7 @@ export type MachineEvent =
   | { type: "SUBMIT_APPROVED" }
   | { type: "SUBMIT_LOST" }
   | { type: "OWNER_RETURNS_CONTROL" }
+  | { type: "OWNER_TAKES_CONTROL" }
   | { type: "ACCOUNT_CONFIRMED_APP_NOT_READY" }
   | { type: "OWNER_STARTS_OAUTH" }
   | { type: "OAUTH_INTENDED_IDENTITY" }
@@ -93,6 +94,9 @@ export function applyEvent(job: MachineJob, event: MachineEvent): MachineJob {
     case "OWNER_RETURNS_CONTROL":
       requireStatus(job, ["needs_user", "running"]);
       return next(job, { status: "reconciling", controlOwner: "none" });
+    case "OWNER_TAKES_CONTROL":
+      requireStatus(job, ["running", "needs_user", "queued"]);
+      return next(job, { status: "needs_user", controlOwner: "user" });
     case "ACCOUNT_CONFIRMED_APP_NOT_READY":
       requireStatus(job, ["running", "needs_user", "waiting_external", "reconciling"]);
       return next(job, {
@@ -215,7 +219,7 @@ export function permittedActions(job: MachineJob, caps: { assisted: boolean; oau
     if (job.step === "app_access" || job.step === "app_credentials" || job.step === "oauth") {
       if (caps.oauth && caps.appReady) actions.push("start_oauth");
     }
-    if (job.controlOwner === "worker") actions.push("request_takeover");
+    if (job.controlOwner === "worker" || job.status === "needs_user") actions.push("request_takeover");
     if (job.controlOwner === "user") actions.push("finish_takeover");
     if (job.mode === "assisted" && !isTerminal(job.status)) actions.push("handoff_manual");
     if (job.status === "needs_user" && job.step === "create_account") actions.push("confirm_submit");
@@ -243,7 +247,7 @@ export function canExecuteCommand(job: MachineJob, kind: CommandKind): boolean {
     case "continue":
       return job.status === "needs_user" || job.status === "waiting_external" || job.status === "queued";
     case "request_takeover":
-      return job.status === "running" || job.controlOwner === "worker";
+      return job.status === "running" || job.status === "needs_user" || job.controlOwner === "worker";
     case "end_takeover":
       return job.controlOwner === "user";
     case "confirm_submit":

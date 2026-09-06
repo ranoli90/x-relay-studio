@@ -36,6 +36,8 @@ import { z } from "zod";
 import { accountIdSchema, confirmOnboardingSchema, originSchema, saveRedditAppSchema } from "./onboarding/schemas";
 import { getSql, withTransaction } from "@/lib/db";
 import { queueDisconnectCleanup } from "./onboarding/cleanup";
+import { onboardingFixtureEnabled } from "./onboarding/config";
+import { fixtureHealthReport } from "./onboarding/fixture-connect";
 import { appIdForDesk, appNameForDesk, appDescriptionForDesk, apiSignupBlurb, assertSafeAppName, userAgentFor } from "./naming";
 
 function ua(app: { user_agent_name: string; app_id: string | null }, accountName?: string) {
@@ -122,6 +124,7 @@ export const saveRedditApp = createServerFn({ method: "POST" })
       appLabel: id.appLabel,
       appId: id.appId,
       termsAt: new Date(),
+      rotateCredentials: true,
     });
     return { ok: true as const, redirectUri, clientId, appLabel: id.appLabel };
   });
@@ -218,6 +221,27 @@ export const runHealthCheck = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((d: unknown) => accountIdSchema.parse(d))
   .handler(async ({ context, data }) => {
+    if (onboardingFixtureEnabled()) {
+      const account = await getAccount(context.userId, data.accountId);
+      if (!account) throw new Error("Account not found.");
+      const health = fixtureHealthReport(account.name);
+      await saveHealth({
+        userId: context.userId,
+        accountId: data.accountId,
+        health,
+        me: {
+          hasVerifiedEmail: true,
+          isGold: false,
+          isMod: false,
+          isSuspended: false,
+          linkKarma: account.link_karma ?? 0,
+          commentKarma: account.comment_karma ?? 0,
+          totalKarma: account.total_karma ?? 0,
+        },
+      });
+      const next = await getAccount(context.userId, data.accountId);
+      return next ? toPublicAccount(next) : null;
+    }
     const live = await liveToken(context.userId, data.accountId);
     let me = null;
     let apiError: string | null = null;
@@ -270,10 +294,13 @@ export const confirmOnboarding = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const account = await getAccount(context.userId, data.accountId);
     if (!account) throw new Error("Account not found.");
+    if (account.disabled_at) {
+      throw new Error("This connection is disabled. Reconnect the same account first.");
+    }
     const health = account.health_json
       ? (JSON.parse(account.health_json) as { okToUse?: boolean })
       : null;
-    if (!health?.okToUse) {
+    if (!health?.okToUse || !account.health_ok) {
       throw new Error("Reddit did not give us a working session for this account. Connect again.");
     }
     if (
@@ -294,6 +321,14 @@ export const loadInbox = createServerFn({ method: "POST" })
     const account = await getAccount(context.userId, data.accountId);
     if (!account?.onboarded_at) {
       throw new Error("Finish the health screen for this account first.");
+    }
+    if (onboardingFixtureEnabled()) {
+      return {
+        threads: [],
+        unreadCount: 0,
+        fetchedAt: new Date().toISOString(),
+        truncated: false,
+      };
     }
     const live = await liveToken(context.userId, data.accountId);
     return fetchInbox({

@@ -23,6 +23,8 @@ import {
   startJobBoundRedditOAuth,
   startOnboarding,
   handoffOnboardingToManual,
+  completeFixtureOnboarding,
+  confirmSignupSubmission,
 } from "@/lib/reddit/onboarding/server";
 import type {
   OnboardingBootstrap,
@@ -114,8 +116,9 @@ export function OnboardingCoordinator({
     setJob(next);
     const ev = await getOnboardingEvents({ data: { jobId: id, afterSequence: 0 } });
     setEvents(ev.events);
+    if (boot) setScreen(screenFor(next, boot.appConfigured || Boolean(boot.fixtureEnabled)));
     return next;
-  }, []);
+  }, [boot]);
 
   useEffect(() => {
     if (!job || job.finishedAt) return;
@@ -157,10 +160,28 @@ export function OnboardingCoordinator({
           correlationId: keys.correlationId,
         },
       });
+      let next = created;
+      if (intent === "connect_existing") {
+        next = await startOnboarding({
+          data: {
+            jobId: created.id,
+            version: created.version,
+            consentVersion: ASSISTANCE_CONSENT_VERSION,
+            idempotencyKey: keys.idempotencyKey,
+            correlationId: keys.correlationId,
+          },
+        });
+      }
       opKeys.current.delete(op);
-      setJob(created);
+      setJob(next);
       setSelected(mode);
-      setScreen(intent === "connect_existing" ? (boot?.appConfigured ? "oauth" : "app") : "details");
+      setScreen(
+        intent === "connect_existing"
+          ? boot?.appConfigured || boot?.fixtureEnabled
+            ? "oauth"
+            : "app"
+          : "details",
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start setup.");
     } finally {
@@ -370,18 +391,42 @@ export function OnboardingCoordinator({
         job={job}
         events={events}
         busy={busy}
+        fixture={Boolean(boot.fixtureEnabled)}
         onTakeControl={() => {
           void requestOnboardingTakeover({
-            data: { jobId: job.id, version: job.version, correlationId: newKey() },
+            data: { jobId: job.id, version: job.version, correlationId: rememberKey(opKeys.current, `takeover:${job.id}`).correlationId },
           }).then((j) => {
             setJob(j);
             setScreen("control");
-          });
+          }).catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not take control."));
         }}
         onCancel={() => void cancel()}
         onManual={() => void handoffManual()}
-        onOpenSignup={() => window.open(boot.reviewedSignupUrl, "_blank", "noopener")}
+        onOpenSignup={() =>
+          window.open(
+            boot.fixtureEnabled ? "/__reddit-onboarding-fixture/" : boot.reviewedSignupUrl,
+            "_blank",
+            "noopener",
+          )
+        }
         onContinue={() => setScreen("manual-return")}
+        onStartOauth={() => setScreen(boot.appConfigured || boot.fixtureEnabled ? "oauth" : "app")}
+        onConfirmSubmit={() => {
+          const keys = rememberKey(opKeys.current, `submit:${job.id}`);
+          void confirmSignupSubmission({
+            data: {
+              jobId: job.id,
+              version: job.version,
+              confirmation: "owner-submitted-form",
+              correlationId: keys.correlationId,
+            },
+          })
+            .then((j) => {
+              setJob(j);
+              setScreen("manual-return");
+            })
+            .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not record that."));
+        }}
       />,
     );
   }
@@ -415,13 +460,14 @@ export function OnboardingCoordinator({
     return frame(
       <HumanControl
         job={job}
+        fixtureUrl={boot.fixtureEnabled ? "/__reddit-onboarding-fixture/" : null}
         onFinish={() => {
           void finishOnboardingTakeover({
-            data: { jobId: job.id, version: job.version, correlationId: newKey() },
+            data: { jobId: job.id, version: job.version, correlationId: rememberKey(opKeys.current, `end-takeover:${job.id}`).correlationId },
           }).then((j) => {
             setJob(j);
-            setScreen("progress");
-          });
+            setScreen("manual-return");
+          }).catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not return control."));
         }}
         onManual={() => void handoffManual()}
       />,
@@ -440,17 +486,65 @@ export function OnboardingCoordinator({
 
   if (screen === "oauth" && job) {
     return frame(
+      boot.fixtureEnabled ? (
+        <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
+          <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Isolated fixture</p>
+          <h1 className="mt-4 text-3xl font-medium tracking-tight">Connect the test account</h1>
+          <p className="mt-3 text-sm leading-relaxed text-muted">
+            This preview does not talk to Reddit. Connecting stores a local fixture identity so you
+            can finish health and the dashboard. CAPTCHA, terms, and live login stay owner actions
+            on the real site.
+          </p>
+          <label className="mt-6 block text-sm">
+            Username
+            <input
+              className="mt-2 h-11 w-full rounded-md border border-border bg-surface px-3"
+              value={username || job.expectedUsername || ""}
+              onChange={(e) => setUsername(e.target.value)}
+              autoComplete="username"
+            />
+          </label>
+          {error ? <p className="mt-3 text-sm text-bad">{error}</p> : null}
+          <Button
+            className="mt-6 w-full"
+            type="button"
+            disabled={busy}
+            onClick={() => {
+              setBusy(true);
+              setError(null);
+              void completeFixtureOnboarding({
+                data: {
+                  jobId: job.id,
+                  version: job.version,
+                  username: username || job.expectedUsername || undefined,
+                  correlationId: rememberKey(opKeys.current, `fixture:${job.id}`).correlationId,
+                },
+              })
+                .then(async (j) => {
+                  setJob(j);
+                  const acc = await loadPendingAccount(j.accountId);
+                  setScreen(acc ? "health" : "result");
+                })
+                .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not connect the fixture account."))
+                .finally(() => setBusy(false));
+            }}
+          >
+            Connect fixture account
+          </Button>
+        </section>
+      ) : (
       <AddAccount
         additional={Boolean(embedded)}
         expectedUsername={job.expectedUsername}
         onStart={async () => {
+          const keys = rememberKey(opKeys.current, `oauth:${job.id}`);
           const started = await startJobBoundRedditOAuth({
             data: {
               jobId: job.id,
               version: job.version,
               origin: window.location.origin,
               transport: "local",
-              correlationId: newKey(),
+              correlationId: keys.correlationId,
             },
           });
           return started;
@@ -462,7 +556,8 @@ export function OnboardingCoordinator({
             setScreen(acc ? "health" : "result");
           });
         }}
-      />,
+      />
+      ),
     );
   }
 
@@ -486,12 +581,13 @@ export function OnboardingCoordinator({
                     version: fresh.version,
                     confirmation:
                       "I confirm this is my Reddit account and authorize the displayed connection.",
-                    correlationId: newKey(),
+                    correlationId: rememberKey(opKeys.current, `confirm:${fresh.id}`).correlationId,
                   },
                 });
                 setJob(next);
-              } catch {
-                /* Account is already confirmed; job finalize is best-effort. */
+              } catch (e: unknown) {
+                setError(e instanceof Error ? e.message : "Could not finish setup confirmation.");
+                return;
               }
             }
             setScreen("result");
@@ -532,8 +628,8 @@ function screenFor(job: OnboardingJobPublic, appConfigured: boolean): Screen {
   if (job.step === "health" || job.step === "confirm") return "health";
   if (job.step === "oauth") return appConfigured ? "oauth" : "app";
   if (job.step === "app_access" || job.step === "app_credentials") return appConfigured ? "oauth" : "app";
-  if (job.controlOwner === "user" || job.status === "needs_user") return job.step === "verify_account" ? "control" : "progress";
-  if (job.status === "draft") return "details";
+  if (job.controlOwner === "user") return "control";
+  if (job.status === "draft") return job.intent === "connect_existing" ? (appConfigured ? "oauth" : "app") : "details";
   return "progress";
 }
 

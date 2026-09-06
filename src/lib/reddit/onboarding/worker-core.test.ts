@@ -119,4 +119,131 @@ describe("worker-core drain and allocation", () => {
     delete process.env.REDDIT_ONBOARDING_FIXTURE;
     await pg.close();
   });
+
+  it("queues context delete when session create is ambiguous", async () => {
+    resetFakeProvider();
+    process.env.REDDIT_ONBOARDING_ENABLED = "true";
+    process.env.REDDIT_ASSISTED_SIGNUP_ENABLED = "true";
+    process.env.REDDIT_ONBOARDING_FIXTURE = "true";
+    const pg = new PGlite();
+    await pg.waitReady;
+    await schema(pg);
+    const sql = toSql(pg);
+    const created = await createOrReuseDraft(sql, {
+      userId: "user-a",
+      mode: "assisted",
+      intent: "create",
+      idempotencyKey: "alloc-lost",
+      body: { mode: "assisted" },
+    });
+    const detailed = await saveDetails(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: created.job.version,
+      expectedUsername: "alice_test",
+      retainContext: false,
+      retainPassword: false,
+      assistanceConsent: true,
+    });
+    const started = await transitionJob(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      expectedVersion: detailed.version,
+      event: { type: "OWNER_STARTS" },
+      eventType: "started",
+    });
+    await enqueueCommand(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: started.version,
+      kind: "start",
+      idempotencyKey: "start-lost",
+      payload: {},
+      operation: "startOnboarding",
+    });
+    const provider = new FakeBrowserProvider();
+    provider.loseCreateResponse = true;
+    await drainOnce(sql, "worker-lost", provider);
+    const tasks = await sql.query<{ kind: string; target_reference: string }>(
+      `select kind, target_reference from reddit_cleanup_tasks where job_id = $1`,
+      [created.job.id],
+    );
+    assert.equal(tasks.some((t) => t.kind === "delete_context"), true);
+    delete process.env.REDDIT_ONBOARDING_ENABLED;
+    delete process.env.REDDIT_ASSISTED_SIGNUP_ENABLED;
+    delete process.env.REDDIT_ONBOARDING_FIXTURE;
+    await pg.close();
+  });
+
+  it("revokes the control view when takeover ends", async () => {
+    resetFakeProvider();
+    process.env.REDDIT_ONBOARDING_ENABLED = "true";
+    process.env.REDDIT_ASSISTED_SIGNUP_ENABLED = "true";
+    process.env.REDDIT_ONBOARDING_FIXTURE = "true";
+    const pg = new PGlite();
+    await pg.waitReady;
+    await schema(pg);
+    const sql = toSql(pg);
+    const created = await createOrReuseDraft(sql, {
+      userId: "user-a",
+      mode: "assisted",
+      intent: "create",
+      idempotencyKey: "takeover-1",
+      body: { mode: "assisted" },
+    });
+    const detailed = await saveDetails(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: created.job.version,
+      expectedUsername: "alice_test",
+      retainContext: false,
+      retainPassword: false,
+      assistanceConsent: true,
+    });
+    let job = await transitionJob(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      expectedVersion: detailed.version,
+      event: { type: "OWNER_STARTS" },
+      eventType: "started",
+    });
+    await enqueueCommand(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: job.version,
+      kind: "start",
+      idempotencyKey: "start-takeover",
+      payload: {},
+      operation: "startOnboarding",
+    });
+    const provider = new FakeBrowserProvider();
+    await drainOnce(sql, "worker-take", provider);
+    job = (await getJob(sql, "user-a", created.job.id))!;
+    await sql.query(
+      `update reddit_onboarding_jobs set control_owner = 'user', status = 'needs_user' where id = $1`,
+      [job.id],
+    );
+    job = (await getJob(sql, "user-a", created.job.id))!;
+    if (job.provider_session_id) {
+      await provider.issueControlView(job.provider_session_id, 1);
+    }
+    await enqueueCommand(sql, {
+      userId: "user-a",
+      jobId: job.id,
+      version: job.version,
+      kind: "end_takeover",
+      idempotencyKey: "end-takeover",
+      payload: {},
+      operation: "finishTakeover",
+    });
+    await drainOnce(sql, "worker-take", provider);
+    if (job.provider_session_id) {
+      const again = await provider.revokeControlView(job.provider_session_id, 1);
+      assert.equal(again.revoked, true);
+    }
+    delete process.env.REDDIT_ONBOARDING_ENABLED;
+    delete process.env.REDDIT_ASSISTED_SIGNUP_ENABLED;
+    delete process.env.REDDIT_ONBOARDING_FIXTURE;
+    await pg.close();
+  });
 });

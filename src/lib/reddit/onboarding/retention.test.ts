@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { OnboardingError } from "./types.ts";
@@ -16,50 +15,8 @@ import {
   requestRetention,
   retentionLabel,
 } from "./retention.ts";
+import { schema, toSql } from "./test-schema.ts";
 import { closeBrowser, disconnectRelay, loadAccountActions } from "./account-actions.ts";
-
-function toSql(pg: PGlite) {
-  return {
-    query: async <T>(text: string, params: unknown[] = []) => {
-      const res = await pg.query<T>(text, params);
-      return res.rows;
-    },
-  };
-}
-
-async function schema(pg: PGlite) {
-  const sql027 = readFileSync(new URL("../../../../migrations/0027_reddit_onboarding.sql", import.meta.url), "utf8");
-  const sql028 = readFileSync(new URL("../../../../migrations/0028_reddit_onboarding_backfill.sql", import.meta.url), "utf8");
-  const sql029 = readFileSync(new URL("../../../../migrations/0029_reddit_onboarding_lifecycle.sql", import.meta.url), "utf8");
-  await pg.exec(`
-    create table reddit_apps (
-      user_id text primary key,
-      client_id text not null,
-      client_secret text not null,
-      user_agent_name text not null,
-      redirect_uri text not null
-    );
-    create table reddit_accounts (
-      id text primary key,
-      user_id text not null,
-      reddit_id text not null,
-      name text not null,
-      onboarded_at timestamptz,
-      created_at timestamptz not null default now(),
-      unique (user_id, reddit_id)
-    );
-    create table reddit_oauth_tickets (
-      ticket text primary key,
-      user_id text not null,
-      state text not null,
-      redirect_uri text not null,
-      expires_at timestamptz not null
-    );
-  `);
-  await pg.exec(sql027);
-  await pg.exec(sql028);
-  await pg.exec(sql029);
-}
 
 describe("retained sign-in", () => {
   it("does not treat a retention request as saved", async () => {
@@ -288,6 +245,10 @@ describe("retained sign-in", () => {
       lastVerifiedUsername: "alice",
       redditId: "t2_1",
     });
+    await sql.query(
+      `insert into reddit_accounts (id, user_id, reddit_id, name) values ($1,$2,$3,$4)`,
+      ["acct-1", "user-a", "t2_1", "alice"],
+    );
     await requestRetention(sql, { userId: "user-a", profileId: profile.id });
     await confirmPersisted(sql, {
       userId: "user-a",

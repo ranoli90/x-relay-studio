@@ -21,7 +21,10 @@ export function OnboardingProgress({
   onManual,
   onOpenSignup,
   onContinue,
+  onStartOauth,
+  onConfirmSubmit,
   busy,
+  fixture,
 }: {
   job: OnboardingJobPublic;
   events: OnboardingEventPublic[];
@@ -30,7 +33,10 @@ export function OnboardingProgress({
   onManual: () => void;
   onOpenSignup: () => void;
   onContinue: () => void;
+  onStartOauth?: () => void;
+  onConfirmSubmit?: () => void;
   busy: boolean;
+  fixture?: boolean;
 }) {
   const stage = stageOf(job);
   const last = events.at(-1);
@@ -58,12 +64,22 @@ export function OnboardingProgress({
       <div className="mt-8 flex flex-col gap-3">
         {job.permittedActions.includes("open_signup") ? (
           <Button type="button" onClick={onOpenSignup} disabled={busy}>
-            Open Reddit signup
+            {fixture ? "Open the isolated test page" : "Open Reddit signup"}
           </Button>
         ) : null}
         {job.permittedActions.includes("continue_manual") ? (
           <Button type="button" variant="secondary" onClick={onContinue} disabled={busy}>
             I created it — continue to connect
+          </Button>
+        ) : null}
+        {job.permittedActions.includes("start_oauth") && onStartOauth ? (
+          <Button type="button" onClick={onStartOauth} disabled={busy}>
+            {fixture ? "Connect fixture account" : "Connect with Reddit"}
+          </Button>
+        ) : null}
+        {job.permittedActions.includes("confirm_submit") && onConfirmSubmit ? (
+          <Button type="button" variant="secondary" onClick={onConfirmSubmit} disabled={busy}>
+            I submitted the form myself
           </Button>
         ) : null}
         {job.permittedActions.includes("request_takeover") ? (

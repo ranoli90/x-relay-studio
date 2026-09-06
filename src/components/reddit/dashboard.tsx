@@ -1,10 +1,19 @@
 import { Link } from "@tanstack/react-router";
 import { formatDistanceToNowStrict } from "date-fns";
 import { Plus, Shield } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { UserButton } from "@/lib/auth/gates";
 import type { RedditAccountPublic } from "@/lib/reddit/types";
 import { disconnectAccount, runHealthCheck } from "@/lib/reddit/server";
+import {
+  loadRedditAccountActions,
+  bindRedditRecoveryEmail,
+  deleteRedditRecoveryEmail,
+  generateRedditDraft,
+  closeRedditBrowser,
+  deleteRedditRetainedSignIn,
+} from "@/lib/reddit/onboarding/server";
+import type { AccountActionsSnapshot } from "@/lib/reddit/onboarding/account-actions";
 import { Button } from "@/components/ui/button";
 import { PushScreen } from "@/components/screen-stack";
 import { OnboardingCoordinator } from "./onboarding/coordinator";
@@ -26,8 +35,22 @@ export function Dashboard({
   const [confirmCut, setConfirmCut] = useState(false);
   const [healthOpen, setHealthOpen] = useState(false);
   const [healthBusy, setHealthBusy] = useState(false);
+  const [actions, setActions] = useState<AccountActionsSnapshot | null>(null);
+  const [actionBusy, setActionBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const account = ready.find((a) => a.id === activeId) ?? ready[0] ?? null;
   const onUnread = useCallback((n: number) => setUnread(n), []);
+
+  const reloadActions = useCallback((accountId: string) => {
+    void loadRedditAccountActions({ data: { accountId } })
+      .then(setActions)
+      .catch(() => setActions(null));
+  }, []);
+
+  const currentAccountId = account?.id;
+  useEffect(() => {
+    if (currentAccountId) reloadActions(currentAccountId);
+  }, [currentAccountId, reloadActions]);
 
   const age = useMemo(() => {
     if (!account?.createdUtc) return "—";
@@ -166,9 +189,80 @@ export function Dashboard({
           <AccountActions
             accountId={account.id}
             accountName={account.name}
+            readiness={actions?.readiness}
+            bindings={actions?.emailBindings}
+            profile={
+              actions?.retainedProfile
+                ? {
+                    retentionRequested: actions.retainedProfile.retentionRequested,
+                    retentionStatus: actions.retainedProfile.retentionStatus,
+                    expiresAt: actions.retainedProfile.expiresAt,
+                  }
+                : null
+            }
+            draft={actions?.drafts[0] ?? null}
+            busy={actionBusy}
+            error={actionError}
             onReconnect={() => setAdding(true)}
+            onCloseBrowser={() => {
+              setActionBusy(true);
+              setActionError(null);
+              void closeRedditBrowser({ data: { accountId: account.id } })
+                .then(() => reloadActions(account.id))
+                .catch((e: unknown) => setActionError(e instanceof Error ? e.message : "Could not close the browser."))
+                .finally(() => setActionBusy(false));
+            }}
             onDisconnectRelay={() => {
               void disconnectAccount({ data: { accountId: account.id } }).then(onChanged);
+            }}
+            onDeleteRetained={() => {
+              setActionBusy(true);
+              setActionError(null);
+              void deleteRedditRetainedSignIn({ data: { accountId: account.id } })
+                .then(() => reloadActions(account.id))
+                .catch((e: unknown) => setActionError(e instanceof Error ? e.message : "Could not delete retained sign-in."))
+                .finally(() => setActionBusy(false));
+            }}
+            onCreateEmail={(input) => {
+              setActionBusy(true);
+              setActionError(null);
+              void bindRedditRecoveryEmail({
+                data: {
+                  accountId: account.id,
+                  address: input.address,
+                  correlationId: crypto.randomUUID(),
+                },
+              })
+                .then(() => reloadActions(account.id))
+                .catch((e: unknown) => setActionError(e instanceof Error ? e.message : "Could not save that address."))
+                .finally(() => setActionBusy(false));
+            }}
+            onDeleteEmail={(bindingId) => {
+              setActionBusy(true);
+              setActionError(null);
+              void deleteRedditRecoveryEmail({
+                data: { accountId: account.id, bindingId, correlationId: crypto.randomUUID() },
+              })
+                .then(() => reloadActions(account.id))
+                .catch((e: unknown) => setActionError(e instanceof Error ? e.message : "Could not remove that address."))
+                .finally(() => setActionBusy(false));
+            }}
+            onGenerateDraft={(input) => {
+              setActionBusy(true);
+              setActionError(null);
+              void generateRedditDraft({
+                data: {
+                  accountId: account.id,
+                  communityAllowlist: input.communityAllowlist,
+                  topic: input.topic,
+                  assertedFacts: input.assertedFacts,
+                  selectedCommunity: input.selectedCommunity,
+                  correlationId: crypto.randomUUID(),
+                },
+              })
+                .then(() => reloadActions(account.id))
+                .catch((e: unknown) => setActionError(e instanceof Error ? e.message : "Could not generate a draft."))
+                .finally(() => setActionBusy(false));
             }}
           />
           <InboxView accountId={account.id} onUnread={onUnread} />

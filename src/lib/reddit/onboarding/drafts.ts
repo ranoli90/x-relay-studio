@@ -3,7 +3,7 @@ import { newId } from "../../agent/ids.ts";
 import { OnboardingError, type DraftPublic } from "./types.ts";
 import type { SqlLike } from "./sql.ts";
 import { withSqlTransaction } from "./sql.ts";
-import { redditPublishEnabled } from "./config.ts";
+import { redditPublishEnabled, redditDraftingEnabled, onboardingFixtureEnabled } from "./config.ts";
 
 export const DRAFT_PROMPT_VERSION = "reddit-draft-v1";
 
@@ -342,6 +342,14 @@ export async function generateDraft(
     generated = await opts.generate(prompt);
   } else if (opts.live === true) {
     generated = await liveGenerate(prompt);
+  } else if (onboardingFixtureEnabled() && redditDraftingEnabled()) {
+    generated = {
+      title: `Notes on ${input.topic.trim()}`,
+      body: `Owner-reviewed draft. Isolated fixture — this was not posted and did not call a model.`,
+      postType: "text",
+      community: input.selectedCommunity || allowlist[0],
+      fitExplanation: "Fixture draft. Not from OpenRouter.",
+    };
   } else {
     throw new OnboardingError(
       "GENERATOR_REQUIRED",

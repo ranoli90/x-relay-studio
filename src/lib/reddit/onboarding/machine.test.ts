@@ -113,4 +113,16 @@ describe("onboarding machine", () => {
     assert.equal(actions.includes("cancel"), true);
     assert.equal(actions.includes("start_oauth"), true);
   });
+
+  it("lets the owner take control from needs_user", () => {
+    const taken = applyEvent(draft({ status: "needs_user", step: "verify_account", controlOwner: "none" }), {
+      type: "OWNER_TAKES_CONTROL",
+    });
+    assert.equal(taken.controlOwner, "user");
+    assert.equal(taken.status, "needs_user");
+    assert.equal(
+      canExecuteCommand(draft({ status: "needs_user", step: "verify_account", controlOwner: "none" }), "request_takeover"),
+      true,
+    );
+  });
 });

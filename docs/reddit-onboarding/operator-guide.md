@@ -18,6 +18,38 @@ Safety cleanup can run while new onboarding is disabled. Missing production depe
 
 Do not prefix provider, model, or encryption secrets with `VITE_`.
 
+## Isolated preview (this workspace)
+
+The Grok preview turns Reddit setup **on locally only**:
+
+- `REDDIT_ONBOARDING_ENABLED=true`
+- `REDDIT_ASSISTED_SIGNUP_ENABLED=true` (fixture + fake provider, not live Reddit)
+- `REDDIT_BROWSER_PROVIDER=fake`
+- `REDDIT_ONBOARDING_FIXTURE=true`
+- `REDDIT_DRAFTING_ENABLED=true`
+- `REDDIT_EMAIL_BINDING_ENABLED=true`
+
+Automate / Manual / I already have an account all run against the local fixture page. CAPTCHA, terms, and final submit stay owner clicks on that page. No Reddit account is created. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
+
+Unattended Reddit signup is **not implemented and is forbidden**: no CAPTCHA solver, no terms auto-accept, no silent OAuth consent.
+
+## Hosted activation (not done by this PR)
+
+Vercel is fail-closed. `VERCEL` is set there, so onboarding, assisted signup, and the fixture default **off**. To turn the coordinator on for a named preview or production:
+
+1. Apply migrations `0027`, `0028`, and `0029` on the Postgres that `DATABASE_URL` points at.
+2. Set **server** env (never `VITE_`):
+   - `REDDIT_ONBOARDING_ENABLED=true` — coordinator only
+   - leave `REDDIT_ASSISTED_SIGNUP_ENABLED` unset unless Browserbase is separately authorized
+   - leave `REDDIT_ONBOARDING_FIXTURE` unset (forced off when `VERCEL` is set)
+   - `REDDIT_DRAFTING_ENABLED=true` only if OpenRouter is configured
+   - `OPENROUTER_API_KEY` for drafting; `SECRETS_ENCRYPTION_KEY` or `BETTER_AUTH_SECRET` for envelopes
+3. Run a **long-lived worker** (`npm run worker:reddit-onboarding`) against the same `DATABASE_URL`. Vercel serverless is not that worker.
+4. Assisted live signup additionally needs `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and an approved Reddit app. That is a separate authorization, not this PR.
+
+Do not merge or deploy solely because continuation was requested. Do not claim live Reddit success from the isolated fixture.
+
+
 ## Resume an incomplete job
 
 1. Open Reddit setup. If a non-terminal job exists for the owner, the coordinator should resume it instead of creating a second active mode.

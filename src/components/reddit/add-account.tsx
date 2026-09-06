@@ -28,7 +28,7 @@ export function AddAccount({
       if (popupRef.current && ev.source && ev.source !== popupRef.current) return;
       const data = ev.data as { type?: string; ok?: boolean; error?: string; correlationId?: string };
       if (data?.type !== "reddit-oauth") return;
-      if (correlationRef.current && data.correlationId && data.correlationId !== correlationRef.current) return;
+      if (!correlationRef.current || !data.correlationId || data.correlationId !== correlationRef.current) return;
       if (data.ok) onConnected();
       else setError(data.error === "denied" ? "You cancelled on Reddit." : data.error || "Connect failed.");
       setBusy(false);

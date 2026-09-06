@@ -16,6 +16,14 @@ export async function queueDisconnectCleanup(
     contextId?: string | null;
   },
 ) {
+  const summaryId = crypto.randomUUID();
+  await sql.query(
+    `insert into reddit_cleanup_tasks (
+       id, user_id, job_id, account_id, kind, target_reference, status, generation, required, summary_of_account_id
+     ) values ($1,$2,$3,$4,'confirm_local_disconnect',$5,'queued',1,true,$4)
+     on conflict (user_id, kind, target_reference, generation) do nothing`,
+    [summaryId, opts.userId, opts.jobId ?? null, opts.accountId, `account:${opts.accountId}`],
+  );
   if (opts.refreshToken) {
     const material = encryptV2(opts.refreshToken, {
       userId: opts.userId,
@@ -29,6 +37,7 @@ export async function queueDisconnectCleanup(
       kind: "revoke_oauth",
       target: `oauth:${opts.accountId}`,
       encryptedMaterial: material,
+      parentTaskId: summaryId,
     });
   }
   if (opts.sessionId) {
@@ -38,6 +47,7 @@ export async function queueDisconnectCleanup(
       jobId: opts.jobId,
       kind: "release_session",
       target: opts.sessionId,
+      parentTaskId: summaryId,
     });
   }
   if (opts.contextId) {
@@ -47,6 +57,7 @@ export async function queueDisconnectCleanup(
       jobId: opts.jobId,
       kind: "delete_context",
       target: opts.contextId,
+      parentTaskId: summaryId,
     });
   }
   await enqueueCleanup(sql, {
@@ -55,13 +66,7 @@ export async function queueDisconnectCleanup(
     jobId: opts.jobId,
     kind: "purge_temporary_secret",
     target: `secrets:${opts.accountId}`,
-  });
-  await enqueueCleanup(sql, {
-    userId: opts.userId,
-    accountId: opts.accountId,
-    jobId: opts.jobId,
-    kind: "confirm_local_disconnect",
-    target: `account:${opts.accountId}`,
+    parentTaskId: summaryId,
   });
 }
 
@@ -79,7 +84,11 @@ export type CleanupTask = {
   lease_generation: number;
 };
 
-export async function claimCleanup(sql: SqlLike, workerId: string): Promise<CleanupTask | null> {
+export async function claimCleanup(
+  sql: SqlLike,
+  workerId: string,
+  scope?: { userId?: string; jobId?: string; accountId?: string },
+): Promise<CleanupTask | null> {
   const rows = await sql.query<CleanupTask>(
     `update reddit_cleanup_tasks
         set status = 'leased',
@@ -92,12 +101,15 @@ export async function claimCleanup(sql: SqlLike, workerId: string): Promise<Clea
          where status in ('queued', 'leased')
            and available_at <= now()
            and (lease_until is null or lease_until <= now() or status = 'queued')
+           and ($2::text is null or user_id = $2)
+           and ($3::text is null or job_id = $3)
+           and ($4::text is null or account_id = $4)
          order by case when kind = 'confirm_local_disconnect' then 1 else 0 end, available_at
          for update skip locked
          limit 1
       )
       returning *`,
-    [workerId],
+    [workerId, scope?.userId ?? null, scope?.jobId ?? null, scope?.accountId ?? null],
   );
   return rows[0] ?? null;
 }

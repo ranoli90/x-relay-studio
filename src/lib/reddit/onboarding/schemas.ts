@@ -185,6 +185,48 @@ export const eventDetailsSchema = z
   })
   .strict();
 
+export const accountIdQuerySchema = z
+  .object({
+    accountId: z.string().min(8).max(80),
+  })
+  .strict();
+
+export const completeFixtureSchema = z
+  .object({
+    jobId: jobIdSchema,
+    version: versionSchema,
+    username: usernameSchema.optional(),
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
+export const bindEmailSchema = z
+  .object({
+    accountId: z.string().min(8).max(80),
+    address: z.string().trim().email().max(200),
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
+export const deleteBindingSchema = z
+  .object({
+    accountId: z.string().min(8).max(80),
+    bindingId: z.string().min(8).max(80),
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
+export const generateDraftSchema = z
+  .object({
+    accountId: z.string().min(8).max(80),
+    communityAllowlist: z.array(z.string().trim().min(2).max(40)).min(1).max(20),
+    topic: z.string().trim().min(3).max(200),
+    assertedFacts: z.string().trim().max(2000).optional(),
+    selectedCommunity: z.string().trim().max(40).optional(),
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
 export const saveRedditAppSchema = z
   .object({
     clientId: z.string().trim().min(8).max(80),

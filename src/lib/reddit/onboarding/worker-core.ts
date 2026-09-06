@@ -66,7 +66,7 @@ function ambiguousAlloc(err: unknown): boolean {
     return (
       err.code === "PROVIDER_TIMEOUT" ||
       err.code === "SESSION_AMBIGUOUS" ||
-      err.code === "UNKNOWN_STATUS" ||
+      err.code === "PROVIDER_UNKNOWN_STATUS" ||
       err.code === "PROVIDER_UNAVAILABLE"
     );
   }
@@ -90,6 +90,15 @@ export async function drainOnce(
   if (!scoped) {
     await expireRetainedProfiles(sql);
     const cleanup = await claimCleanup(sql, workerId).catch(() => null);
+    if (cleanup) {
+      await runCleanupTask(sql, cleanup, provider, opts?.revokeOauth ?? redditOauthRevoker);
+      return { didWork: true };
+    }
+  } else if (opts?.userId) {
+    const cleanup = await claimCleanup(sql, workerId, {
+      userId: opts.userId,
+      jobId: opts.jobId,
+    }).catch(() => null);
     if (cleanup) {
       await runCleanupTask(sql, cleanup, provider, opts?.revokeOauth ?? redditOauthRevoker);
       return { didWork: true };
@@ -206,6 +215,14 @@ async function markAmbiguous(
       where id = $1`,
     [intentId, code],
   );
+  if (contextId) {
+    await enqueueCleanup(sql, {
+      userId: job.user_id,
+      jobId: job.id,
+      kind: "delete_context",
+      target: contextId,
+    });
+  }
   await transitionJob(sql, {
     userId: job.user_id,
     jobId: job.id,
@@ -322,7 +339,7 @@ async function handleCommand(
       jobId: job.id,
       expectedVersion: Number(job.version),
       ...fence(),
-      event: { type: "VERIFICATION_NEEDED", reason: "takeover" },
+      event: { type: "OWNER_TAKES_CONTROL" },
       eventType: "control_granted",
       patch: { control_owner: "user", wait_reason: "You have control of the browser." },
     });
@@ -330,6 +347,9 @@ async function handleCommand(
   }
 
   if (command.kind === "end_takeover") {
+    if (job.provider_session_id) {
+      await provider.revokeControlView(job.provider_session_id, Number(job.session_generation) || 1);
+    }
     await transitionJob(sql, {
       userId: job.user_id,
       jobId: job.id,
@@ -547,21 +567,39 @@ async function handleCommand(
     [session.sessionId, allocation.intentId],
   );
 
-  await transitionJob(sql, {
-    userId: job.user_id,
-    jobId: job.id,
-    expectedVersion,
-    ...fence(),
-    event: { type: "LEASE_ACQUIRED" },
-    eventType: "session_allocation_confirmed",
-    patch: {
-      provider_session_id: session.sessionId,
-      allocation_intent_id: allocation.intentId,
-      allocation_status: "confirmed",
-      provider_context_id: contextId,
-      reserved_browser_seconds: sessionBudgetSeconds(),
-    },
-  });
+  try {
+    await transitionJob(sql, {
+      userId: job.user_id,
+      jobId: job.id,
+      expectedVersion,
+      ...fence(),
+      event: { type: "LEASE_ACQUIRED" },
+      eventType: "session_allocation_confirmed",
+      patch: {
+        provider_session_id: session.sessionId,
+        allocation_intent_id: allocation.intentId,
+        allocation_status: "confirmed",
+        provider_context_id: contextId,
+        reserved_browser_seconds: sessionBudgetSeconds(),
+      },
+    });
+  } catch (err) {
+    await enqueueCleanup(sql, {
+      userId: job.user_id,
+      jobId: job.id,
+      kind: "release_session",
+      target: session.sessionId,
+    });
+    if (contextId) {
+      await enqueueCleanup(sql, {
+        userId: job.user_id,
+        jobId: job.id,
+        kind: "delete_context",
+        target: contextId,
+      });
+    }
+    throw err;
+  }
 
   const fresh = await getJob(sql, job.user_id, job.id);
   if (!fresh) return;
@@ -631,6 +669,25 @@ async function handleCommand(
       });
       return;
     }
+    const waitReason =
+      observation.requiredHumanAction === "captcha"
+        ? "Complete the security check yourself. We will not solve it."
+        : observation.requiredHumanAction === "terms"
+          ? "Read and accept the terms yourself."
+          : observation.requiredHumanAction === "final_submit"
+            ? "Submit the account form yourself. We will not click Create."
+            : "This isolated test page needs you to finish the owner-only steps.";
+    await transitionJob(sql, {
+      userId: job.user_id,
+      jobId: job.id,
+      expectedVersion: Number(fresh.version),
+      leaseOwner: workerId,
+      leaseGeneration: Number(fresh.lease_generation),
+      event: { type: "VERIFICATION_NEEDED", reason: observation.requiredHumanAction || "owner_must_verify" },
+      eventType: "user_action_required",
+      patch: { wait_reason: waitReason },
+    });
+    return;
   }
 
   await transitionJob(sql, {

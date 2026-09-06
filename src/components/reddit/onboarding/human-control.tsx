@@ -5,10 +5,12 @@ export function HumanControl({
   job,
   onFinish,
   onManual,
+  fixtureUrl,
 }: {
   job: OnboardingJobPublic;
   onFinish: () => void;
   onManual: () => void;
+  fixtureUrl?: string | null;
 }) {
   return (
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
@@ -18,12 +20,22 @@ export function HumanControl({
       </h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
         Verification codes stay in your email or phone. We do not store them or send them to a model.
-        Embedded typing on phones is not assumed to work — use Reddit in your own browser if this
-        view cannot take input.
+        Embedded typing on phones is not assumed to work — use your own browser if this view cannot
+        take input.
       </p>
-      <p className="mt-4 text-sm leading-relaxed text-muted">
-        If you submit the form yourself, tell us so we can check the result. We will not submit again.
-      </p>
+      {fixtureUrl ? (
+        <div className="mt-6 overflow-hidden rounded-xl border border-border">
+          <iframe
+            title="Isolated onboarding fixture"
+            src={fixtureUrl}
+            className="h-[28rem] w-full bg-bg"
+          />
+        </div>
+      ) : (
+        <p className="mt-4 text-sm leading-relaxed text-muted">
+          If you submit the form yourself, tell us so we can check the result. We will not submit again.
+        </p>
+      )}
       <div className="mt-8 flex flex-col gap-3">
         <Button type="button" onClick={onFinish}>
           I finished this step

@@ -15,6 +15,7 @@ import { ACCOUNT_CAP, OnboardingError } from "./onboarding/types";
 import { normalizeUsername } from "./onboarding/schemas";
 import { enqueueCleanup } from "./onboarding/store";
 import { encryptV2 } from "./onboarding/vault";
+import { revocationMaterialAad } from "./oauth-callback-gate";
 
 export async function completeRedditOAuth(opts: {
   userId: string;
@@ -53,11 +54,11 @@ export async function completeRedditOAuth(opts: {
 
   const rejectGrant = async (reason: string) => {
     const sql = await getSql();
-    const material = encryptV2(tokens.refresh_token!, {
+    const material = encryptV2(tokens.refresh_token!, revocationMaterialAad({
       userId: opts.userId,
-      recordId: opts.jobId || opts.userId,
-      purpose: "oauth_revocation_material",
-    });
+      accountId: null,
+      jobId: opts.jobId,
+    }));
     await enqueueCleanup(sql, {
       userId: opts.userId,
       jobId: opts.jobId ?? undefined,

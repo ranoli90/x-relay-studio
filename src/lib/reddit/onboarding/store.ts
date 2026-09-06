@@ -813,13 +813,15 @@ export async function enqueueCleanup(
     target: string;
     generation?: number;
     encryptedMaterial?: string | null;
+    parentTaskId?: string | null;
+    required?: boolean;
   },
 ) {
   await sql.query(
     `insert into reddit_cleanup_tasks (
        id, user_id, job_id, account_id, kind, target_reference,
-       encrypted_revocation_material, status, generation
-     ) values ($1,$2,$3,$4,$5,$6,$7,'queued',$8)
+       encrypted_revocation_material, status, generation, parent_task_id, required
+     ) values ($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,$10)
      on conflict (user_id, kind, target_reference, generation) do nothing`,
     [
       crypto.randomUUID(),
@@ -830,6 +832,8 @@ export async function enqueueCleanup(
       opts.target,
       opts.encryptedMaterial ?? null,
       opts.generation ?? 1,
+      opts.parentTaskId ?? null,
+      opts.required !== false,
     ],
   );
 }

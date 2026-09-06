@@ -2,10 +2,10 @@
 
 Source matrix: `handoff/REGRESSION_TESTS.md`. None of these is live Reddit, live Browserbase, or production Postgres.
 
-Head recorded: `feat/reddit-onboarding` plus uncommitted continuation (2026-09-06).
+Head recorded after isolated-preview + review repairs on `feat/reddit-onboarding`.
 
 Command: `npm run test:reddit-onboarding`  
-Result: **107 passed, 0 failed, 3 skipped** (PGlite / fake pool / HTTP stubs). `RC-001` live Postgres skipped (`REDDIT_TEST_DATABASE_URL` unset).
+Result: **122 passed, 0 failed, 3 skipped** (PGlite / fake pool / HTTP stubs). `RC-001` live Postgres skipped (`REDDIT_TEST_DATABASE_URL` unset). Typecheck: clean.
 
 Requested subset:
 
@@ -33,22 +33,22 @@ A mock-provider assertion is not live browser behavior. A fake pool is not Postg
 | RC-006 | R05 lease renewal | passed_fixture | `lease.test.ts` | `renewLease` succeeds for current owner; after forced expiry it throws `STALE_LEASE`. |
 | RC-007 | R05 cleanup competing claim | passed_fixture | `lease.test.ts`, `cleanup.test.ts` | Sequential claims do not lease the same task id. True concurrent PostgreSQL `SKIP LOCKED` is still `blocked_external`. |
 | RC-008 | R05 owner-scoped drain | passed_fixture | `lease.test.ts` | `claimCommand(sql, worker, 60, {userId, jobId})` cannot take another user's command. |
-| RC-009 | R02 OAuth binding write failure | implemented_unverified | `complete-oauth.ts` | No dedicated failing-binding fixture in this slice. |
-| RC-010 | R02/R11 origin and ceremony | implemented_unverified | tickets / callback | Wrong owner/origin/purpose/generation not fully fixture-covered here. |
+| RC-009 | R02 OAuth binding write failure | implemented_unverified | `startJobBoundRedditOAuth` + `insertTicket` in `runOnboardingTx` | Binding and job transition share a transaction. Injected ticket-write failure is still not a dedicated fixture. |
+| RC-010 | R02/R11 origin and ceremony | passed_fixture | `oauth-callback-gate.test.ts` | Origin, purpose, generation, correlation, cancel, replay, busy, recover, uncertain. Popup missing-correlation is not a wildcard. |
 | RC-011 | R03 canonical account ID race | implemented_unverified | `complete-oauth.ts` | Needs isolated PostgreSQL concurrency. |
 | RC-012 | R03 cap versus reconnect | implemented_unverified | `complete-oauth.ts` advisory lock, cap 8 | Not re-run as a race fixture here. |
-| RC-013 | R11 credential version rotation | implemented_unverified | ticket `app_credential_version` | No rotation fixture in this slice. |
+| RC-013 | R11 credential version rotation | passed_fixture | `store.ts` `upsertApp({ rotateCredentials })` | Saving app credentials bumps `credential_version`. Tickets pin `app_credential_version`. No live Reddit re-auth race. |
 | RC-014 | R11 wrong-account grant | implemented_unverified | complete-oauth identity match | Cleanup of issued grant is not a new automated test here. |
-| RC-015 | R11 cancel before callback | implemented_unverified | 0029 `cancelled_at` | No dedicated test in this slice. |
-| RC-016 | R11 cancel during exchange | implemented_unverified | 0029 exchange timestamps | No dedicated test in this slice. |
-| RC-017 | R11 crash after code exchange | implemented_unverified | `processing_state` | No restart/replay fixture here. |
-| RC-018 | R11 final confirmation integrity | implemented_unverified | health / RPC confirm | Not covered by this slice's tests. |
-| RC-019 | R10/R11 popup and full-page paths | implemented_unverified | `add-account.tsx` | UI paths, not CI. |
-| RC-020 | R04 atomic disconnect intent | implemented_unverified | `store.ts` disable + `queueDisconnectCleanup` | DB-failure-between-disable-and-queue not injected here. |
+| RC-015 | R11 cancel before callback | passed_fixture | `oauth-callback-gate.test.ts`, `cancelTicketsForJob` | Cancelled tickets reject. Job cancel writes `cancelled_at` in the same transaction as the job transition. |
+| RC-016 | R11 cancel during exchange | implemented_unverified | 0029 exchange timestamps | Callback also rejects cancelled jobs before proceeding. No in-flight exchange race fixture. |
+| RC-017 | R11 crash after code exchange | passed_fixture | `oauth-callback-gate.test.ts` recover/uncertain | Linked account recovers; stale processing without an account is uncertain, not a second exchange. |
+| RC-018 | R11 final confirmation integrity | passed_fixture | `confirmConnectedIdentity`, `confirmOnboarding` | Disabled, cancelled, missing health, and username mismatch refuse confirmation. Fixture health short-circuits live Reddit. |
+| RC-019 | R10/R11 popup and full-page paths | implemented_unverified | `add-account.tsx` | UI paths, not CI. Correlation is required on start. |
+| RC-020 | R04 atomic disconnect intent | passed_fixture | `cleanup.test.ts` disableAndQueueDisconnect | Disable + queue roll back together when a later write fails. |
 | RC-021 | R04 real revocation adapter | passed_fixture | `cleanup.test.ts` | Missing material → failed `NO_MATERIAL`; missing revoker → `REVOKER_MISSING`; `{ok:false}` → `REVOKE_HTTP_FAILED`; `{ok:true}` → completed. HTTP stub, not Reddit. |
-| RC-022 | R04 cleanup summary dependency | implemented_unverified | 0029 `parent_task_id` / `required` | No test that a summary cannot clear `cleanup_pending` while a child is pending. |
+| RC-022 | R04 cleanup summary dependency | passed_fixture | `cleanup.test.ts` | Summary cannot clear `cleanup_pending` while a required child is still queued. |
 | RC-023 | R04 revocation secret retention | passed_fixture | `cleanup.test.ts` purge | Temporary secret ciphertext becomes `purged` with `deleted_at`; retained password is left unless that kind runs. |
-| RC-024 | R06 context created / session fails | implemented_unverified | fake `loseCreateResponse`; worker `SESSION_AMBIGUOUS` | No new allocation-intent table fixture in this slice. |
+| RC-024 | R06 context created / session fails | passed_fixture | `worker-core.test.ts` | Ambiguous session create queues `delete_context` for the persisted context id. |
 | RC-025 | R06 session response lost | passed_fixture | `store.test.ts` / fake provider | Same `allocationIntentId` reuses the session; lost-create knob exists in `providers/fake.test.ts`. |
 | RC-026 | R06 cancel during allocation | implemented_unverified | worker cancel + cleanup | Late receipt discovery not separately asserted. |
 | RC-027 | R07 no live fixture shortcut | passed_fixture | `controller.test.ts` | Observes driver title/fields; does not treat a fabricated TEST title as live progress. |
@@ -57,7 +57,7 @@ A mock-provider assertion is not live browser behavior. A fake pool is not Postg
 | RC-030 | R09 provider contract states | passed_fixture | `providers/browserbase.test.ts` | PENDING, RUNNING, ERROR, TIMED_OUT, unknown, invalid JSON, 429 mapped on HTTP stubs. |
 | RC-031 | R09 provider timeout taxonomy | passed_fixture | `providers/browserbase.test.ts` | AbortError/TypeError, 5xx create vs get. Not live network. |
 | RC-032 | R09 release and absence | passed_fixture | `providers/browserbase.test.ts`, `cleanup.test.ts` | 404 get/delete; release-does-not-end keeps cleanup pending. |
-| RC-033 | R07/R09 takeover revocation | implemented_unverified | fake `revokeControlView` | No stale-writable-after-resume fixture asserting provider+DB agreement. |
+| RC-033 | R07/R09 takeover revocation | passed_fixture | `worker-core.test.ts` end_takeover | Ending takeover calls `revokeControlView`. Live Browserbase agreement is still `blocked_external`. |
 | RC-034 | R08 consent vs persistence | passed_fixture | `retention.test.ts` | Retention request is not displayed as saved. |
 | RC-035 | R08 retained fixture reopen | passed_fixture | `retention.test.ts` | Reopen bound profile under exclusive lease; wrong tenant rejected by owner checks. |
 | RC-036 | R08 expired authentication | passed_fixture | `retention.test.ts` `markNeedsReauth` | Expired auth → reauth, not new account creation. |
@@ -72,7 +72,7 @@ A mock-provider assertion is not live browser behavior. A fake pool is not Postg
 | RC-045 | Readiness / no invented reputation | passed_fixture | `readiness.test.ts` | Unknown stays unknown; no score; restriction pauses. |
 | RC-046 | Drafting scoped generation | passed_fixture | `drafts.test.ts` | Owner allowlist; missing rules; secrets in prompt rejected; injected generator only. |
 | RC-047 | Drafting approval / publication | passed_fixture | `drafts.test.ts` | Edit invalidates approval; unknown outcome is not blindly retried; direct publish off. |
-| RC-048 | Release evidence gate | passed_fixture | `package.json`, this file | All current `src/lib/reddit/onboarding/*.test.ts` and `providers/*.test.ts` are registered in `test` and `test:reddit-onboarding`. Current-head CI of production deploy is not this slice. Fixture vs Postgres vs live remain labeled separately. |
+| RC-048 | Release evidence gate | passed_fixture | `package.json`, this file | All current `src/lib/reddit/onboarding/*.test.ts`, `providers/*.test.ts`, and `oauth-callback-gate.test.ts` are registered. Current-head CI of production deploy is not this slice. Fixture vs Postgres vs live remain labeled separately. |
 
 ## What this slice did not run
 
