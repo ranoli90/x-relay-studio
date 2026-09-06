@@ -2,10 +2,13 @@
 export function normalizePhone(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
+  const hadPlus = /\+/.test(trimmed);
   const digits = trimmed.replace(/[^\d+]/g, "");
   const rest = digits.startsWith("+") ? digits.slice(1).replace(/\D/g, "") : digits.replace(/\D/g, "");
   if (rest.length < 8 || rest.length > 15) return null;
   if (!/^[1-9]\d{7,14}$/.test(rest)) return null;
+  // National-format numbers (US 10-digit, etc.) are not E.164 without a country code.
+  if (!hadPlus && rest.length <= 10) return null;
   return `+${rest}`;
 }
 
