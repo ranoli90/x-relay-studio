@@ -29,7 +29,7 @@ import {
   completeFixtureOnboarding,
   confirmSignupSubmission,
   getOnboardingControlView,
-  startIsolatedOnboarding,
+  autoRunIsolatedOnboarding,
 } from "@/lib/reddit/onboarding/server";
 import type {
   OnboardingBootstrap,
@@ -104,32 +104,29 @@ export function OnboardingCoordinator({
   const loadBoot = useCallback(async () => {
     const next = await getOnboardingBootstrap();
     setBoot(next);
+    if (
+      next.fixtureEnabled &&
+      next.currentJob &&
+      !["completed", "cancelled", "failed", "blocked", "expired"].includes(next.currentJob.status)
+    ) {
+      try {
+        const finished = await autoRunIsolatedOnboarding({
+          data: {
+            mode: next.currentJob.mode,
+            intent: next.currentJob.intent,
+            idempotencyKey: `resume-${next.currentJob.id}`,
+            correlationId: `resume-${next.currentJob.id}`,
+          },
+        });
+        setJob(finished);
+        setScreen("result");
+        return;
+      } catch {
+        /* fall through to the ordinary resume screens */
+      }
+    }
     if (next.currentJob) {
       setJob(next.currentJob);
-      const leftoverCreate =
-        next.fixtureEnabled &&
-        next.ownerKicksCompleted &&
-        next.currentJob.intent === "create" &&
-        !["completed", "cancelled", "failed", "blocked", "expired"].includes(next.currentJob.status);
-      if (leftoverCreate) {
-        try {
-          const finished = await completeFixtureOnboarding({
-            data: {
-              jobId: next.currentJob.id,
-              version: next.currentJob.version,
-              username: next.currentJob.expectedUsername || undefined,
-              correlationId: `resume-${next.currentJob.id}`,
-            },
-          });
-          setJob(finished);
-          setBoot({ ...next, ownerKicksCompleted: true });
-          setScreen("result");
-          onFinishedRef.current();
-          return;
-        } catch {
-          /* fall through */
-        }
-      }
       const nextScreen = screenFor(next.currentJob, next.appConfigured, next.fixtureEnabled);
       setScreen(nextScreen);
       if (nextScreen === "health") {
@@ -182,7 +179,7 @@ export function OnboardingCoordinator({
             correlationId: rememberKey(opKeys.current, `view:${next.id}`).correlationId,
           },
         });
-        if (!cancelled) setControlView(view);
+        if (!cancelled) setControlView(view as ControlViewState);
       } catch {
         if (!cancelled) {
           setControlView({
@@ -241,31 +238,7 @@ export function OnboardingCoordinator({
     const keys = rememberKey(opKeys.current, op);
     try {
       if (boot?.fixtureEnabled) {
-        if (intent === "connect_existing") {
-          const started = await startIsolatedOnboarding({
-            data: {
-              mode,
-              intent,
-              idempotencyKey: keys.idempotencyKey,
-              correlationId: keys.correlationId,
-            },
-          });
-          const finished = await completeFixtureOnboarding({
-            data: {
-              jobId: started.id,
-              version: started.version,
-              username: started.expectedUsername || undefined,
-              correlationId: keys.correlationId,
-            },
-          });
-          opKeys.current.delete(op);
-          setJob(finished);
-          if (finished.expectedUsername) setUsername(finished.expectedUsername);
-          setScreen("result");
-          onFinishedRef.current();
-          return;
-        }
-        const started = await startIsolatedOnboarding({
+        const finished = await autoRunIsolatedOnboarding({
           data: {
             mode,
             intent,
@@ -274,15 +247,10 @@ export function OnboardingCoordinator({
           },
         });
         opKeys.current.delete(op);
-        setJob(started);
-        if (started.expectedUsername) setUsername(started.expectedUsername);
-        if (started.status === "completed") {
-          setBoot({ ...boot, ownerKicksCompleted: true });
-          setScreen("result");
-          onFinishedRef.current();
-          return;
-        }
-        setScreen("control");
+        setJob(finished);
+        if (finished.expectedUsername) setUsername(finished.expectedUsername);
+        setBoot({ ...boot, ownerKicksCompleted: true });
+        setScreen("result");
         return;
       }
       const created = await createOnboarding({

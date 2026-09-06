@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 export function ModeSelector({
   assistedAvailable,
   assistedReason,
-  ownerKicksCompleted,
+  ownerKicksCompleted: _ownerKicksCompleted,
   selected,
   onSelect,
   onExisting,
@@ -29,11 +29,7 @@ export function ModeSelector({
         <ModeCard
           id="mode-assisted"
           title="Automate account creation"
-          description={
-            ownerKicksCompleted
-              ? "Same as the first account. Security check, terms, and Sign Up are already done for this desk."
-              : "First account: tap the real security check, terms, and Sign Up. Later accounts skip those taps."
-          }
+          description="One click. We fill the form and finish the practice account. Live Reddit still needs you for the security check, terms, and Sign Up."
           selected={selected === "assisted"}
           disabled={!assistedAvailable}
           disabledReason={assistedReason}

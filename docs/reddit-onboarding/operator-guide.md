@@ -29,7 +29,7 @@ The Grok preview turns Reddit setup **on locally only**:
 - `REDDIT_DRAFTING_ENABLED=true`
 - `REDDIT_EMAIL_BINDING_ENABLED=true`
 
-Automate / Manual / I already have an account all run against the local fixture page. Automate fills the supported fields, then the first account on a desk shows Reddit’s real remaining controls one at a time (security check, terms, Sign Up). Later accounts on that desk skip those taps. CAPTCHA, terms, and final submit stay owner clicks on live Reddit. No Reddit account is created. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
+Automate / Manual / I already have an account all run against the local fixture page. Automate is one click: it fills the supported fields and finishes the practice account. CAPTCHA, terms, and final submit stay owner clicks on live Reddit. No Reddit.com account is created. Isolated signup uses a local `*@fixture.test` address — there is no disposable-mail factory. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
 
 Unattended Reddit signup is **not implemented and is forbidden**: no CAPTCHA solver, no terms auto-accept, no silent OAuth consent.
 
