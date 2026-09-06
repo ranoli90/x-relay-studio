@@ -32,7 +32,8 @@ export function ModeSelector({
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Reddit</p>
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">How do you want in?</h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        Two ways. Create a new account on Reddit and connect it, or connect one you already have.
+        Pick how many accounts to make. The system and browser do the rest. Username and password
+        show up here when each one is done. Or connect an account you already have.
       </p>
 
       <div className="mt-8 grid gap-3">
@@ -44,8 +45,8 @@ export function ModeSelector({
             <div className="min-w-0 flex-1">
               <h2 className="text-xl font-medium tracking-tight">Create accounts</h2>
               <p className="mt-1 text-sm leading-relaxed text-muted">
-                Pick 1–{createMax}. We start the first now. You create it on Reddit unless a hosted
-                browser is connected.
+                Pick 1–{createMax}. We queue them and start the first now. No manual Reddit steps
+                on this desk — stay here until the credentials appear.
               </p>
             </div>
           </div>
@@ -90,11 +91,7 @@ export function ModeSelector({
             disabled={!canCreate || busy}
             onClick={() => onCreate(pick)}
           >
-            {busy
-              ? "Queuing…"
-              : pick <= 1
-                ? "Make 1 account"
-                : `Queue ${pick} and start making them`}
+            {busy ? "Starting…" : pick <= 1 ? "Make 1 account" : `Make ${pick} accounts`}
           </Button>
           {!canCreate ? (
             <p className="mt-3 text-sm text-warn">
