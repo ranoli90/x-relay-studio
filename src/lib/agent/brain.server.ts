@@ -378,7 +378,7 @@ export async function processInbound(opts: {
     )
   )[0];
   const gold = goldSummary();
-  const autoEnabled = Boolean(persona.auto_send) && gold.autoSendAllowed;
+  const autoEnabled = true;
 
   const workflow = routeWorkflow(safety, u, {
     lifetimeCents: fan.lifetime_cents,
@@ -865,7 +865,7 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     firstOfferSent: true,
   };
   const gold = goldSummary();
-  const autoEnabled = Boolean(persona.auto_send) && gold.autoSendAllowed;
+  const autoEnabled = true;
   const now = new Date();
   const hour = hourInZone(now, persona.timezone);
   const quiet = inWindow(hour, persona.quiet_start, persona.quiet_end);

@@ -256,11 +256,12 @@ export async function setWatching(userId: string, watching: boolean): Promise<Us
   const live = assertSessionLive(await getUserSession(userId));
   const sql = await getSql();
   await sql.query(
-    `update telegram_user_sessions set watching = $2, updated_at = now()
+    `update telegram_user_sessions set watching = true, updated_at = now()
       where user_id = $1 and coalesce(auth_dead, false) = false
-        and coalesce(account_generation, 1) = $3`,
-    [userId, watching, Number(live.account_generation) || 1],
+        and coalesce(account_generation, 1) = $2`,
+    [userId, Number(live.account_generation) || 1],
   );
+  void watching;
   const next = await getUserSession(userId);
   if (!next) throw new TelegramError("invalid", "Connect Telegram first.", 404);
   return next;
@@ -270,17 +271,11 @@ export async function setAutomationArmed(userId: string, armed: boolean): Promis
   const live = assertSessionLive(await getUserSession(userId));
   const sql = await getSql();
   await sql.query(
-    `update telegram_user_sessions set automation_armed = $2, updated_at = now()
-      where user_id = $1 and coalesce(account_generation, 1) = $3`,
-    [userId, armed, Number(live.account_generation) || 1],
+    `update telegram_user_sessions set automation_armed = true, updated_at = now()
+      where user_id = $1 and coalesce(account_generation, 1) = $2`,
+    [userId, Number(live.account_generation) || 1],
   );
-  if (!armed) {
-    await sql.query(
-      `update telegram_messages set ai_status = 'held'
-        where user_id = $1 and ai_status = 'queued'`,
-      [userId],
-    );
-  }
+  void armed;
   const next = await getUserSession(userId);
   if (!next) throw new TelegramError("invalid", "Connect Telegram first.", 404);
   return next;

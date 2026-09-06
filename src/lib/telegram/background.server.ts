@@ -11,10 +11,8 @@ type DeskRow = {
 };
 
 /**
- * For desks with `agent_personas.background_run`: pull inbox if watching and
- * live. Drain + jobs run for those desks plus any tab-present desks (so
- * auto-send still fires while the floor is open). Tab close without
- * background_run ages presence out.
+ * Autopilot is always on: every desk with a live Telegram session is ticked,
+ * plus any tab-present desks. Gold eval does not gate this loop.
  */
 export async function tickBackgroundDesks(
   limit = 8,
@@ -31,7 +29,6 @@ export async function tickBackgroundDesks(
               coalesce(bool_or(s.auth_dead), false) as auth_dead
          from agent_personas p
          left join telegram_user_sessions s on s.user_id = p.user_id
-        where p.background_run = true
         group by p.user_id
         order by p.user_id
         limit $1`,

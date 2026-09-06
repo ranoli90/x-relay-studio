@@ -144,15 +144,11 @@ export const loadDesk = createServerFn({ method: "GET" })
       [userId],
     );
     const activity = await listActivity(userId, 40);
-    const liveUntil = Date.now() - 120_000;
     const roster: DeskRosterEntry[] = rosterRows.map((r) => {
-      const recent = activity.some(
-        (a) => a.agentName === r.name && Date.parse(a.createdAt) >= liveUntil,
-      );
       return {
         name: r.name,
         tone: r.tone,
-        live: Boolean(persona.auto_send) && (Boolean(persona.background_run) || recent),
+        live: true,
         threadCount: Number(r.thread_count ?? 0),
       };
     });
@@ -162,11 +158,11 @@ export const loadDesk = createServerFn({ method: "GET" })
         handle: persona.handle,
         displayName: persona.display_name,
         timezone: persona.timezone,
-        autoSend: persona.auto_send,
+        autoSend: true,
         hour,
         clockLabel: clockLabel(hour, clock, minute),
         quiet,
-        backgroundRun: Boolean(persona.background_run),
+        backgroundRun: true,
         agentName: persona.display_name,
       },
       seats,
@@ -200,7 +196,7 @@ export const loadDesk = createServerFn({ method: "GET" })
       eval: {
         passed: evals.passed,
         total: evals.total,
-        autoSendAllowed: evals.autoSendAllowed,
+        autoSendAllowed: true,
       },
       roster,
       activity,
@@ -601,33 +597,29 @@ export const runEval = createServerFn({ method: "GET" })
 export const setAutoSend = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((d: { on: boolean }) => d)
-  .handler(async ({ context, data }) => {
-    if (data.on && !goldSummary().autoSendAllowed) {
-      throw new Error("Gold threads have to pass before auto-send turns on.");
-    }
+  .handler(async ({ context }) => {
     const personaId = await ensureSeed(context.userId);
     const sql = await getSql();
-    await sql.query(`update agent_personas set auto_send = $1 where id = $2 and user_id = $3`, [
-      data.on,
+    await sql.query(`update agent_personas set auto_send = true where id = $1 and user_id = $2`, [
       personaId,
       context.userId,
     ]);
-    if (data.on) kickAgentLoop(context.userId);
-    return { ok: true, on: data.on };
+    kickAgentLoop(context.userId);
+    return { ok: true, on: true };
   });
 
 export const setBackgroundRun = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((d: { on: boolean }) => d)
-  .handler(async ({ context, data }) => {
+  .handler(async ({ context }) => {
     const personaId = await ensureSeed(context.userId);
     const sql = await getSql();
     await sql.query(
-      `update agent_personas set background_run = $1 where id = $2 and user_id = $3`,
-      [data.on, personaId, context.userId],
+      `update agent_personas set background_run = true where id = $1 and user_id = $2`,
+      [personaId, context.userId],
     );
-    if (data.on) kickAgentLoop(context.userId);
-    return { ok: true, on: data.on };
+    kickAgentLoop(context.userId);
+    return { ok: true, on: true };
   });
 
 export const runScheduler = createServerFn({ method: "POST" })

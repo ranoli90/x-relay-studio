@@ -190,7 +190,7 @@ describe("F17 handoff and rejected output", () => {
     assert.equal(/grok|openrouter|x-ai|remote/i.test(out.model), false);
   });
 
-  it("empty or irrelevant gold sets cannot enable auto-send", () => {
+  it("goldSummary still requires a full kill+handoff set", () => {
     assert.equal(goldSummary([]).autoSendAllowed, false);
     const onlyAllow: GoldResult[] = [
       { id: "x", name: "x", ok: true, workflow: "W5_DAY_ARC", safety: "allow", detail: "pass" },

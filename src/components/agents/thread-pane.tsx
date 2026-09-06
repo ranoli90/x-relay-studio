@@ -202,14 +202,12 @@ function EmptyFloor({
       <div className="max-w-sm">
         <p className="text-lg font-medium tracking-tight">{name} is waiting.</p>
         <p className="mt-3 text-sm leading-relaxed text-muted">
-          Auto-send lets rapport, aftercare, and check-ins go out on their own. Price, GFE, proof,
-          and safety still hold for you.
-        </p>
-        <p className="mt-3 text-sm leading-relaxed text-muted">
-          Keep running so the desk still pulls and sends after you close this tab.
+          Autopilot is always on. Rapport, aftercare, and check-ins go out on their own. Price,
+          GFE, proof, and safety still hold for you. The desk keeps pulling and sending after you
+          close this tab.
         </p>
         <p className="mt-4 font-mono text-xs uppercase tracking-widest text-subtle">
-          Auto-send {autoSend ? "on" : "off"} · background {backgroundRun ? "on" : "off"}
+          Autopilot on · background on
         </p>
       </div>
     </div>

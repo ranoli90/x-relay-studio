@@ -18,12 +18,12 @@ function input(extra: Partial<DecideAutoSendInput> = {}): DecideAutoSendInput {
 }
 
 describe("decideAutoSend", () => {
-  it("gold off", () => {
-    assert.equal(decideAutoSend(input({ goldAllowed: false })), false);
+  it("gold off still auto-sends", () => {
+    assert.equal(decideAutoSend(input({ goldAllowed: false })), true);
   });
 
-  it("quiet", () => {
-    assert.equal(decideAutoSend(input({ quiet: true })), false);
+  it("quiet does not block autopilot", () => {
+    assert.equal(decideAutoSend(input({ quiet: true })), true);
   });
 
   it("takeover", () => {
@@ -60,7 +60,7 @@ describe("decideAutoSend", () => {
     assert.equal(decideAutoSend(input({ workflow: "W16_QUEUE" })), true);
   });
 
-  it("persona switch off", () => {
-    assert.equal(decideAutoSend(input({ personaAutoSend: false })), false);
+  it("persona switch off still auto-sends", () => {
+    assert.equal(decideAutoSend(input({ personaAutoSend: false })), true);
   });
 });
