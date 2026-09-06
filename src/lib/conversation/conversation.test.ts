@@ -10,6 +10,7 @@ import {
   confirmedTurnCount,
   decideLiveAutoSend,
   extractProposedFacts,
+  generationOriginForWrite,
   inventedQuotedAmount,
   isGreetingOnly,
   isIdentityQuestion,
@@ -18,6 +19,7 @@ import {
   isStopContact,
   normalizeAnalysisText,
   parseLegacyNotes,
+  personaLivePulse,
   resolveIdempotencyHit,
   spokenName,
   usablePartnerFacts,
@@ -265,6 +267,27 @@ describe("AC auto-send containment", () => {
     assert.equal(decideLiveAutoSend({ ...base, generationOrigin: "validated_model", automationMode: "approved_auto" }).send, true);
     assert.equal(decideLiveAutoSend({ ...base, generationOrigin: "validated_model", personaAutoSend: false, automationMode: "approved_auto" }).send, false);
     assert.equal(decideLiveAutoSend({ ...base, generationOrigin: "validated_model" }).send, false);
+  });
+
+  it("local writer output is never recorded as a validated model origin", () => {
+    assert.equal(generationOriginForWrite({ dropped: false, model: "local/understand" }), "local_template");
+    assert.equal(generationOriginForWrite({ dropped: true, model: "x-ai/grok-4.5" }), "local_template");
+    assert.equal(generationOriginForWrite({ dropped: false, model: "x-ai/grok-4.5" }), "validated_model");
+  });
+
+  it("live pulse stays off in draft even with auto-send and a successful writer", () => {
+    const ready = {
+      autoSend: true,
+      goldAllowed: true,
+      writerOk: true,
+      emergencyStop: false,
+    };
+    assert.equal(personaLivePulse({ ...ready, automationMode: "draft" }), false);
+    assert.equal(personaLivePulse({ ...ready, automationMode: "off" }), false);
+    assert.equal(personaLivePulse({ ...ready, automationMode: "import_only" }), false);
+    assert.equal(personaLivePulse({ ...ready, automationMode: "approved_auto" }), true);
+    assert.equal(personaLivePulse({ ...ready, automationMode: "approved_auto", emergencyStop: true }), false);
+    assert.equal(personaLivePulse({ ...ready, automationMode: "approved_auto", autoSend: false }), false);
   });
 
   it("gold remaining off does not by itself block an approved-auto validated reply", () => {

@@ -1,4 +1,5 @@
 import * as agentFns from "@/lib/agent/fns";
+import { personaLivePulse } from "@/lib/conversation/policy";
 import type {
   DeskSnapshot,
   ModelCallRow,
@@ -215,14 +216,16 @@ export function writerFailed(desk: FloorDesk | null | undefined): boolean {
   return Boolean(latest && isFailedCallOutcome(latest.outcome));
 }
 
-/** Live pulse: auto-send on, not stopped, and a successful writer exists. */
+/** Live pulse: approved-auto, not stopped, and a successful writer exists. */
 export function floorLive(desk: FloorDesk | null | undefined): boolean {
   if (!desk) return false;
-  if (desk.persona.emergencyStop) return false;
-  if (!desk.persona.autoSend) return false;
-  if (desk.eval?.total > 0 && !desk.eval.autoSendAllowed) return false;
-  if (!hasSuccessfulWriter(desk)) return false;
-  return true;
+  return personaLivePulse({
+    autoSend: Boolean(desk.persona.autoSend),
+    automationMode: desk.persona.automationMode,
+    emergencyStop: Boolean(desk.persona.emergencyStop),
+    goldAllowed: desk.eval?.total > 0 ? desk.eval.autoSendAllowed : undefined,
+    writerOk: hasSuccessfulWriter(desk),
+  });
 }
 
 export function deskFlagCaption(desk: FloorDesk | null | undefined): string | null {

@@ -6,6 +6,7 @@ import { ensureSeed } from "./seed.server.ts";
 import { processInbound, tickAgentJobs } from "./brain.server.ts";
 import { applyMarkPaid } from "./pay.ts";
 import { goldSummary } from "./eval.ts";
+import { personaLivePulse } from "@/lib/conversation/policy.ts";
 import { clockLabel, clockParts, inWindow } from "./clock.ts";
 import { formatUsd } from "./catalog.ts";
 import { listActivity } from "./activity.server.ts";
@@ -151,11 +152,13 @@ export const loadDesk = createServerFn({ method: "GET" })
     const writerOk = calls.some(
       (c) => (c.task === "write" || c.task === "hard_write") && c.outcome === "ok",
     );
-    const livePulse =
-      Boolean(persona.auto_send) &&
-      !Boolean(persona.emergency_stop) &&
-      evals.autoSendAllowed &&
-      writerOk;
+    const livePulse = personaLivePulse({
+      autoSend: Boolean(persona.auto_send),
+      automationMode: persona.automation_mode,
+      emergencyStop: Boolean(persona.emergency_stop),
+      goldAllowed: evals.autoSendAllowed,
+      writerOk,
+    });
     const roster: DeskRosterEntry[] = rosterRows.map((r) => {
       return {
         name: r.name,

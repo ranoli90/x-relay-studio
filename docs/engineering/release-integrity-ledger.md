@@ -29,7 +29,7 @@ Phone-login retry policy in this baseline (auth five attempts, ordinary writes o
 
 | Finding | Priority | Phase | Disposition | Notes |
 |---|---|---|---|---|
-| XR-001 | P0 | PR-01/04 | source-fixed | Failed/missing generation is held; local templates are not auto-sendable. |
+| XR-001 | P0 | PR-01/04 | source-fixed | Failed/missing generation is held; local templates are stored as `local_template`, not `validated_model`. |
 | XR-002 | P0 | PR-01/02 | source-fixed | Thread persona, not `ensureSeed` first persona. |
 | XR-003 | P1 | PR-05 | source-fixed | Greeting is W5; identity ask is not proof. |
 | XR-004–010 | P0/P1 | PR-02 | source-fixed | Scoped facts, confirmed transcript, placeholder names. |
@@ -50,7 +50,7 @@ Phone-login retry policy in this baseline (auth five attempts, ordinary writes o
 | XR-039 | P1 | PR-03/06 | source-fixed | `availableThreads` before `processInbound`; `forceHold` when credits ≤ 0; burn only if `result.auto`. Held/killed are not billed. Transactional reserve around generation still post-send settle. |
 | XR-040 | P1 | PR-06 | source-fixed | Two ledgers documented: Plisio `createThreadInvoice` = operator desk credits; customer offers = generic webhook + operator delivery attestation. No complete buyer checkout adapter. |
 | XR-041–042 | P1 | PR-07 | source-fixed | Oldest-sync-first desks; emergency stop skips. `historyChats` is a bounded set of 4. Real two-worker SKIP LOCKED NOT RUN. |
-| XR-043–045 | P1 | PR-08 | source-fixed | Floor labels match stored flags: held / local only / uncertain send / approved — not sent / sent. Live pulse requires auto-send, no emergency stop, and a successful writer. Simulator labeled synthetic inbound. |
+| XR-043–045 | P1 | PR-08 | source-fixed | Floor labels match stored flags: held / local only / uncertain send / approved — not sent / sent. Live pulse requires approved-auto, auto-send, no emergency stop, and a successful writer. Simulator labeled synthetic inbound. |
 | XR-046 | P1 | PR-09 | runtime-verified | Typecheck pass. `npm test` 343 pass (scripts then src always). Production build pass. Dev 8080 + built 8081 browser smoke pass, no console errors, no overflow, built does not diverge from landing baseline. Auth stays on. Independent naturalness review and logged-in FloorSwitch E2E NOT RUN. |
 | XR-047 | P1 | PR-02/08 | source-fixed | Persona from the requested thread. |
 | XR-048 | P0 | RELEASE-GATE | blocked | Telegram-to-external-AI permission not authorized by this handoff. Do not enable the live flow. |
