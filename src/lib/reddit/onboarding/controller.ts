@@ -60,7 +60,7 @@ export type BoundedPolicyContext = ActionPolicyContext & {
 
 export function fixtureSignupUrl(): string {
   const origin = fixtureOriginAllowlist()[0] || "http://127.0.0.1:8080";
-  return `${origin}${FIXTURE_PATH}/`;
+  return `${origin}${FIXTURE_PATH}/index.html`;
 }
 
 function isSensitiveLabel(label: string): boolean {

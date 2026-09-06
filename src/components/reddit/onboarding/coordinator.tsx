@@ -404,7 +404,7 @@ export function OnboardingCoordinator({
         onManual={() => void handoffManual()}
         onOpenSignup={() =>
           window.open(
-            boot.fixtureEnabled ? "/__reddit-onboarding-fixture/" : boot.reviewedSignupUrl,
+            boot.fixtureEnabled ? "/__reddit-onboarding-fixture/index.html" : boot.reviewedSignupUrl,
             "_blank",
             "noopener",
           )
@@ -460,7 +460,7 @@ export function OnboardingCoordinator({
     return frame(
       <HumanControl
         job={job}
-        fixtureUrl={boot.fixtureEnabled ? "/__reddit-onboarding-fixture/" : null}
+        fixtureUrl={boot.fixtureEnabled ? "/__reddit-onboarding-fixture/index.html" : null}
         onFinish={() => {
           void finishOnboardingTakeover({
             data: { jobId: job.id, version: job.version, correlationId: rememberKey(opKeys.current, `end-takeover:${job.id}`).correlationId },

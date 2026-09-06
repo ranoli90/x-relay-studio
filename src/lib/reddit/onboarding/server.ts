@@ -329,7 +329,7 @@ export const getOnboardingControlView = createServerFn({ method: "POST" })
     if (onboardingFixtureEnabled()) {
       return {
         available: true,
-        url: "/__reddit-onboarding-fixture/",
+        url: "/__reddit-onboarding-fixture/index.html",
         reason: null,
         fixture: true,
       };
