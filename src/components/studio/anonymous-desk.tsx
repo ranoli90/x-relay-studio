@@ -23,7 +23,6 @@ export function AnonymousDesk({
   const [mode, setMode] = useState<"home" | "created" | "return">("home");
   const [number, setNumber] = useState("");
   const [typed, setTyped] = useState("");
-  const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -162,19 +161,12 @@ export function AnonymousDesk({
                 {copied ? "Copied" : "Copy"}
               </Button>
             </div>
-            <label className="mt-6 flex cursor-pointer items-start gap-3 text-sm text-muted">
-              <input
-                type="checkbox"
-                className="mt-1 size-4 accent-fg"
-                checked={saved}
-                onChange={(e) => setSaved(e.target.checked)}
-              />
-              I saved this number. There is no reset.
-            </label>
+            <p className="mt-6 text-sm leading-relaxed text-muted">
+              Copy this number now. There is no reset.
+            </p>
             <Button
               size="lg"
               className="mt-6 h-12 w-full"
-              disabled={!saved}
               onClick={() => onReady(number)}
             >
               Continue to platforms
@@ -232,7 +224,6 @@ export function BindDesk({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [number, setNumber] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
   const [copied, setCopied] = useState(false);
 
   if (number) {
@@ -263,16 +254,10 @@ export function BindDesk({
               {copied ? "Copied" : "Copy"}
             </Button>
           </div>
-          <label className="mt-6 flex cursor-pointer items-start gap-3 text-sm text-muted">
-            <input
-              type="checkbox"
-              className="mt-1 size-4 accent-fg"
-              checked={saved}
-              onChange={(e) => setSaved(e.target.checked)}
-            />
-            I saved this number.
-          </label>
-          <Button size="lg" className="mt-6 h-12 w-full" disabled={!saved} onClick={() => onReady(number)}>
+          <p className="mt-6 text-sm leading-relaxed text-muted">
+            Copy this number now. There is no reset.
+          </p>
+          <Button size="lg" className="mt-6 h-12 w-full" onClick={() => onReady(number)}>
             Continue to platforms
           </Button>
         </div>

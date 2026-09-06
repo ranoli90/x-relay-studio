@@ -25,9 +25,6 @@ export function OnboardingDetails({
   error: string | null;
 }) {
   const [username, setUsername] = useState(job.expectedUsername ?? "");
-  const [retainContext, setRetainContext] = useState(false);
-  const [retainPassword, setRetainPassword] = useState(false);
-  const [assistance, setAssistance] = useState(job.mode === "assisted");
   const minutes = Math.round(sessionMaxSeconds / 60);
 
   return (
@@ -51,37 +48,10 @@ export function OnboardingDetails({
       </label>
 
       {job.mode === "assisted" ? (
-        <fieldset className="mt-6 space-y-3 text-sm">
-          <legend className="font-medium">Consent for this one account</legend>
-          <label className="flex gap-3">
-            <input
-              type="checkbox"
-              checked={assistance}
-              onChange={(e) => setAssistance(e.target.checked)}
-            />
-            Allow guided browser help for this setup.
-          </label>
-          <label className="flex gap-3">
-            <input
-              type="checkbox"
-              checked={retainContext}
-              onChange={(e) => setRetainContext(e.target.checked)}
-            />
-            Optionally keep a browser sign-in for future approved actions (off by default).
-          </label>
-          <label className="flex gap-3">
-            <input
-              type="checkbox"
-              checked={retainPassword}
-              onChange={(e) => setRetainPassword(e.target.checked)}
-            />
-            Save a Reddit password only if one is actually used (off by default).
-          </label>
-          <p className="text-xs leading-relaxed text-muted">
-            This session uses the configured browser allowance, up to {minutes} minutes. Declining
-            optional storage does not block manual signup or OAuth.
-          </p>
-        </fieldset>
+        <p className="mt-6 text-sm leading-relaxed text-muted">
+          Guided setup uses the configured browser allowance, up to {minutes} minutes. Optional
+          storage stays off. Age checks and Reddit’s terms stay on Reddit.
+        </p>
       ) : (
         <p className="mt-6 text-sm leading-relaxed text-muted">
           Manual setup does not start a hosted browser. Creating a Reddit account does not connect it
@@ -102,9 +72,9 @@ export function OnboardingDetails({
           onClick={() =>
             onSaved({
               expectedUsername: username || undefined,
-              retainContext,
-              retainPassword,
-              assistanceConsent: assistance,
+              retainContext: false,
+              retainPassword: false,
+              assistanceConsent: job.mode === "assisted",
               consentVersion: ASSISTANCE_CONSENT_VERSION,
             })
           }
