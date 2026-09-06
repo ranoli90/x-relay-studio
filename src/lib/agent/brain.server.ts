@@ -7,7 +7,6 @@ import { writeWithGateway } from "./gateway.server.ts";
 import { clockLabel, hourInZone, inWindow } from "./clock.ts";
 import { findSku } from "./catalog.ts";
 import { goldSummary } from "./eval.ts";
-import { LOCAL_WRITER_MODEL } from "./write.ts";
 import { ensureSeed } from "./seed.server.ts";
 import { applyMarkPaid } from "./pay.ts";
 import { claimDueJobs, finalizeJob } from "@/lib/jobs/claim.ts";
@@ -16,7 +15,7 @@ import { decideAutoSend } from "./auto.ts";
 import { pickAgentName, pickFromRoster } from "./names.ts";
 import { recordActivity } from "./activity.server.ts";
 import { tryDispatchAutoSend } from "./dispatch.server.ts";
-import { parseAutomationMode } from "@/lib/conversation/policy.ts";
+import { parseAutomationMode, generationOriginForWrite, type GenerationOrigin } from "@/lib/conversation/policy.ts";
 import { confirmedTranscript } from "@/lib/conversation/history.ts";
 import { resolveIdempotencyHit } from "@/lib/conversation/outbox.ts";
 import type {
@@ -99,6 +98,7 @@ async function commitBubbles(
     takeover?: boolean;
     optOut?: boolean;
     emergencyStop?: boolean;
+    origin: GenerationOrigin;
   },
 ): Promise<{ auto: boolean; partial: boolean }> {
   const ids: string[] = [];
@@ -110,8 +110,8 @@ async function commitBubbles(
     await sql.query(
       `insert into agent_messages
         (id, user_id, thread_id, role, body, workflow, offer_id, auto, status, agent_name, origin, reply_id, bubble_index)
-       values ($1,$2,$3,'draft',$4,$5,$6,false,'held',$7,'validated_model',$8,$9)`,
-      [id, opts.userId, opts.threadId, bubble, opts.workflow, opts.offerId, opts.agentName, replyId, i],
+       values ($1,$2,$3,'draft',$4,$5,$6,false,'held',$7,$8,$9,$10)`,
+      [id, opts.userId, opts.threadId, bubble, opts.workflow, opts.offerId, opts.agentName, opts.origin, replyId, i],
     ).catch(async () => {
       await sql.query(
         `insert into agent_messages
@@ -875,7 +875,7 @@ export async function processInbound(opts: {
       emergencyStop: colBool(persona, "emergency_stop"),
       partnerOptOut: colBool(thread, "opt_out"),
       automationMode: parseAutomationMode(colText(persona, "automation_mode", "draft")),
-      generationOrigin: written.dropped || written.model === LOCAL_WRITER_MODEL ? "local_template" : "validated_model",
+      generationOrigin: generationOriginForWrite(written),
       adultEligibility: (colText(thread, "adult_eligibility", "unknown") as "allowed" | "unknown" | "disallowed") ?? "unknown",
       accountLive: Boolean(fan.tg_peer_id),
       conversationPermitted: true,
@@ -923,6 +923,7 @@ export async function processInbound(opts: {
     takeover: Boolean(thread.takeover),
     optOut: colBool(thread, "opt_out"),
     emergencyStop: colBool(persona, "emergency_stop"),
+    origin: generationOriginForWrite(written),
   });
   const auto = committed.auto;
   const state: ThreadState = fulfilling ? "fulfilling" : auto ? "open" : "held";
@@ -1227,7 +1228,7 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     emergencyStop: colBool(persona, "emergency_stop"),
     partnerOptOut: colBool(thread, "opt_out"),
     automationMode: parseAutomationMode(colText(persona, "automation_mode", "draft")),
-    generationOrigin: written.dropped || written.model === LOCAL_WRITER_MODEL ? "local_template" : "validated_model",
+    generationOrigin: generationOriginForWrite(written),
     accountLive: Boolean(fan.tg_peer_id),
     conversationPermitted: true,
   });
@@ -1244,6 +1245,7 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     takeover: Boolean(thread.takeover),
     optOut: colBool(thread, "opt_out"),
     emergencyStop: colBool(persona, "emergency_stop"),
+    origin: generationOriginForWrite(written),
   });
   if (committed.auto) {
     await sql.query(

@@ -92,3 +92,33 @@ export function parseAutomationMode(raw: unknown): AutomationMode {
   if (raw === "off" || raw === "import_only" || raw === "draft" || raw === "approved_auto") return raw;
   return "draft";
 }
+
+/** Local writer output is never a validated model result. */
+export function generationOriginForWrite(written: {
+  dropped: boolean;
+  model: string;
+}): GenerationOrigin {
+  if (written.dropped) return "local_template";
+  if (written.model.startsWith("local/")) return "local_template";
+  return "validated_model";
+}
+
+/**
+ * Floor "live" pulse. Auto-send plus a recent writer is not enough:
+ * draft/off/import_only personas stay idle even when gold and writer pass.
+ */
+export function personaLivePulse(input: {
+  autoSend: boolean;
+  automationMode?: string | null;
+  emergencyStop?: boolean;
+  goldAllowed?: boolean;
+  writerOk?: boolean;
+}): boolean {
+  if (input.emergencyStop) return false;
+  if (!input.autoSend) return false;
+  if (parseAutomationMode(input.automationMode) !== "approved_auto") return false;
+  if (input.goldAllowed === false) return false;
+  if (input.writerOk === false) return false;
+  return true;
+}
+
