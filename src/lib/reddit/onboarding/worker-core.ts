@@ -27,6 +27,7 @@ import {
   onboardingFixtureEnabled,
   redditAssistedSignupEnabled,
   redditBrowserProvider,
+  assistedApprovalStatus,
 } from "./config.ts";
 import { claimCleanup, runCleanupTask, expireRetainedProfiles, type OauthRevoker } from "./cleanup.ts";
 
@@ -233,7 +234,7 @@ async function handleCommand(
   const fence = () => ({ leaseOwner: workerId, leaseGeneration });
   const caps = capabilities({
     assistanceConsent: Boolean(job.assistance_consent_at),
-    approvalStatus: onboardingFixtureEnabled() ? "approved" : "needs_review",
+    approvalStatus: assistedApprovalStatus(),
   });
   if (command.kind === "cancel") {
     if (isTerminal(job.status) && job.status !== "blocked") {

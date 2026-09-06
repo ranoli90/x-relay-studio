@@ -10,6 +10,8 @@ const ENV_KEYS = [
   "REDDIT_ONBOARDING_FIXTURE",
   "REDDIT_ONBOARDING_FIXTURE_PORT",
   "PORT",
+  "REDDIT_ASSISTED_SIGNUP_ENABLED",
+  "REDDIT_ONBOARDING_ENABLED",
 ] as const;
 const snapshot: Record<string, string | undefined> = {};
 for (const key of ENV_KEYS) snapshot[key] = process.env[key];
@@ -58,6 +60,30 @@ describe("capabilities", () => {
   it("client cannot approve by assertion", () => {
     const caps = capabilities({ approvalStatus: "approved_by_client" as "approved" });
     assert.equal(caps.canStartAssistedSignup, false);
+  });
+
+  it("allows assisted only in isolated fixture when the flag is on, never because a client said approved", () => {
+    enableFixture();
+    process.env.REDDIT_ONBOARDING_ENABLED = "true";
+    process.env.REDDIT_ASSISTED_SIGNUP_ENABLED = "true";
+    const fixture = capabilities({
+      onboardingEnabled: true,
+      assistedFlag: true,
+      provider: "fake",
+      providerConfigured: true,
+      assistanceConsent: true,
+    });
+    assert.equal(fixture.canStartAssistedSignup, true);
+    process.env.VERCEL = "1";
+    process.env.NODE_ENV = "production";
+    const hosted = capabilities({
+      onboardingEnabled: true,
+      assistedFlag: true,
+      provider: "fake",
+      providerConfigured: true,
+      assistanceConsent: true,
+    });
+    assert.equal(hosted.canStartAssistedSignup, false);
   });
 
   it("rejects lookalike navigation and forbidden methods", () => {

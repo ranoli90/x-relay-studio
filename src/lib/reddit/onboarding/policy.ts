@@ -9,6 +9,7 @@ import {
   redditBrowserProvider,
   redditOnboardingEnabled,
   redditRemoteOauthEnabled,
+  assistedApprovalStatus,
 } from "./config.ts";
 import type { CapabilityMap, CapabilityKey } from "./types.ts";
 
@@ -35,7 +36,7 @@ export function capabilities(input: PolicyInput = {}): CapabilityMap {
   const connector = input.connectorEnabled ?? redditConnectorEnabled();
   const provider = input.provider ?? redditBrowserProvider();
   const configured = input.providerConfigured ?? (provider === "fake" || browserbaseConfigured());
-  const approval = input.approvalStatus ?? "needs_review";
+  const approval = input.approvalStatus ?? assistedApprovalStatus();
   const budget = input.budgetAvailable ?? true;
   const kill = input.killAssisted ?? false;
 

@@ -35,6 +35,7 @@ import {
   redditAssistedSignupEnabled,
   redditBrowserProvider,
   onboardingFixtureEnabled,
+  assistedApprovalStatus,
 } from "./config.ts";
 import { ASSISTANCE_CONSENT_VERSION, OnboardingError, REVIEWED_SIGNUP_URL } from "./types.ts";
 import { drainOwnedPreview } from "./worker-core.ts";
@@ -141,7 +142,7 @@ export const startOnboarding = createServerFn({ method: "POST" })
       if (job.mode === "assisted") {
         const caps = capabilities({
           assistanceConsent: data.consentVersion === ASSISTANCE_CONSENT_VERSION,
-          approvalStatus: "needs_review",
+          approvalStatus: assistedApprovalStatus(),
         });
         if (!caps.canStartAssistedSignup) {
           throw new OnboardingError("ASSISTED_DISABLED", assistedUnavailableReason(caps) || "Guided setup is unavailable.");

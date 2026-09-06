@@ -122,6 +122,11 @@ export function onboardingFixtureEnabled(): boolean {
   return readFlag("REDDIT_ONBOARDING_FIXTURE") === true;
 }
 
+/** Isolated fixture only. Live/hosted stays needs_review until a real approval record exists. */
+export function assistedApprovalStatus(): "approved" | "needs_review" {
+  return onboardingFixtureEnabled() ? "approved" : "needs_review";
+}
+
 function fixtureListenPort(): string {
   const raw = (process.env.REDDIT_ONBOARDING_FIXTURE_PORT || process.env.PORT || "8080").trim();
   return /^\d{2,5}$/.test(raw) ? raw : "8080";
