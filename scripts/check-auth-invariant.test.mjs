@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtempSync, symlinkSync } from "node:fs";
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -12,7 +12,7 @@ import {
   compareAuthInvariant,
   probeDevAuthEnabled,
 } from "./check-auth-invariant.mjs";
-import { projectRoot } from "./with-app-env.mjs";
+import { APP_ENV_REL_PATH, projectRoot } from "./with-app-env.mjs";
 
 /**
  * The JSON body `/__app-env` would serve. Do not start a real Vite server —
@@ -24,6 +24,15 @@ function appEnvFetch(env) {
     ok: true,
     text: async () => JSON.stringify(env),
   });
+}
+
+function makeWorkspace(appEnvJson) {
+  const root = mkdtempSync(join(tmpdir(), "auth-inv-"));
+  if (appEnvJson !== undefined) {
+    mkdirSync(join(root, ".grok"), { recursive: true });
+    writeFileSync(join(root, APP_ENV_REL_PATH), appEnvJson);
+  }
+  return root;
 }
 
 test("the flag predicate matches src/lib/auth", () => {
@@ -91,7 +100,13 @@ test("only a divergence warns the smoke verdict", () => {
 });
 
 test("the build side resolves the template's shipped app-env", () => {
-  assert.equal(buildAuthEnabled(projectRoot(), {}), false);
+  const template = makeWorkspace('{"VITE_AUTH_ENABLED":"false"}');
+  assert.equal(buildAuthEnabled(template, {}), false);
+  assert.equal(buildAuthEnabled(template, { VITE_AUTH_ENABLED: "true" }), true);
+});
+
+test("this product's build side resolves auth on", () => {
+  assert.equal(buildAuthEnabled(projectRoot(), {}), true);
   assert.equal(buildAuthEnabled(projectRoot(), { VITE_AUTH_ENABLED: "true" }), true);
 });
 

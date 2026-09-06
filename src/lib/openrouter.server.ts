@@ -1,15 +1,29 @@
-import { classifyFinishReason, classifyHttpStatus, type SafeErrorClass } from "@/lib/conversation/generate.ts";
+import {
+  classifyFinishReason,
+  classifyHttpStatus,
+  combineHealth,
+  healthIsReady,
+  remainingDeadlineMs,
+  unusableFinish,
+  type GenerationHealth,
+  type SafeErrorClass,
+} from "./conversation/generate.ts";
 
 /**
  * OpenRouter is locked in — the key never leaves the server and is never
  * asked for in the UI. Production fails closed if OPENROUTER_API_KEY is missing.
+ *
+ * `openRouterConfigured()` is only a nonempty key string (not a usable writer).
  */
-const OPENROUTER_API_KEY = process.env.OPENROUTER_API_KEY?.trim() ?? "";
-
 const OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions";
 
 export const DEFAULT_MODEL = "x-ai/grok-4.6";
 const FALLBACK_MODELS = ["x-ai/grok-4.5", "x-ai/grok-4.3"];
+const DEFAULT_DEADLINE_MS = 55_000;
+
+function apiKey(): string {
+  return process.env.OPENROUTER_API_KEY?.trim() ?? "";
+}
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
@@ -20,6 +34,8 @@ export type ChatOptions = {
   json?: boolean;
   web?: boolean;
   timeoutMs?: number;
+  /** End-to-end deadline across model fallbacks. Not multiplied per model. */
+  deadlineMs?: number;
   xFilter?: {
     allowed_x_handles?: string[];
     from_date?: string;
@@ -51,16 +67,17 @@ export class ProviderError extends Error {
 }
 
 function requireKey(): string {
-  if (!OPENROUTER_API_KEY) {
+  const key = apiKey();
+  if (!key) {
     throw new ProviderError(
       "OPENROUTER_API_KEY is not set. Rewrites are disabled until the operator configures a key.",
       "missing_key",
     );
   }
-  if (!OPENROUTER_API_KEY.startsWith("sk-or-")) {
+  if (!key.startsWith("sk-or-")) {
     throw new ProviderError("OPENROUTER_API_KEY does not look like an OpenRouter key.", "unauthorized");
   }
-  return OPENROUTER_API_KEY;
+  return key;
 }
 
 function referer(): string {
@@ -97,30 +114,132 @@ function isTerminalGenerationError(err: unknown): boolean {
   return false;
 }
 
+type HealthState = {
+  lastAuthOk: boolean | null;
+  lastGenerationOk: boolean | null;
+  lastGenerationAt: number | null;
+};
+
+let healthState: HealthState = {
+  lastAuthOk: null,
+  lastGenerationOk: null,
+  lastGenerationAt: null,
+};
+
+export function noteOpenRouterAuth(ok: boolean): void {
+  healthState.lastAuthOk = ok;
+}
+
+export function noteOpenRouterGeneration(ok: boolean, at = Date.now()): void {
+  healthState.lastGenerationOk = ok;
+  if (ok) healthState.lastGenerationAt = at;
+}
+
+export function resetOpenRouterHealth(): void {
+  healthState = { lastAuthOk: null, lastGenerationOk: null, lastGenerationAt: null };
+}
+
+export function openRouterHealth(now = Date.now()): GenerationHealth {
+  return combineHealth({
+    configured: openRouterConfigured(),
+    lastAuthOk: healthState.lastAuthOk,
+    lastGenerationOk: healthState.lastGenerationOk,
+    lastGenerationAt: healthState.lastGenerationAt,
+    now,
+  });
+}
+
+/**
+ * Probe result.
+ *
+ * Return shape: `{ ok: boolean, health: GenerationHealth }`.
+ * - `ok` is true only when `health` is `authenticated`, `route_capable`, or
+ *   `recently_generated`. A nonempty key (`openRouterConfigured()`) is only
+ *   `configured` and is not ready.
+ * - `health` is `degraded` when `lastGenerationOk` is false even if
+ *   `lastAuthOk` is true, and when a probe fails after an older success.
+ *
+ * This function does not throw for missing/invalid keys, network errors, or
+ * failed HTTP probes. Watch UI checks `ping.ok` before stamping
+ * `openrouter_ok_at`. Returning a structured result (never throwing on typical
+ * failures) keeps that caller on the try path so a failed probe is not treated
+ * as ready via exception.
+ *
+ * Boolean-coercing callers must check `result.ok` — the object itself is always
+ * truthy. `ok: false` is the fail-closed flag.
+ */
+export type OpenRouterPingResult = {
+  ok: boolean;
+  health: GenerationHealth;
+};
+
+function pingResult(): OpenRouterPingResult {
+  const health = openRouterHealth();
+  return { ok: healthIsReady(health), health };
+}
+
+export async function pingOpenRouter(): Promise<OpenRouterPingResult> {
+  try {
+    if (!openRouterConfigured()) {
+      return pingResult();
+    }
+    const key = apiKey();
+    if (!key.startsWith("sk-or-")) {
+      noteOpenRouterAuth(false);
+      return pingResult();
+    }
+    const res = await fetch("https://openrouter.ai/api/v1/key", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: AbortSignal.timeout(12_000),
+    });
+    noteOpenRouterAuth(res.ok);
+    return pingResult();
+  } catch {
+    noteOpenRouterAuth(false);
+    return pingResult();
+  }
+}
+
 export async function chatOpenRouter(opts: ChatOptions): Promise<ChatResult> {
   requireKey();
   const models = opts.models?.length ? opts.models : [DEFAULT_MODEL, ...FALLBACK_MODELS];
-  let lastErr = "OpenRouter request failed";
+  let lastErr = "Reply generation failed";
+  const started = Date.now();
+  const deadlineMs = opts.deadlineMs ?? opts.timeoutMs ?? DEFAULT_DEADLINE_MS;
 
   for (const model of models) {
+    const remaining = remainingDeadlineMs(started, deadlineMs);
+    if (remaining <= 0) {
+      noteOpenRouterGeneration(false);
+      throw new ProviderError("Reply generation took too long.", "timeout");
+    }
     try {
-      return await chatOnce(model, opts, models);
+      const result = await chatOnce(model, { ...opts, timeoutMs: Math.min(opts.timeoutMs ?? remaining, remaining) }, models);
+      noteOpenRouterGeneration(true);
+      return result;
     } catch (err) {
-      if (isTerminalGenerationError(err)) throw err;
+      if (isTerminalGenerationError(err)) {
+        noteOpenRouterGeneration(false);
+        throw err;
+      }
       const message = err instanceof Error ? err.message : String(err);
       lastErr = message;
       if (!isModelUnavailable(0, message) && !message.includes("404")) {
-        if (!/model|not found|no endpoints/i.test(message)) throw err;
+        if (!/model|not found|no endpoints/i.test(message)) {
+          noteOpenRouterGeneration(false);
+          throw err;
+        }
       }
     }
   }
+  noteOpenRouterGeneration(false);
   throw new Error(lastErr);
 }
 
 async function chatOnce(model: string, opts: ChatOptions, models: string[]): Promise<ChatResult> {
   const key = requireKey();
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? 55_000);
+  const timeout = setTimeout(() => controller.abort(), opts.timeoutMs ?? DEFAULT_DEADLINE_MS);
 
   const body: Record<string, unknown> = {
     model,
@@ -173,7 +292,7 @@ async function chatOnce(model: string, opts: ChatOptions, models: string[]): Pro
       if (isModelUnavailable(res.status, raw)) {
         throw new ProviderError(`model unavailable: ${model}`, "unavailable", res.status);
       }
-      let detail = `OpenRouter error ${res.status}`;
+      let detail = `Reply generation error ${res.status}`;
       try {
         const parsed = JSON.parse(raw) as { error?: { message?: string } };
         if (parsed.error?.message) detail = parsed.error.message;
@@ -191,7 +310,7 @@ async function chatOnce(model: string, opts: ChatOptions, models: string[]): Pro
         throw new ProviderError("OpenRouter payment required.", "payment_required", res.status);
       }
       if (res.status === 429) {
-        throw new ProviderError("X search is being rate-limited. Wait a few seconds and try again.", "rate_limited", res.status);
+        throw new ProviderError("Reply generation is being rate-limited. Wait a few seconds and try again.", "rate_limited", res.status);
       }
       throw new ProviderError(detail, safe, res.status);
     }
@@ -238,6 +357,10 @@ async function chatOnce(model: string, opts: ChatOptions, models: string[]): Pro
     if (!text.trim() || classified === "empty") {
       throw new ProviderError("The model returned an empty reply.", "empty");
     }
+    const bad = unusableFinish(finishReason, text);
+    if (bad) {
+      throw new ProviderError(`model ${bad}`, bad);
+    }
     return {
       text,
       model: data.model ?? model,
@@ -248,7 +371,7 @@ async function chatOnce(model: string, opts: ChatOptions, models: string[]): Pro
     };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new ProviderError("The search took too long. Try a tighter query.", "timeout");
+      throw new ProviderError("Reply generation took too long.", "timeout");
     }
     throw err;
   } finally {
@@ -279,18 +402,9 @@ export function extractJson(text: string): unknown {
 }
 
 export function openRouterConfigured(): boolean {
-  return Boolean(OPENROUTER_API_KEY);
+  return Boolean(apiKey());
 }
 
 export function openRouterKey(): string {
   return requireKey();
-}
-
-export async function pingOpenRouter(): Promise<boolean> {
-  const key = requireKey();
-  const res = await fetch("https://openrouter.ai/api/v1/key", {
-    headers: { Authorization: `Bearer ${key}` },
-    signal: AbortSignal.timeout(12_000),
-  });
-  return res.ok;
 }

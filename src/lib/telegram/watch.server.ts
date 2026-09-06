@@ -25,6 +25,7 @@ import { fetchMe, pullInbox } from "./mtproto.server";
 import { redactPreview } from "./preview";
 import { appendMessage, getAccount, getChatPeer, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
 import { classifyInboundAiStatus } from "./watch-status.ts";
+import { fairHistoryChats } from "../conversation/mirror.ts";
 
 function scopedChatId(userId: string, dialogChatId: string): string {
   const uid = userId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 36);
@@ -108,7 +109,10 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
         selfId,
         dialogLimit: 40,
         historyLimit: opts?.historyLimit ?? 40,
-        historyChats: skipDialogs ? 0 : 1,
+        // XR-041: a small fair set per poll instead of only dialogs[0].
+        // Bounded. Flood wait and session cooldowns still apply; do not raise this
+        // to chase completeness or bypass Telegram backpressure.
+        historyChats: fairHistoryChats(skipDialogs),
         skipPhotoPeers: [],
         photoLimit: 0,
         focusChatId: opts?.chatId ?? null,
@@ -168,6 +172,22 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
             aiStatus,
           });
           if (saved) ingested += 1;
+          if (msg.fromSelf) {
+            try {
+              const { persistManualOutboundMirror } = await import("../agent/ingest-telegram.server.ts");
+              await persistManualOutboundMirror({
+                userId,
+                chatId,
+                body: msg.body,
+                telegramMessageId: msg.telegramMessageId,
+                createdAt: msg.createdAt,
+                watermark,
+                authorName: msg.authorName,
+              });
+            } catch {
+              /* origin/transport columns may be absent on older desks */
+            }
+          }
         }
       }
       if (!watermark) {
@@ -306,12 +326,12 @@ export async function runWatchChecks(userId: string): Promise<TelegramCheckResul
   const latest = await getUserSession(userId);
   try {
     const { pingOpenRouter } = await import("@/lib/openrouter.server");
-    const ok = await pingOpenRouter();
-    if (ok) await markOpenRouterReady(userId);
+    const ping = await pingOpenRouter();
+    if (ping.ok) await markOpenRouterReady(userId);
     set(
       "openrouter_ready",
-      ok,
-      ok
+      ping.ok,
+      ping.ok
         ? "OpenRouter is ready. Nothing is sent until you start automation."
         : "OpenRouter didn’t answer. Watching still works.",
     );

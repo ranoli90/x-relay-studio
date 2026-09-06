@@ -4,7 +4,11 @@ import { Button } from "@/components/ui/button";
 import { formatChatTime, formatDayLabel, sameDay } from "@/components/telegram/format";
 import { cn } from "@/lib/utils";
 import {
+  automationCaption,
+  isConfirmedSentStatus,
+  isEditableDraft,
   messageAgent,
+  messageDeliveryLabel,
   personaName,
   threadAgent,
   wfLabel,
@@ -25,6 +29,8 @@ export function ThreadPane({
   showBack,
   autoSend,
   backgroundRun,
+  emergencyStop,
+  loading,
   onBack,
   onApprove,
   onDrop,
@@ -41,6 +47,8 @@ export function ThreadPane({
   showBack: boolean;
   autoSend: boolean;
   backgroundRun: boolean;
+  emergencyStop: boolean;
+  loading?: boolean;
   onBack: () => void;
   onApprove: (id: string, body?: string) => Promise<void>;
   onDrop: (id: string) => Promise<void>;
@@ -67,11 +75,20 @@ export function ThreadPane({
   }, [snapshot?.messages.length, typing, sending]);
 
   if (!snapshot) {
+    if (loading) {
+      return (
+        <div className="grid h-full place-items-center px-6 text-center">
+          <p className="text-sm text-muted">Loading thread…</p>
+        </div>
+      );
+    }
     return (
       <EmptyFloor
         name={name}
         autoSend={autoSend}
         backgroundRun={backgroundRun}
+        emergencyStop={emergencyStop}
+        caption={automationCaption(desk)}
         hasThreads={Boolean(desk && desk.threads.length > 0)}
       />
     );
@@ -147,7 +164,7 @@ export function ThreadPane({
         {sending ? (
           <div className="flex justify-end">
             <div className="rounded-xl rounded-br-sm border border-border bg-surface px-3 py-2 text-muted">
-              <TypingDots label="Sending" />
+              <TypingDots label="Saving local note" />
             </div>
           </div>
         ) : null}
@@ -162,10 +179,10 @@ export function ThreadPane({
         <input
           value={compose}
           onChange={(e) => onCompose(e.target.value)}
-          placeholder={t.takeover ? "You own this thread" : `Send as ${agent} (takes over)`}
+          placeholder={t.takeover ? "Local note — not Telegram" : `Local note as ${agent} (takes over)`}
           className="h-11 min-h-[44px] min-w-0 flex-1 rounded-md border border-border bg-surface px-3 text-sm outline-none transition-[border-color,box-shadow] duration-[var(--motion-quick)] placeholder:text-subtle focus:ring-2 focus:ring-fg/30"
         />
-        <Button type="submit" size="icon" disabled={busy || sending || !compose.trim()} aria-label="Send">
+        <Button type="submit" size="icon" disabled={busy || sending || !compose.trim()} aria-label="Save local note">
           <Send className="size-4" />
         </Button>
       </form>
@@ -177,11 +194,15 @@ function EmptyFloor({
   name,
   autoSend,
   backgroundRun,
+  emergencyStop,
+  caption,
   hasThreads,
 }: {
   name: string;
   autoSend: boolean;
   backgroundRun: boolean;
+  emergencyStop: boolean;
+  caption: string;
   hasThreads: boolean;
 }) {
   if (hasThreads) {
@@ -191,24 +212,25 @@ function EmptyFloor({
           <p className="text-sm font-medium">{name} is on the floor.</p>
           <p className="mt-2 max-w-sm text-sm leading-relaxed text-muted">
             Open a thread to watch the conversation. Drafts stay visible until you approve or drop
-            them.
+            them. Approved drafts and local notes are not sent.
           </p>
         </div>
       </div>
     );
   }
+  const body = emergencyStop
+    ? "Emergency stop is on. Nothing auto-sends until you turn Stop off."
+    : autoSend
+      ? backgroundRun
+        ? "Auto-send is on. Validated model replies can go out, including after you close this tab."
+        : "Auto-send is on while this tab is open. Background run is off."
+      : "Draft-hold. Replies stay on the desk until you approve. Approve does not send.";
   return (
     <div className="grid h-full place-items-center px-6 text-center">
       <div className="max-w-sm">
         <p className="text-lg font-medium tracking-tight">{name} is waiting.</p>
-        <p className="mt-3 text-sm leading-relaxed text-muted">
-          Autopilot is always on. Rapport, aftercare, and check-ins go out on their own. Price,
-          GFE, proof, and safety still hold for you. The desk keeps pulling and sending after you
-          close this tab.
-        </p>
-        <p className="mt-4 font-mono text-xs uppercase tracking-widest text-subtle">
-          Autopilot on · background on
-        </p>
+        <p className="mt-3 text-sm leading-relaxed text-muted">{body}</p>
+        <p className="mt-4 font-mono text-xs uppercase tracking-widest text-subtle">{caption}</p>
       </div>
     </div>
   );
@@ -232,8 +254,11 @@ function Bubble({
   busy: boolean;
 }) {
   const mine = message.role === "persona" || message.role === "draft";
-  const draft = message.role === "draft" && message.status !== "dropped";
+  const draft = isEditableDraft(message);
   const agent = messageAgent(message) || fallbackName;
+  const delivery = messageDeliveryLabel(message);
+  const sent = isConfirmedSentStatus(message.status);
+  const unsent = mine && !sent && !draft && message.status !== "dropped";
   if (message.status === "dropped") return null;
   return (
     <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
@@ -242,19 +267,20 @@ function Bubble({
           "max-w-[min(28rem,92%)] rounded-xl px-3 py-2 text-sm leading-relaxed",
           message.role === "system" && "w-full bg-surface-2 text-center text-muted",
           message.role === "fan" && "rounded-bl-sm bg-surface-2 text-fg",
-          message.role === "persona" && "rounded-br-sm bg-accent text-accent-fg",
-          draft && "rounded-br-sm border border-dashed border-warn/50 bg-surface text-fg",
+          message.role === "persona" && sent && "rounded-br-sm bg-accent text-accent-fg",
+          (draft || unsent) && "rounded-br-sm border border-dashed border-warn/50 bg-surface text-fg",
         )}
       >
-        {message.role === "persona" || draft ? (
+        {message.role === "persona" || message.role === "draft" ? (
           <p
             className={cn(
               "mb-1 font-mono text-xs uppercase tracking-widest",
-              draft ? "text-warn" : "opacity-60",
+              draft || unsent ? "text-warn" : "opacity-60",
             )}
           >
             {draft ? "Draft · hold" : agent}
-            {message.auto && !draft ? " · auto" : ""}
+            {!draft && delivery && delivery !== "sent" ? ` · ${delivery}` : null}
+            {message.auto && sent ? " · auto" : ""}
           </p>
         ) : null}
         {draft ? (
@@ -274,10 +300,11 @@ function Bubble({
         <p
           className={cn(
             "mt-1 text-right font-mono text-xs tabular-nums",
-            message.role === "persona" ? "opacity-60" : "text-subtle",
+            message.role === "persona" && sent ? "opacity-60" : "text-subtle",
           )}
         >
           {formatChatTime(message.createdAt)}
+          {sent && mine ? " · sent" : ""}
         </p>
         {draft ? (
           <div className="mt-2 flex flex-wrap gap-2">
@@ -288,7 +315,7 @@ function Bubble({
               className="flex h-11 min-h-[44px] items-center gap-1 rounded-md bg-accent px-3 text-xs font-medium text-accent-fg disabled:opacity-40"
             >
               <Check className="size-3.5" />
-              Approve
+              Approve only
             </button>
             <button
               type="button"

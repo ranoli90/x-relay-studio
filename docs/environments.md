@@ -16,3 +16,8 @@
 Telegram conversation work is synthetic-only until the Telegram-to-external-AI permission gate (XR-048) is reviewed. Live partner sends, invoices, and paid provider probes are not authorized by the conversation-repair wave.
 
 Production boot fails closed without `DATABASE_URL` and `BETTER_AUTH_SECRET`.
+
+## Billing ledgers
+
+`PLISIO_SECRET` is operator desk-credit checkout only (`createThreadInvoice` → thread packs). `PAYMENTS_WEBHOOK_SECRET` is the generic fan-offer webhook. They are different ledgers. Plisio does not settle customer offers. There is no complete isolated buyer checkout/fulfillment adapter in this wave. Retired catalog SKUs stay disabled.
+

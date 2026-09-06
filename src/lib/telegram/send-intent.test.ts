@@ -70,6 +70,34 @@ describe("durable human send intents", () => {
     await pg.close();
   });
 
+  it("distinct reply ids with the same body are separate intents after ack", async () => {
+    const pg = await boot();
+    const sql = toSql(pg);
+    const first = await applyBeginSendIntent(sql, {
+      userId: "u1",
+      chatId: "c1",
+      peerId: "42",
+      body: "yes",
+      id: "snd_r1",
+      replyId: "rep_a",
+    });
+    assert.equal(await applyCompleteSendIntent(sql, first.intentId, "u1", 11), true);
+    const second = await applyBeginSendIntent(sql, {
+      userId: "u1",
+      chatId: "c1",
+      peerId: "42",
+      body: "yes",
+      id: "snd_r2",
+      replyId: "rep_b",
+    });
+    assert.equal(second.reuse, undefined);
+    assert.equal(second.intentId, "snd_r2");
+    const count = (await pg.query<{ n: number }>(`select count(*)::int as n from telegram_send_intents`))
+      .rows[0];
+    assert.equal(count.n, 2);
+    await pg.close();
+  });
+
   it("marks unknown/network failures uncertain, not sent", async () => {
     const pg = await boot();
     const sql = toSql(pg);

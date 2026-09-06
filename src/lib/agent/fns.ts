@@ -148,11 +148,19 @@ export const loadDesk = createServerFn({ method: "GET" })
       [userId],
     );
     const activity = await listActivity(userId, 40);
+    const writerOk = calls.some(
+      (c) => (c.task === "write" || c.task === "hard_write") && c.outcome === "ok",
+    );
+    const livePulse =
+      Boolean(persona.auto_send) &&
+      !Boolean(persona.emergency_stop) &&
+      evals.autoSendAllowed &&
+      writerOk;
     const roster: DeskRosterEntry[] = rosterRows.map((r) => {
       return {
         name: r.name,
         tone: r.tone,
-        live: true,
+        live: livePulse,
         threadCount: Number(r.thread_count ?? 0),
       };
     });
@@ -202,7 +210,7 @@ export const loadDesk = createServerFn({ method: "GET" })
       eval: {
         passed: evals.passed,
         total: evals.total,
-        autoSendAllowed: true,
+        autoSendAllowed: evals.autoSendAllowed,
       },
       roster,
       activity,

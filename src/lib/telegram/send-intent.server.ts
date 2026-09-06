@@ -18,9 +18,9 @@ function sha(body: string): string {
 
 export async function applyBeginSendIntent(
   sql: IntentSql,
-  input: { userId: string; chatId: string; peerId: string; body: string; id?: string },
+  input: { userId: string; chatId: string; peerId: string; body: string; id?: string; replyId?: string },
 ): Promise<{ intentId: string; reuse?: SendIntent }> {
-  const bodySha = sha(input.body);
+  const bodySha = sha(input.replyId ? `${input.replyId}\n${input.body}` : input.body);
   const recent = (
     await sql.query<{
       id: string;

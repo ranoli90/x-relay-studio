@@ -2,6 +2,7 @@ import type { CatalogRow } from "./types.ts";
 
 const PRICE = /\$\s*(\d+(?:\.\d{1,2})?)/g;
 
+/** Rounded dollar set for display. Not a quote validator — use inventedPrice / inventedQuotedAmount with exact minor units. */
 export function allowedPrices(catalog: CatalogRow[]): Set<number> {
   return new Set(catalog.filter((r) => r.priceCents > 0).map((r) => Math.round(r.priceCents / 100)));
 }

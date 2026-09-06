@@ -1,7 +1,7 @@
 import { activeClaim, clockContradiction } from "./clock.ts";
 import { findSku, formatUsd, inventedPrice, liveSku } from "./catalog.ts";
 import { buildFanMemory, factHook } from "./memory.ts";
-import { neverPhotoEighty, spokenCustomLine } from "./pricing.ts";
+import { neverPhotoEighty } from "./pricing.ts";
 import { runSafety, safetyBlocksGenerate } from "./safety.ts";
 import type { CatalogRow, ClockSlot, ReplyPlan, WriteInput, WriteResult } from "./types.ts";
 import { spokenName } from "../conversation/names.ts";
@@ -243,6 +243,8 @@ export function writeLocal(input: WriteInput): WriteResult {
     lifetimeCents: 0,
   });
   const price = sku ? formatUsd(sku.priceCents) : null;
+  const customSku = findSku(input.catalog, "custom_clip");
+  const customLine = customSku && customSku.priceCents > 0 ? `a custom is ${formatUsd(customSku.priceCents)}` : "";
   const him = diaryFact(himSlice(input));
   const name = mem.facts.theirName || spokenName(input.fanName);
   const rails = railPhrase(methods);
@@ -263,7 +265,7 @@ export function writeLocal(input: WriteInput): WriteResult {
     last,
     hook,
     burned: Boolean(mem.facts.burned),
-    customLine: spokenCustomLine(input.catalog, mem.price),
+    customLine,
     inbound: input.inbound,
   });
 

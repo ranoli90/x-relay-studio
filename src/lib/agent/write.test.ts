@@ -259,6 +259,14 @@ describe("richer local lines", () => {
     assert.match(w16.bubbles.join(" ").toLowerCase(), /warehouse|on shift|ping you/i);
   });
 
+  it("W4 spoken custom is catalog custom_clip, not a guessed ladder rung", () => {
+    const out = writeLocal(input("W4_QUALIFY", { inbound: "how much?" }));
+    const text = out.bubbles.join(" ");
+    assert.equal(out.dropped, false);
+    assert.match(text, /a custom is \$25/i);
+    assert.equal(/\$40|\$60|\$80/.test(text), false);
+  });
+
   it("W10 may claim delivery only when confirmed, and can still remember HIM", () => {
     const src = input("W10_AFTERCARE", {
       deliveryConfirmed: true,

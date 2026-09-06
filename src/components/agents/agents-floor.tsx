@@ -23,10 +23,16 @@ import { FloorSwitch } from "./floor-switch";
 import {
   asFloorDesk,
   deskActivity,
+  deskFlagCaption,
+  failedModelCalls,
+  floorLive,
   latestActivityForThread,
+  latestWriterCall,
   personaName,
+  safeCallOutcome,
   sortFloorThreads,
   threadAgent,
+  writerFailed,
   type FloorDesk,
   type FloorSnapshot,
   type ScenarioId,
@@ -48,11 +54,12 @@ export function AgentsFloor() {
   const [sim, setSim] = useState("");
   const [compose, setCompose] = useState("");
   const [agentFilter, setAgentFilter] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
   const threadIdRef = useRef<string | null>(null);
   const deskRef = useRef<FloorDesk | null>(null);
   const autoOpened = useRef(false);
 
-  threadIdRef.current = thread?.thread.id ?? null;
+  threadIdRef.current = selectedId;
   deskRef.current = desk;
 
   const applyDesk = useCallback((next: FloorDesk) => {
@@ -62,10 +69,14 @@ export function AgentsFloor() {
   const reload = useCallback(async (threadId?: string) => {
     const d = asFloorDesk(await loadDesk());
     applyDesk(d);
+    if (threadId) {
+      threadIdRef.current = threadId;
+      setSelectedId(threadId);
+    }
     const id = threadId ?? threadIdRef.current;
     if (id) {
       const t = (await loadThread({ data: { threadId: id } })) as FloorSnapshot;
-      setThread(t);
+      if (threadIdRef.current === id) setThread(t);
     }
   }, [applyDesk]);
 
@@ -83,9 +94,11 @@ export function AgentsFloor() {
           autoOpened.current = true;
           const top = sortFloorThreads(d.threads)[0];
           if (top) {
+            threadIdRef.current = top.id;
+            setSelectedId(top.id);
             try {
               const t = (await loadThread({ data: { threadId: top.id } })) as FloorSnapshot;
-              if (!cancelled) setThread(t);
+              if (!cancelled && threadIdRef.current === top.id) setThread(t);
             } catch {
               /* list still paints */
             }
@@ -95,9 +108,9 @@ export function AgentsFloor() {
         if (id) {
           try {
             const t = (await loadThread({ data: { threadId: id } })) as FloorSnapshot;
-            if (!cancelled) setThread(t);
+            if (!cancelled && threadIdRef.current === id) setThread(t);
           } catch {
-            if (!cancelled) setThread(null);
+            if (!cancelled && threadIdRef.current === id) setThread(null);
           }
         }
       } catch (e) {
@@ -129,15 +142,21 @@ export function AgentsFloor() {
 
   async function openThread(id: string) {
     setError(null);
+    threadIdRef.current = id;
+    setSelectedId(id);
+    setCompose("");
     try {
       const t = (await loadThread({ data: { threadId: id } })) as FloorSnapshot;
-      setThread(t);
-      setCompose("");
-      if (narrow) setPane("thread");
+      if (threadIdRef.current === id) {
+        setThread(t);
+        if (narrow) setPane("thread");
+      }
       const d = asFloorDesk(await loadDesk());
       applyDesk(d);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not open thread.");
+      if (threadIdRef.current === id) {
+        setError(e instanceof Error ? e.message : "Could not open thread.");
+      }
     }
   }
 
@@ -146,7 +165,7 @@ export function AgentsFloor() {
     setError(null);
     try {
       const res = await simulateInbound({
-        data: { threadId: thread?.thread.id, text, scenario },
+        data: { threadId: selectedId ?? thread?.thread.id, text, scenario },
       });
       await reload(res.threadId);
       setSim("");
@@ -158,14 +177,20 @@ export function AgentsFloor() {
     }
   }
 
-  const selected = thread?.thread.id ?? null;
-  const name = threadAgent(thread?.thread) || personaName(desk);
+  const selected = selectedId;
+  const snapshot = thread && (!selectedId || thread.thread.id === selectedId) ? thread : null;
+  const name = threadAgent(snapshot?.thread) || personaName(desk);
   const emergencyStop = Boolean(desk?.persona.emergencyStop);
   const autoSend = Boolean(desk?.persona.autoSend) && !emergencyStop;
   const backgroundRun = Boolean(desk?.persona.backgroundRun) && !emergencyStop;
-  const live = Boolean(desk) && autoSend && backgroundRun;
+  const live = floorLive(desk);
   const typing =
     latestActivityForThread(desk ? deskActivity(desk) : [], selected)?.kind === "typing";
+  const genFailed = writerFailed(desk);
+  const failedCalls = failedModelCalls(desk);
+  const writerCall = latestWriterCall(desk);
+  const flagCaption = deskFlagCaption(desk);
+  const loadingThread = Boolean(selectedId) && thread?.thread.id !== selectedId;
 
   return (
     <div id="main" className="flex h-dvh min-w-0 flex-col overflow-hidden bg-bg text-fg">
@@ -177,20 +202,25 @@ export function AgentsFloor() {
           <div className="min-w-0 flex-1">
             <h1 className="flex min-w-0 items-center gap-2 truncate text-sm font-medium tracking-tight md:text-base">
               {boot && !desk ? "Floor" : name}
-              <LivePulse on={Boolean(desk) && (live || typing)} />
+              <LivePulse on={live} />
             </h1>
             <p className="truncate font-mono text-xs uppercase tracking-widest text-subtle">
-              {thread
-                ? `${name} · ${thread.thread.fanName}`
+              {snapshot
+                ? `${name} · ${snapshot.thread.fanName}`
                 : desk
                   ? desk.persona.clockLabel
                   : boot
                     ? "loading"
                     : "offline"}
+              {flagCaption ? ` · ${flagCaption}` : ""}
               {desk?.persona.quiet ? " · quiet hours" : ""}
             </p>
           </div>
-          <EvalChip passed={desk?.eval.passed ?? 0} total={desk?.eval.total ?? 0} />
+          <EvalChip
+            passed={desk?.eval.passed ?? 0}
+            total={desk?.eval.total ?? 0}
+            allowed={desk?.eval.autoSendAllowed ?? false}
+          />
           <div className="hidden items-center md:flex">
             <FloorSwitch
               label="Auto-send"
@@ -248,7 +278,13 @@ export function AgentsFloor() {
             label="Auto-send"
             checked={autoSend}
             disabled={!desk || emergencyStop}
-            title={emergencyStop ? "Emergency stop is on" : "Toggle auto-send"}
+            title={
+              emergencyStop
+                ? "Emergency stop is on"
+                : autoSend
+                  ? "Toggle auto-send"
+                  : "Draft-hold. Auto-send is off."
+            }
             onChange={(on) => {
               void setAutoSend({ data: { on } })
                 .then(() => reload())
@@ -259,7 +295,13 @@ export function AgentsFloor() {
             label="Keep running"
             checked={backgroundRun}
             disabled={!desk || emergencyStop}
-            title={emergencyStop ? "Emergency stop is on" : "Toggle background run"}
+            title={
+              emergencyStop
+                ? "Emergency stop is on"
+                : backgroundRun
+                  ? "Toggle background run"
+                  : "Background run is off"
+            }
             onChange={(on) => {
               void setBackgroundRun({ data: { on } })
                 .then(() => reload())
@@ -269,7 +311,11 @@ export function AgentsFloor() {
           <FloorSwitch
             label="Stop"
             checked={emergencyStop}
-            title="Emergency stop"
+            title={
+              emergencyStop
+                ? "Emergency stop is on. Nothing auto-sends."
+                : "Halt all auto-send and background replies immediately"
+            }
             onChange={(on) => {
               void setEmergencyStop({ data: { on } })
                 .then(() => reload())
@@ -290,6 +336,14 @@ export function AgentsFloor() {
           >
             <X className="size-4" />
           </button>
+        </div>
+      ) : null}
+
+      {genFailed && writerCall ? (
+        <div className="border-b border-warn/30 bg-warn/10 px-3 py-2 text-sm text-warn" role="status">
+          Generation failed ({writerCall.task} · {safeCallOutcome(writerCall.outcome)}). Drafts are
+          held — nothing was sent.
+          {failedCalls.length > 1 ? ` ${failedCalls.length} failed calls on this desk.` : ""}
         </div>
       ) : null}
 
@@ -369,7 +423,7 @@ export function AgentsFloor() {
         >
           <ThreadPane
             desk={desk}
-            snapshot={thread}
+            snapshot={snapshot}
             compose={compose}
             onCompose={setCompose}
             busy={busy}
@@ -378,6 +432,8 @@ export function AgentsFloor() {
             showBack={narrow}
             autoSend={autoSend}
             backgroundRun={backgroundRun}
+            emergencyStop={emergencyStop}
+            loading={loadingThread}
             onBack={() => setPane("chats")}
             onApprove={async (id, body) => {
               setBusy(true);
@@ -402,10 +458,10 @@ export function AgentsFloor() {
               }
             }}
             onTakeover={async (on) => {
-              if (!thread) return;
+              if (!snapshot) return;
               setBusy(true);
               try {
-                await setTakeover({ data: { threadId: thread.thread.id, on } });
+                await setTakeover({ data: { threadId: snapshot.thread.id, on } });
                 await reload();
               } catch (e) {
                 setError(e instanceof Error ? e.message : "Could not change takeover.");
@@ -414,15 +470,15 @@ export function AgentsFloor() {
               }
             }}
             onSend={async () => {
-              if (!thread || !compose.trim()) return;
+              if (!snapshot || !compose.trim()) return;
               setBusy(true);
               setSending(true);
               try {
-                await operatorSend({ data: { threadId: thread.thread.id, body: compose } });
+                await operatorSend({ data: { threadId: snapshot.thread.id, body: compose } });
                 setCompose("");
                 await reload();
               } catch (e) {
-                setError(e instanceof Error ? e.message : "Could not send.");
+                setError(e instanceof Error ? e.message : "Could not save local note.");
               } finally {
                 setSending(false);
                 setBusy(false);
@@ -440,7 +496,7 @@ export function AgentsFloor() {
         >
           <ActivityFeed
             desk={desk}
-            snapshot={thread}
+            snapshot={snapshot}
             onOpen={(id) => void openThread(id)}
             onPay={async (id) => {
               try {
@@ -468,24 +524,33 @@ export function AgentsFloor() {
 function LivePulse({ on }: { on: boolean }) {
   if (!on) return null;
   return (
-    <span className="relative inline-flex size-2 shrink-0" aria-label="Live">
+    <span className="relative inline-flex size-2 shrink-0" aria-label="Auto-send is live">
       <span className="floor-live-dot absolute inset-0 rounded-full bg-up" />
       <span className="relative size-2 rounded-full bg-up" />
     </span>
   );
 }
 
-function EvalChip({ passed, total }: { passed: number; total: number }) {
-  const ok = total > 0 && passed === total;
+function EvalChip({
+  passed,
+  total,
+  allowed,
+}: {
+  passed: number;
+  total: number;
+  allowed: boolean;
+}) {
+  const ok = total > 0 && passed === total && allowed;
   return (
     <span
       className={cn(
         "flex shrink-0 items-center gap-1.5 rounded-md border px-2 py-1 font-mono text-xs uppercase tracking-widest",
         ok ? "border-up/40 text-up" : "border-warn/40 text-warn",
       )}
+      title="Routing eval only — not a writer or send certificate"
     >
       <Shield className="size-3.5" />
-      eval {passed}/{total}
+      route {passed}/{total}
     </span>
   );
 }

@@ -6,6 +6,11 @@ import { isNonProcessableInbound, redactForModel } from "./consent.ts";
 import { availableThreads, burnThreadIfBillable } from "@/lib/billing/ledger.server.ts";
 import { parseAutomationMode } from "@/lib/conversation/policy.ts";
 import { classifyInboundAiStatus, retryBackoffMs } from "@/lib/telegram/watch-status.ts";
+import {
+  decideIngressCreditBurn,
+  decideManualOutboundMirror,
+  type AgentTransportRow,
+} from "../conversation/mirror.ts";
 
 const MAX_INGRESS_ATTEMPTS = 8;
 
@@ -25,6 +30,8 @@ type DrainRow = {
   persona_emergency_stop: boolean | null;
   automation_mode: string | null;
 };
+
+type Sql = Awaited<ReturnType<typeof getSql>>;
 
 /**
  * Drain Telegram messages marked queued / due retry_wait into the conversation
@@ -74,7 +81,7 @@ export async function drainQueuedTelegram(limit = 8, userIds?: string[]): Promis
 }
 
 async function selectDueIngress(
-  sql: Awaited<ReturnType<typeof getSql>>,
+  sql: Sql,
   cap: number,
   userIds?: string[],
 ): Promise<DrainRow[]> {
@@ -139,7 +146,7 @@ async function selectDueIngress(
 }
 
 async function claimIngressRow(
-  sql: Awaited<ReturnType<typeof getSql>>,
+  sql: Sql,
   id: string,
 ): Promise<{ id: string; ai_attempt_count: number } | null> {
   try {
@@ -164,8 +171,145 @@ async function claimIngressRow(
   }
 }
 
+async function findThreadForChat(
+  sql: Sql,
+  userId: string,
+  chatId: string,
+): Promise<{ fanId: string; threadId: string } | null> {
+  const fan = (
+    await sql.query<{ id: string }>(
+      `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
+      [userId, chatId],
+    )
+  )[0];
+  if (!fan) return null;
+  const thread = (
+    await sql.query<{ id: string }>(
+      `select id from agent_threads where fan_id = $1 and user_id = $2 limit 1`,
+      [fan.id, userId],
+    )
+  )[0];
+  if (!thread) return null;
+  return { fanId: fan.id, threadId: thread.id };
+}
+
+async function ensureThreadForChat(
+  sql: Sql,
+  userId: string,
+  chatId: string,
+  authorName?: string,
+): Promise<{ fanId: string; threadId: string } | null> {
+  const existing = await findThreadForChat(sql, userId, chatId);
+  if (existing) return existing;
+  const personaId = await ensureSeed(userId);
+  const fanId = newId("fan");
+  const threadId = newId("thr");
+  await sql.query(
+    `insert into agent_fans
+      (id, user_id, persona_id, display_name, handle, source, archetype, tg_peer_id)
+     values ($1,$2,$3,$4,null,'telegram','new',$5)`,
+    [fanId, userId, personaId, authorName || "Telegram", chatId],
+  );
+  await sql.query(
+    `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
+     values ($1,$2,$3,$4,'W1_INGEST','open')`,
+    [threadId, userId, personaId, fanId],
+  );
+  return { fanId, threadId };
+}
+
+/**
+ * Watch/import observed a from_self Telegram message. Mirror it into
+ * agent_messages unless the transport id is already an agent echo.
+ * Never queues inbound and never auto-replies.
+ */
+export async function persistManualOutboundMirror(opts: {
+  userId: string;
+  chatId: string;
+  body: string;
+  telegramMessageId?: number | string | null;
+  createdAt?: string | Date | null;
+  watermark?: string | Date | null;
+  authorName?: string;
+}): Promise<"upserted" | "skipped"> {
+  const sql = await getSql();
+  let existing: AgentTransportRow[] = [];
+  const transportHint = opts.telegramMessageId == null ? null : String(opts.telegramMessageId);
+  if (transportHint && transportHint !== "0") {
+    existing = await sql
+      .query<{ thread_id: string; origin: string | null; transport_message_id: string | null }>(
+        `select thread_id, origin, transport_message_id
+           from agent_messages
+          where user_id = $1 and transport_message_id = $2
+          limit 8`,
+        [opts.userId, transportHint],
+      )
+      .then((rows) =>
+        rows.map((r) => ({
+          userId: opts.userId,
+          threadId: r.thread_id,
+          transportMessageId: r.transport_message_id,
+          origin: r.origin,
+        })),
+      )
+      .catch(() => [] as AgentTransportRow[]);
+  }
+
+  const located = await findThreadForChat(sql, opts.userId, opts.chatId);
+  const decision = decideManualOutboundMirror({
+    fromSelf: true,
+    telegramMessageId: opts.telegramMessageId,
+    existing,
+    userId: opts.userId,
+    threadId: located?.threadId ?? null,
+    createdAt: opts.createdAt,
+    watermark: opts.watermark,
+  });
+  if (decision.action !== "upsert") return "skipped";
+
+  const thread = located ?? (await ensureThreadForChat(sql, opts.userId, opts.chatId, opts.authorName));
+  if (!thread) return "skipped";
+
+  const dupOnThread = decideManualOutboundMirror({
+    fromSelf: true,
+    telegramMessageId: opts.telegramMessageId,
+    existing,
+    userId: opts.userId,
+    threadId: thread.threadId,
+    createdAt: opts.createdAt,
+    watermark: opts.watermark,
+  });
+  if (dupOnThread.action !== "upsert") return "skipped";
+
+  try {
+    const inserted = await sql.query<{ id: string }>(
+      `insert into agent_messages
+        (id, user_id, thread_id, role, body, auto, status, origin, transport_message_id)
+       select $1,$2,$3,'persona',$4,false,'sent',$5,$6
+        where not exists (
+          select 1 from agent_messages
+           where user_id = $2
+             and transport_message_id = $6
+             and ($3::text is null or thread_id = $3)
+        )
+       returning id`,
+      [
+        newId("msg"),
+        opts.userId,
+        thread.threadId,
+        opts.body,
+        dupOnThread.origin,
+        dupOnThread.transportMessageId,
+      ],
+    );
+    return inserted[0] ? "upserted" : "skipped";
+  } catch {
+    return "skipped";
+  }
+}
+
 async function processClaimedRow(
-  sql: Awaited<ReturnType<typeof getSql>>,
+  sql: Sql,
   row: DrainRow,
 ): Promise<string> {
   if (row.auth_dead) return "held";
@@ -182,6 +326,8 @@ async function processClaimedRow(
   if (mode === "off" || mode === "import_only") return "held";
 
   if (isNonProcessableInbound(row.body, row.author_name)) return "suppressed";
+
+  const credits = await availableThreads(row.user_id);
 
   const personaId = await ensureSeed(row.user_id);
   let fan = (
@@ -214,7 +360,6 @@ async function processClaimedRow(
   )[0];
   if (!thread) return "held";
 
-  const credits = await availableThreads(row.user_id);
   const result = await processInbound({
     userId: row.user_id,
     threadId: thread.id,
@@ -224,15 +369,9 @@ async function processClaimedRow(
     idempotencyKey: `tg:${row.id}`,
     forceHold: credits <= 0,
   });
-  await burnThreadIfBillable(row.user_id, thread.id, {
-    safetyKilled: result.killed,
-    parked: false,
-    takeoverNoModel: false,
-    alreadyBilled: false,
-    aftercare: false,
-    failedModel: false,
-    humanOnly: !result.auto,
-    availableCredits: credits,
-  });
+  const burn = decideIngressCreditBurn(result, credits);
+  if (burn.shouldBurn) {
+    await burnThreadIfBillable(row.user_id, thread.id, burn.event);
+  }
   return result.auto ? "outbound" : "held";
 }

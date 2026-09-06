@@ -73,3 +73,13 @@ Without `DATABASE_URL`, preview uses in-memory PGLite and applies `migrations/*.
 - `npm run smoke -- https://your-app.vercel.app` hits `/`, legal pages, and `/robots.txt`.
 
 See `SECURITY.md` before putting real traffic on a deployment.
+
+## Commercial ledgers (honest)
+
+There are two separate money paths. They are not interchangeable.
+
+- **Operator desk credits.** Plisio `createThreadInvoice` sells thread packs to the *operator*. A paid Plisio invoice mints desk credits. It does **not** mark a fan offer paid and does **not** settle a customer custom, GFE, or call.
+- **Customer offers.** Fan catalog quotes use the generic `/api/payments/webhook` (`PAYMENTS_WEBHOOK_SECRET`) plus operator delivery attestation. There is **no** complete isolated buyer checkout/fulfillment adapter in this wave: no dedicated provider invoice-for-offer, no automated fulfillment SLA, no buyer refund path.
+- **Unsupported products stay disabled.** Retired SKUs (`polaroid_set`, `voice_note`, `gfe_day`) are not live catalog items. A screenshot is never payment. Live copy quotes catalog SKUs at exact minor units — not a guessed spend ladder.
+- Do **not** claim Plisio settles fan offers.
+

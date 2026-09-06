@@ -145,6 +145,8 @@ export function buildFanMemory(opts: {
   mem.needs = stored.needs ?? null;
   mem.vibe = stored.vibe ?? "sweet";
   mem.notes = Array.isArray(stored.notes) ? stored.notes.filter((n) => typeof n === "string") : [];
+  // lastPaidCents is stored history for operator preview only. Never infer it from
+  // lifetimeCents, and never use it to pick a live SKU / next ladder rung.
   if (typeof stored.lastPaidCents === "number") mem.price.lastPaidCents = stored.lastPaidCents;
   if (typeof stored.rejects === "number") mem.price.rejects = stored.rejects;
   if (typeof stored.ghosts === "number") mem.price.ghosts = stored.ghosts;

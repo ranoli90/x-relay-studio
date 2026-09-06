@@ -17,9 +17,11 @@ export function InboundSimulator({
 }) {
   return (
     <div className="shrink-0 border-t border-border p-3">
-      <p className="font-mono text-xs uppercase tracking-widest text-subtle">Inbound simulator</p>
+      <p className="font-mono text-xs uppercase tracking-widest text-subtle">
+        Synthetic inbound — not Telegram
+      </p>
       <p className="mt-1 text-xs leading-relaxed text-muted">
-        Isolated fixture. Preview a fan without live Telegram.
+        Isolated fixture. Preview a fan without live Telegram. Nothing here is sent to a partner.
       </p>
       <div className="mt-2 flex flex-wrap gap-1">
         {SCENARIOS.map((s) => (

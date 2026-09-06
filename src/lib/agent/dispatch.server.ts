@@ -1,4 +1,5 @@
-import { classifyTransportResult } from "@/lib/conversation/outbox.ts";
+import { classifyTransportResult } from "../conversation/outbox.ts";
+import { preSendFence } from "../conversation/mirror.ts";
 
 export type AutoDispatchInput = {
   userId: string;
@@ -69,9 +70,8 @@ async function loadPeerSend(): Promise<PeerSend | null> {
 }
 
 export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<AutoDispatchResult> {
-  if (opts.emergencyStop) return { status: "fail", error: "emergency_stop" };
-  if (opts.takeover) return { status: "fail", error: "takeover" };
-  if (opts.optOut) return { status: "fail", error: "opt_out" };
+  const fence = preSendFence(opts);
+  if (!fence.allow) return { status: "fail", error: fence.reason };
   let send: PeerSend | null;
   try {
     send = await loadPeerSend();
@@ -79,6 +79,8 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
     return classifyThrown(err);
   }
   if (!send) return { status: "not_live" };
+  const fenceAgain = preSendFence(opts);
+  if (!fenceAgain.allow) return { status: "fail", error: fenceAgain.reason };
   try {
     const result = await send({
       userId: opts.userId,
@@ -89,6 +91,9 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
       threadId: opts.threadId,
       accountGeneration: opts.accountGeneration,
       consentEpoch: opts.consentEpoch,
+      takeover: opts.takeover,
+      optOut: opts.optOut,
+      emergencyStop: opts.emergencyStop,
     });
     return classifyReturned(result);
   } catch (err) {

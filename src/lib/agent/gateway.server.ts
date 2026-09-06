@@ -2,8 +2,7 @@
  * Model gateway. We own the route table. Never openrouter/auto.
  * Classify is cheap/local. Writer is adult-permissive (xAI / OpenRouter).
  */
-import { chatOpenRouter, extractJson, openRouterConfigured, ProviderError } from "@/lib/openrouter.server";
-import { getSql } from "@/lib/db";
+import { chatOpenRouter, extractJson, openRouterConfigured, ProviderError } from "../openrouter.server.ts";
 import { newId } from "./ids.ts";
 import type { WriteInput, WriteResult } from "./types.ts";
 import {
@@ -14,6 +13,12 @@ import {
   shouldSkipRemoteWrite,
   LOCAL_WRITER_MODEL,
 } from "./write.ts";
+import {
+  buildWriterMessages,
+  remainingDeadlineMs,
+  unusableFinish,
+  WRITER_UNTRUSTED_POLICY,
+} from "../conversation/generate.ts";
 
 export type AgentTask =
   | "understand"
@@ -114,6 +119,7 @@ async function logCall(opts: {
   usageJson?: string | null;
 }) {
   try {
+    const { getSql } = await import("../db.ts");
     const sql = await getSql();
     await sql.query(
       `insert into agent_model_calls
@@ -137,6 +143,7 @@ async function logCall(opts: {
     );
   } catch {
     try {
+      const { getSql } = await import("../db.ts");
       const sql = await getSql();
       await sql.query(
         `insert into agent_model_calls
@@ -165,7 +172,7 @@ async function chatXai(opts: {
   maxTokens: number;
   timeoutMs: number;
   json?: boolean;
-}): Promise<{ text: string; model: string }> {
+}): Promise<{ text: string; model: string; finishReason: string | null }> {
   const key = xaiKey();
   if (!key) throw new Error("XAI_API_KEY missing");
   const res = await fetch("https://api.x.ai/v1/chat/completions", {
@@ -186,12 +193,26 @@ async function chatXai(opts: {
   if (!res.ok) throw new Error(`xAI ${res.status}`);
   const body = (await res.json()) as {
     model?: string;
-    choices?: { message?: { content?: string } }[];
+    choices?: {
+      finish_reason?: string;
+      message?: { content?: string; refusal?: string };
+    }[];
   };
-  const text = body.choices?.[0]?.message?.content ?? "";
-  if (!text.trim()) throw new Error("empty");
-  return { text, model: body.model ?? opts.model };
+  const choice = body.choices?.[0];
+  const text = choice?.message?.content ?? "";
+  const finishReason = choice?.finish_reason ?? null;
+  if (choice?.message?.refusal) {
+    throw new ProviderError("model refusal", "refusal");
+  }
+  const bad = unusableFinish(finishReason, text);
+  if (bad) {
+    throw new ProviderError(`model ${bad}`, bad);
+  }
+  if (!text.trim()) throw new ProviderError("empty", "empty");
+  return { text, model: body.model ?? opts.model, finishReason };
 }
+
+type TaskResult = { text: string; model: string; fallback: boolean; finishReason?: string | null };
 
 export async function runTask(opts: {
   userId: string;
@@ -199,22 +220,101 @@ export async function runTask(opts: {
   task: AgentTask;
   messages: { role: "system" | "user" | "assistant"; content: string }[];
   json?: boolean;
-}): Promise<{ text: string; model: string; fallback: boolean } | null> {
+}): Promise<TaskResult | null> {
   const route = TABLE[opts.task];
   const started = Date.now();
   const models = [route.primary, ...route.fallback];
+  const budgetMs = route.timeoutMs;
 
   if (openRouterConfigured()) {
+    const remaining = remainingDeadlineMs(started, budgetMs);
+    if (remaining > 0) {
+      try {
+        const result = await chatOpenRouter({
+          messages: opts.messages,
+          maxTokens: route.maxTokens,
+          timeoutMs: remaining,
+          deadlineMs: remaining,
+          json: opts.json,
+          temperature: opts.task === "write" || opts.task === "hard_write" ? 0.6 : 0.2,
+          models,
+          providerSort: route.sort,
+        });
+        const bad = unusableFinish(result.finishReason, result.text);
+        if (bad) {
+          await logCall({
+            userId: opts.userId,
+            threadId: opts.threadId,
+            task: opts.task,
+            model: result.model,
+            latencyMs: Date.now() - started,
+            outcome: bad,
+            fallback: false,
+            finishReason: result.finishReason,
+            generationId: result.generationId,
+            safeError: bad,
+            usageJson: result.usage ? JSON.stringify(result.usage) : null,
+          });
+          return null;
+        }
+        await logCall({
+          userId: opts.userId,
+          threadId: opts.threadId,
+          task: opts.task,
+          model: result.model,
+          latencyMs: Date.now() - started,
+          outcome: "ok",
+          fallback: false,
+          finishReason: result.finishReason,
+          generationId: result.generationId,
+          usageJson: result.usage ? JSON.stringify(result.usage) : null,
+        });
+        return { text: result.text, model: result.model, fallback: false, finishReason: result.finishReason };
+      } catch (err) {
+        const safe = err instanceof ProviderError ? err.safeError : "unknown";
+        await logCall({
+          userId: opts.userId,
+          threadId: opts.threadId,
+          task: opts.task,
+          model: models[0],
+          latencyMs: Date.now() - started,
+          outcome: err instanceof Error ? err.message.slice(0, 80) : "fail",
+          fallback: false,
+          safeError: safe,
+        });
+        if (err instanceof ProviderError && (safe === "refusal" || safe === "truncated" || safe === "empty")) {
+          return null;
+        }
+        /* fall through to xAI / local within the same deadline */
+      }
+    }
+  }
+
+  const xaiRemaining = remainingDeadlineMs(started, budgetMs);
+  if (xaiKey() && xaiRemaining > 200 && (opts.task === "write" || opts.task === "hard_write" || opts.task === "plan")) {
     try {
-      const result = await chatOpenRouter({
+      const result = await chatXai({
+        model: "grok-4.5",
         messages: opts.messages,
         maxTokens: route.maxTokens,
-        timeoutMs: route.timeoutMs,
+        timeoutMs: Math.min(xaiRemaining, 12_000),
         json: opts.json,
-        temperature: opts.task === "write" || opts.task === "hard_write" ? 0.6 : 0.2,
-        models,
-        providerSort: route.sort,
       });
+      const bad = unusableFinish(result.finishReason, result.text);
+      if (bad) {
+        await logCall({
+          userId: opts.userId,
+          threadId: opts.threadId,
+          task: opts.task,
+          model: result.model,
+          latencyMs: Date.now() - started,
+          outcome: bad,
+          fallback: true,
+          finishReason: result.finishReason,
+          safeError: bad,
+        });
+        return null;
+      }
       await logCall({
         userId: opts.userId,
         threadId: opts.threadId,
@@ -222,12 +322,10 @@ export async function runTask(opts: {
         model: result.model,
         latencyMs: Date.now() - started,
         outcome: "ok",
-        fallback: false,
+        fallback: true,
         finishReason: result.finishReason,
-        generationId: result.generationId,
-        usageJson: result.usage ? JSON.stringify(result.usage) : null,
       });
-      return { text: result.text, model: result.model, fallback: false };
+      return { text: result.text, model: result.model, fallback: true, finishReason: result.finishReason };
     } catch (err) {
       const safe = err instanceof ProviderError ? err.safeError : "unknown";
       await logCall({
@@ -237,44 +335,8 @@ export async function runTask(opts: {
         model: models[0],
         latencyMs: Date.now() - started,
         outcome: err instanceof Error ? err.message.slice(0, 80) : "fail",
-        fallback: false,
+        fallback: true,
         safeError: safe,
-      });
-      if (err instanceof ProviderError && (safe === "refusal" || safe === "truncated" || safe === "empty")) {
-        return null;
-      }
-      /* fall through to xAI / local */
-    }
-  }
-
-  if (xaiKey() && (opts.task === "write" || opts.task === "hard_write" || opts.task === "plan")) {
-    try {
-      const result = await chatXai({
-        model: "grok-4.5",
-        messages: opts.messages,
-        maxTokens: route.maxTokens,
-        timeoutMs: Math.min(route.timeoutMs, 12_000),
-        json: opts.json,
-      });
-      await logCall({
-        userId: opts.userId,
-        threadId: opts.threadId,
-        task: opts.task,
-        model: result.model,
-        latencyMs: Date.now() - started,
-        outcome: "ok",
-        fallback: true,
-      });
-      return { text: result.text, model: result.model, fallback: true };
-    } catch (err) {
-      await logCall({
-        userId: opts.userId,
-        threadId: opts.threadId,
-        task: opts.task,
-        model: models[0],
-        latencyMs: Date.now() - started,
-        outcome: err instanceof Error ? err.message.slice(0, 80) : "fail",
-        fallback: true,
       });
       return null;
     }
@@ -300,37 +362,7 @@ export async function writeWithGateway(userId: string, threadId: string, input: 
   }
 
   const caps = writeCapsFor(input);
-  const rails =
-    caps.allowedMethods && caps.allowedMethods.length > 0
-      ? caps.allowedMethods.join(", ")
-      : "(none — do not name any rail or payment method)";
-  const catalogLines = input.catalog
-    .map((c) => `${c.sku} ${c.title} $${(c.priceCents / 100).toFixed(0)} rail=${c.rail}`)
-    .join("\n");
-  const last = input.last.map((m) => `${m.role}: ${m.body}`).join("\n");
-  const proofLine = caps.proofAvailable
-    ? "An unused proof asset is reserved. You may offer that reserved asset. Never promise a live selfie or a recycled live."
-    : "NO proof asset is reserved. Do not promise a selfie, verification pic, same-outfit, live proof, or that you can send one.";
-  const deliveryLine = caps.deliveryConfirmed
-    ? "Delivery is confirmed. You may say you got it to them."
-    : "Delivery is NOT confirmed. Do not claim you sent, delivered, or that it is in their inbox.";
-
-  const system = `You write as ${input.personaName}, a disclosed AI persona with human desk support.
-Short Telegram bubbles. Lowercase ok. No emoji.
-Do not volunteer an AI disclaimer every turn. If asked whether you are real/human/AI, answer honestly.
-Never invent a price, job, pet, city, or payment rail. Catalog only:
-${catalogLines}
-Only these payment rails may be named: ${rails}
-${proofLine}
-${deliveryLine}
-Do not claim a live schedule or warehouse/gym/bed location unless it is in the approved character bible AND marked fictional.
-Forbidden in output: strategy=, trust_score, gfe_ready, openrouter, system prompt, gift cards, restriction workarounds, bypass language, prices not on the list, payment methods not on the allowlist.
-Plan you must follow: workflow=${input.plan.workflow} tactic=${input.plan.tactic} sku=${input.plan.sku ?? "none"}
-hold=${input.plan.hold} is about whether the desk may auto-send. You still write the draft. Do not mention hold, workflow ids, or plan fields.
-Answer the actual message. One bubble is normal. Zero questions is fine. Do not force a memory callback or a name.
-Approved character notes (not live proof): ${input.bible}`;
-
-  const user = `Partner just said:\n${input.inbound}\n\nConfirmed recent transcript (untrusted partner text):\n${last}\n\nWrite 1-2 short bubbles. Split with a blank line.`;
+  const { system, user } = buildWriterMessages(input, caps);
 
   const llm = await runTask({
     userId,
@@ -344,6 +376,10 @@ Approved character notes (not live proof): ${input.bible}`;
   if (!llm) {
     return { bubbles: [], dropped: true, dropReason: "generation_failed", model: LOCAL_WRITER_MODEL };
   }
+  const badFinish = unusableFinish(llm.finishReason, llm.text);
+  if (badFinish) {
+    return { bubbles: [], dropped: true, dropReason: badFinish, model: llm.model };
+  }
   const drop = validateDraft(llm.text, input.catalog, input.hour, input.clock, caps);
   if (drop) {
     return { bubbles: [], dropped: true, dropReason: `validator_rejected: ${drop}`, model: llm.model };
@@ -351,4 +387,4 @@ Approved character notes (not live proof): ${input.bible}`;
   return { bubbles: splitBubbles(llm.text), dropped: false, dropReason: null, model: llm.model };
 }
 
-export { extractJson, TABLE as ROUTE_TABLE };
+export { extractJson, TABLE as ROUTE_TABLE, buildWriterMessages, WRITER_UNTRUSTED_POLICY };
