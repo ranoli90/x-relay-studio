@@ -37,7 +37,7 @@ Unattended Reddit signup is **not implemented and is forbidden**: no CAPTCHA sol
 
 Vercel is fail-closed. `VERCEL` is set there, so onboarding, assisted signup, and the fixture default **off**. To turn the coordinator on for a named preview or production:
 
-1. Apply migrations `0027`, `0028`, `0029`, and `0030` on the Postgres that `DATABASE_URL` points at.
+1. Apply migrations `0027`–`0030` and `0032` on the Postgres that `DATABASE_URL` points at.
 2. Set **server** env (never `VITE_`):
    - `REDDIT_ONBOARDING_ENABLED=true` — coordinator only
    - `REDDIT_ASSISTED_SIGNUP_ENABLED=true` only with Steel/local/Browserbase on a worker host
