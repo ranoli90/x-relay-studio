@@ -3,12 +3,19 @@ import { ACCOUNT_CAP, OnboardingError } from "./types.ts";
 import { normalizeUsername } from "./schemas.ts";
 import { onboardingFixtureEnabled } from "./config.ts";
 import type { SqlLike } from "./sql.ts";
-import { transitionJob, requireJob } from "./store.ts";
+import { randomBytes } from "node:crypto";
+import { transitionJob, requireJob, getJob } from "./store.ts";
+
 import type { HealthReport } from "../types.ts";
 import { encryptSecret } from "../../secrets.ts";
 
 export const FIXTURE_APP_CLIENT_ID = "fixture-preview-client";
 export const FIXTURE_APP_SECRET = "fixture-preview-secret";
+
+/** Valid Reddit-shaped username used only on the isolated fixture path. */
+export function generateFixtureUsername(): string {
+  return `relay${randomBytes(4).toString("hex")}`;
+}
 
 export function fixtureHealthReport(username: string, now = Date.now()): HealthReport {
   return buildHealthReport({
@@ -97,4 +104,55 @@ export async function completeFixtureConnect(
     },
   });
   return { job: next, accountId: storedId, name: username };
+}
+
+/**
+ * Isolated preview only. Completes connect + health + job so Automate does not
+ * stop on owner-only Reddit gates that this page is not allowed to click.
+ * Live Reddit still requires the owner for CAPTCHA, terms, and final submit.
+ */
+export async function finishIsolatedFixtureSignup(
+  sql: SqlLike,
+  opts: {
+    userId: string;
+    jobId: string;
+    version: number;
+    username?: string | null;
+  },
+) {
+  if (!onboardingFixtureEnabled()) {
+    throw new OnboardingError("FIXTURE_DISABLED", "Isolated fixture connect is off.");
+  }
+  const current = await requireJob(sql, opts.userId, opts.jobId);
+  if (current.status === "completed" && current.account_id) {
+    return {
+      job: current,
+      accountId: current.account_id,
+      name: current.verified_username || current.expected_username || "",
+    };
+  }
+  const connected =
+    current.account_id && current.verified_username
+      ? { job: current, accountId: current.account_id, name: current.verified_username }
+      : await completeFixtureConnect(sql, {
+          userId: opts.userId,
+          jobId: opts.jobId,
+          version: Number(current.version),
+          username: opts.username,
+        });
+  await sql.query(
+    `update reddit_accounts
+        set onboarded_at = coalesce(onboarded_at, now()), updated_at = now()
+      where user_id = $1 and id = $2`,
+    [opts.userId, connected.accountId],
+  );
+  const finished = await transitionJob(sql, {
+    userId: opts.userId,
+    jobId: opts.jobId,
+    expectedVersion: Number(connected.job.version),
+    event: { type: "HEALTH_USABLE_OWNER_CONFIRMS" },
+    eventType: "connection_finalized",
+  });
+  const confirmed = (await getJob(sql, opts.userId, opts.jobId)) || finished;
+  return { job: confirmed, accountId: connected.accountId, name: connected.name };
 }

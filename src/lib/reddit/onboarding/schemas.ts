@@ -28,6 +28,15 @@ export const createOnboardingSchema = z
   })
   .strict();
 
+export const autoIsolatedOnboardingSchema = z
+  .object({
+    mode: z.enum(JOB_MODES),
+    intent: z.enum(JOB_INTENTS),
+    idempotencyKey: idempotencyKeySchema,
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
 export const saveDetailsSchema = z
   .object({
     jobId: jobIdSchema,

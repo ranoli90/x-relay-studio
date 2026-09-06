@@ -29,6 +29,7 @@ import {
   completeFixtureOnboarding,
   confirmSignupSubmission,
   getOnboardingControlView,
+  autoRunIsolatedOnboarding,
 } from "@/lib/reddit/onboarding/server";
 import type {
   OnboardingBootstrap,
@@ -88,6 +89,9 @@ export function OnboardingCoordinator({
   const [steelError, setSteelError] = useState<string | null>(null);
   const hidden = useRef(typeof document !== "undefined" ? document.hidden : false);
   const opKeys = useRef(new Map<string, KeyPair>());
+  const onFinishedRef = useRef(onFinished);
+  onFinishedRef.current = onFinished;
+  const autoFinishTried = useRef(false);
 
   const loadPendingAccount = useCallback(async (accountId?: string | null) => {
     const reddit = await getBootstrap();
@@ -101,6 +105,30 @@ export function OnboardingCoordinator({
   const loadBoot = useCallback(async () => {
     const next = await getOnboardingBootstrap();
     setBoot(next);
+    if (
+      next.fixtureEnabled &&
+      next.currentJob &&
+      !autoFinishTried.current &&
+      !["completed", "cancelled", "failed", "blocked", "expired"].includes(next.currentJob.status)
+    ) {
+      autoFinishTried.current = true;
+      try {
+        const finished = await autoRunIsolatedOnboarding({
+          data: {
+            mode: next.currentJob.mode,
+            intent: next.currentJob.intent,
+            idempotencyKey: `resume-${next.currentJob.id}`,
+            correlationId: `resume-${next.currentJob.id}`,
+          },
+        });
+        setJob(finished);
+        setScreen("result");
+        onFinishedRef.current();
+        return;
+      } catch {
+        /* fall through to the ordinary resume screens */
+      }
+    }
     if (next.currentJob) {
       setJob(next.currentJob);
       const nextScreen = screenFor(next.currentJob, next.appConfigured);
@@ -178,6 +206,22 @@ export function OnboardingCoordinator({
     const op = `create:${mode}:${intent}`;
     const keys = rememberKey(opKeys.current, op);
     try {
+      if (boot?.fixtureEnabled) {
+        const finished = await autoRunIsolatedOnboarding({
+          data: {
+            mode,
+            intent,
+            idempotencyKey: keys.idempotencyKey,
+            correlationId: keys.correlationId,
+          },
+        });
+        opKeys.current.delete(op);
+        setJob(finished);
+        if (finished.expectedUsername) setUsername(finished.expectedUsername);
+        setScreen("result");
+        onFinished();
+        return;
+      }
       const created = await createOnboarding({
         data: {
           mode,
@@ -198,6 +242,20 @@ export function OnboardingCoordinator({
           },
         });
       }
+      if (mode === "assisted" && intent === "create") {
+        const generated = `relay${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+        await saveAndStart(
+          {
+            expectedUsername: generated,
+            retainContext: false,
+            retainPassword: false,
+            assistanceConsent: true,
+            consentVersion: ASSISTANCE_CONSENT_VERSION,
+          },
+          created,
+        );
+        return;
+      }
       opKeys.current.delete(op);
       setJob(next);
       setSelected(mode);
@@ -215,23 +273,27 @@ export function OnboardingCoordinator({
     }
   }
 
-  async function saveAndStart(input: {
-    expectedUsername?: string;
-    retainContext: boolean;
-    retainPassword: boolean;
-    assistanceConsent: boolean;
-    consentVersion: string;
-  }) {
-    if (!job) return;
+  async function saveAndStart(
+    input: {
+      expectedUsername?: string;
+      retainContext: boolean;
+      retainPassword: boolean;
+      assistanceConsent: boolean;
+      consentVersion: string;
+    },
+    fromJob?: OnboardingJobPublic,
+  ) {
+    const current = fromJob || job;
+    if (!current) return;
     setBusy(true);
     setError(null);
-    const op = `start:${job.id}`;
+    const op = `start:${current.id}`;
     const keys = rememberKey(opKeys.current, op);
     try {
       const saved = await saveOnboardingDetails({
         data: {
-          jobId: job.id,
-          version: job.version,
+          jobId: current.id,
+          version: current.version,
           expectedUsername: input.expectedUsername,
           retainContext: input.retainContext,
           retainPassword: input.retainPassword,
@@ -586,8 +648,8 @@ export function OnboardingCoordinator({
               })
                 .then(async (j) => {
                   setJob(j);
-                  const acc = await loadPendingAccount(j.accountId);
-                  setScreen(acc ? "health" : "result");
+                  setScreen("result");
+                  onFinished();
                 })
                 .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not connect the fixture account."))
                 .finally(() => setBusy(false));

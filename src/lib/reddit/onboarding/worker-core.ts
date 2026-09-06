@@ -660,15 +660,26 @@ async function handleCommand(
 
   if (onboardingFixtureEnabled()) {
     const driver = new FakePageDriver();
+    const username = fresh.expected_username || "";
     const plan = steps
-      .filter((s) => s.id !== "fill_email" && (s.id !== "fill_username" || Boolean(fresh.expected_username)))
+      .filter((s) => (s.id !== "fill_username" && s.id !== "fill_email") || Boolean(username))
       .map((s) => ({
         action: s.action,
-        value: s.id === "fill_username" ? fresh.expected_username || undefined : undefined,
+        value:
+          s.id === "fill_username"
+            ? username || undefined
+            : s.id === "fill_email"
+              ? username
+                ? `${username}@fixture.test`
+                : undefined
+              : undefined,
       }));
     const observation = await runBoundedSignup(driver, plan, {
       fixtureMode: true,
-      fillValues: { username: fresh.expected_username || undefined },
+      fillValues: {
+        username: username || undefined,
+        email: username ? `${username}@fixture.test` : undefined,
+      },
       step: "create_account",
     });
     if (observation.errorCode === "UNSUPPORTED_PAGE_VARIANT" || observation.errorCode === "FIXTURE_LEAK") {
@@ -722,8 +733,9 @@ export async function drainOwnedPreview(sql: SqlLike, userId: string, jobId: str
   if (!userId || !jobId) return;
   const name = redditBrowserProvider();
   if (name !== "fake" && name !== "local") return;
-  const provider = name === "local" ? localProvider : fakeProvider;
-  for (let i = 0; i < 3; i += 1) {
+  // Fixture live-view is the static page. Do not launch Chromium just to throw it away.
+  const provider = onboardingFixtureEnabled() || name === "fake" ? fakeProvider : localProvider;
+  for (let i = 0; i < 8; i += 1) {
     const { didWork } = await drainOnce(sql, `preview-drain:${userId.slice(0, 12)}`, provider, {
       userId,
       jobId,

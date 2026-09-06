@@ -27,7 +27,7 @@ export function ModeSelector({
         <ModeCard
           id="mode-assisted"
           title="Automate account creation"
-          description="We handle supported steps. You stay in control of verification and final approval."
+          description="One click. This practice preview fills the test form and connects a local account. Live Reddit still needs you for the security check, terms, and Create."
           selected={selected === "assisted"}
           disabled={!assistedAvailable}
           disabledReason={assistedReason}
