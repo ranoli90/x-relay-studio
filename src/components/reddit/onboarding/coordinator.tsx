@@ -532,6 +532,8 @@ export function OnboardingCoordinator({
           createMax={boot.createBatchMax}
           busy={busy}
           error={error}
+          steelConnected={Boolean(boot.steelHost?.connected)}
+          assistedAvailable={boot.assistedAvailable}
           onCreate={(count) => void queueCreates(count)}
           onConnect={() => void begin("manual", "connect_existing")}
         />

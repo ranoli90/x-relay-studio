@@ -10,6 +10,8 @@ export function ModeSelector({
   createMax,
   busy,
   error,
+  steelConnected,
+  assistedAvailable,
   onCreate,
   onConnect,
 }: {
@@ -19,6 +21,8 @@ export function ModeSelector({
   createMax: number;
   busy: boolean;
   error: string | null;
+  steelConnected: boolean;
+  assistedAvailable: boolean;
   onCreate: (count: number) => void;
   onConnect: () => void;
 }) {
@@ -26,13 +30,16 @@ export function ModeSelector({
   const [count, setCount] = useState(1);
   const canCreate = maxPick > 0;
   const pick = Math.min(count, Math.max(1, maxPick));
+  const hostedReady = steelConnected && assistedAvailable;
 
   return (
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Reddit</p>
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">How do you want in?</h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        Two ways. Create a new account on Reddit and connect it, or connect one you already have.
+        Connect an account you already have — that is the live path. Or queue 1–{createMax} new
+        ones. A hosted browser only helps if Steel is connected below. CAPTCHA, terms, and Sign Up
+        stay your clicks.
       </p>
 
       <div className="mt-8 grid gap-3">
@@ -44,11 +51,16 @@ export function ModeSelector({
             <div className="min-w-0 flex-1">
               <h2 className="text-xl font-medium tracking-tight">Create accounts</h2>
               <p className="mt-1 text-sm leading-relaxed text-muted">
-                Pick 1–{createMax}. We start the first now. You create it on Reddit unless a hosted
-                browser is connected.
+                {hostedReady
+                  ? `Pick 1–${createMax}. We queue them and open a hosted browser for the first one. You still handle CAPTCHA, terms, and Sign Up, then connect here.`
+                  : `Pick 1–${createMax}. We queue them and start the first now. Create each account on Reddit yourself, then come back and continue. Connect Steel below if you want a hosted browser.`}
               </p>
             </div>
           </div>
+
+          <p className="mt-3 font-mono text-[11px] tracking-widest text-subtle uppercase">
+            {hostedReady ? "Hosted browser ready" : "No hosted browser yet · manual on Reddit"}
+          </p>
 
           <div
             role="radiogroup"
@@ -94,7 +106,7 @@ export function ModeSelector({
               ? "Queuing…"
               : pick <= 1
                 ? "Make 1 account"
-                : `Queue ${pick} and start making them`}
+                : `Queue ${pick} and start the first`}
           </Button>
           {!canCreate ? (
             <p className="mt-3 text-sm text-warn">
@@ -112,6 +124,7 @@ export function ModeSelector({
               <h2 className="text-xl font-medium tracking-tight">Connect my own</h2>
               <p className="mt-1 text-sm leading-relaxed text-muted">
                 Use a Reddit account you already have. You log in on Reddit. We never see that password.
+                This is the path that works on this live desk today.
               </p>
             </div>
           </div>
