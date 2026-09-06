@@ -4,12 +4,14 @@ import { cn } from "@/lib/utils";
 export function ModeSelector({
   assistedAvailable,
   assistedReason,
+  ownerKicksCompleted,
   selected,
   onSelect,
   onExisting,
 }: {
   assistedAvailable: boolean;
   assistedReason: string | null;
+  ownerKicksCompleted?: boolean;
   selected: "assisted" | "manual" | null;
   onSelect: (mode: "assisted" | "manual") => void;
   onExisting: () => void;
@@ -27,7 +29,11 @@ export function ModeSelector({
         <ModeCard
           id="mode-assisted"
           title="Automate account creation"
-          description="We fill the form. You tap Reddit’s real security check, terms, and Sign Up — one control at a time."
+          description={
+            ownerKicksCompleted
+              ? "Same as the first account. Security check, terms, and Sign Up are already done for this desk."
+              : "First account: tap the real security check, terms, and Sign Up. Later accounts skip those taps."
+          }
           selected={selected === "assisted"}
           disabled={!assistedAvailable}
           disabledReason={assistedReason}

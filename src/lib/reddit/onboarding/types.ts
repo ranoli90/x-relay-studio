@@ -235,6 +235,7 @@ export type OnboardingBootstrap = {
   fixtureEnabled: boolean;
   provider: BrowserProviderName;
   steelHost: SteelHostPublic;
+  ownerKicksCompleted: boolean;
 };
 
 export type SteelHostPublic = {

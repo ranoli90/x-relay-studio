@@ -106,6 +106,30 @@ export function OnboardingCoordinator({
     setBoot(next);
     if (next.currentJob) {
       setJob(next.currentJob);
+      const leftoverCreate =
+        next.fixtureEnabled &&
+        next.ownerKicksCompleted &&
+        next.currentJob.intent === "create" &&
+        !["completed", "cancelled", "failed", "blocked", "expired"].includes(next.currentJob.status);
+      if (leftoverCreate) {
+        try {
+          const finished = await completeFixtureOnboarding({
+            data: {
+              jobId: next.currentJob.id,
+              version: next.currentJob.version,
+              username: next.currentJob.expectedUsername || undefined,
+              correlationId: `resume-${next.currentJob.id}`,
+            },
+          });
+          setJob(finished);
+          setBoot({ ...next, ownerKicksCompleted: true });
+          setScreen("result");
+          onFinishedRef.current();
+          return;
+        } catch {
+          /* fall through */
+        }
+      }
       const nextScreen = screenFor(next.currentJob, next.appConfigured, next.fixtureEnabled);
       setScreen(nextScreen);
       if (nextScreen === "health") {
@@ -252,6 +276,12 @@ export function OnboardingCoordinator({
         opKeys.current.delete(op);
         setJob(started);
         if (started.expectedUsername) setUsername(started.expectedUsername);
+        if (started.status === "completed") {
+          setBoot({ ...boot, ownerKicksCompleted: true });
+          setScreen("result");
+          onFinishedRef.current();
+          return;
+        }
         setScreen("control");
         return;
       }
@@ -482,6 +512,7 @@ export function OnboardingCoordinator({
         <ModeSelector
           assistedAvailable={boot.assistedAvailable}
           assistedReason={boot.assistedUnavailableReason}
+          ownerKicksCompleted={boot.ownerKicksCompleted}
           selected={selected}
           onSelect={(mode) => {
             setSelected(mode);
@@ -635,6 +666,7 @@ export function OnboardingCoordinator({
             })
               .then((j) => {
                 setJob(j);
+                setBoot({ ...boot, ownerKicksCompleted: true });
                 setScreen("result");
                 onFinishedRef.current();
               })

@@ -57,6 +57,7 @@ import { appIdForDesk } from "../naming.ts";
 import type { SqlLike } from "./sql.ts";
 import { runOnboardingTx } from "./sql.ts";
 import { finishIsolatedFixtureSignup, generateFixtureUsername, FIXTURE_APP_CLIENT_ID, FIXTURE_APP_SECRET } from "./fixture-connect.ts";
+import { ownerKicksAlreadyDone } from "./owner-gates.ts";
 import {
   loadAccountActions,
   bindRecoveryEmail,
@@ -130,6 +131,9 @@ export const getOnboardingBootstrap = createServerFn({ method: "GET" })
     const steelHost = await publicSteelHost(db, context.userId, previewUsesLocal).catch(() =>
       emptySteelHost(previewUsesLocal),
     );
+    const ownerKicksCompleted = onboardingFixtureEnabled()
+      ? await ownerKicksAlreadyDone(db, context.userId).catch(() => false)
+      : false;
     return {
       onboardingEnabled: redditOnboardingEnabled(),
       assistedAvailable: caps.canStartAssistedSignup && redditAssistedSignupEnabled(),
@@ -143,6 +147,7 @@ export const getOnboardingBootstrap = createServerFn({ method: "GET" })
       fixtureEnabled: onboardingFixtureEnabled(),
       provider: redditBrowserProvider(),
       steelHost,
+      ownerKicksCompleted,
     };
   });
 
@@ -698,8 +703,22 @@ export const startIsolatedOnboarding = createServerFn({ method: "POST" })
     try {
       const job = await runIsolatedStart(context.userId, data);
       const db = await sql();
+      const skipKicks =
+        job.intent === "create" &&
+        job.status !== "completed" &&
+        (await ownerKicksAlreadyDone(db, context.userId));
+      const next = skipKicks
+        ? (
+            await finishIsolatedFixtureSignup(db, {
+              userId: context.userId,
+              jobId: job.id,
+              version: Number(job.version),
+              username: job.expected_username,
+            })
+          ).job
+        : job;
       const app = await getApp(context.userId);
-      return toPublicJob(job, { appConfigured: Boolean(app) });
+      return toPublicJob(next, { appConfigured: Boolean(app) });
     } catch (err) {
       throwOnboarding(err);
     }

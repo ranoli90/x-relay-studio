@@ -64,7 +64,9 @@ export function HumanControl({
         Your turn · {Math.min(step + 1, OWNER_KICKS.length)} of {OWNER_KICKS.length}
       </p>
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">{current.title}</h1>
-      <p className="mt-4 text-sm leading-relaxed text-muted">{current.hint}</p>
+      <p className="mt-4 text-sm leading-relaxed text-muted">
+        {current.hint} Only this once for this desk. Later accounts skip these taps.
+      </p>
       {job.expectedUsername ? (
         <p className="mt-2 font-mono text-xs text-subtle">Form filled for u/{job.expectedUsername}</p>
       ) : null}
