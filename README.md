@@ -18,7 +18,18 @@ The LLM is a mouth with tools. We own the OpenRouter route table. `openrouter/au
 
 `INGEST → SAFETY → TRIAGE → QUALIFY → (PAY) → DAY-ARC → GFE_INVITE → CONTRACT → FULFILL → AFTERCARE`
 
-Auto-send (only after gold threads pass): rapport, aftercare, memory callback, park. Draft-only: first offer, price, customs, GFE contract, are-you-real, anger, spend cap, whales. First GFE contract is always human.
+Conversation automation is **off until an operator turns it on**. After migration `0031_conversation_repair.sql`, existing autopilot rows are held in `draft` with `auto_send=false`. Auto-send requires all of:
+
+- operator Auto-send switch on (`automation_mode = approved_auto`)
+- a validated model reply (local templates never auto-send)
+- no emergency stop, partner opt-out, takeover, or unknown adult eligibility on restricted commercial workflows
+- a live Telegram peer and confirmed transport acknowledgment
+
+Reads, desk seeding, and page loads do not rearm sending. Emergency **Stop** on the floor persists across reloads. Historical Telegram import (messages at or before the account activation watermark) is stored as `imported` and does not trigger replies.
+
+Drafts, operator notes, and unsent approvals are not conversation history. The model sees confirmed inbound plus provider-acknowledged outbound only. Quotes are exact minor units on an approved offer; a screenshot is never payment.
+
+The LLM is a disclosed AI persona with human desk support. It must not invent biography, human identity, proof, scarcity, or a price that is not on the catalog/quote.
 
 ## Production requirements
 
@@ -33,7 +44,7 @@ Copy `.env.example` and set at least:
 | `CRON_SECRET` | `Authorization: Bearer` on `/api/cron/studio`. |
 | `PAYMENTS_WEBHOOK_SECRET` | Payment rails. Screenshot is never PAID. |
 
-Run migrations as a release step, not during `vite build`:
+Neon applies pending `migrations/*.sql` on first connect (same advisory lock as `scripts/migrate.mjs`). `vite build` still does not migrate (F09). Laptop/release path:
 
 ```
 npm run db:migrate
@@ -62,3 +73,13 @@ Without `DATABASE_URL`, preview uses in-memory PGLite and applies `migrations/*.
 - `npm run smoke -- https://your-app.vercel.app` hits `/`, legal pages, and `/robots.txt`.
 
 See `SECURITY.md` before putting real traffic on a deployment.
+
+## Commercial ledgers (honest)
+
+There are two separate money paths. They are not interchangeable.
+
+- **Operator desk credits.** Plisio `createThreadInvoice` sells thread packs to the *operator*. A paid Plisio invoice mints desk credits. It does **not** mark a fan offer paid and does **not** settle a customer custom, GFE, or call.
+- **Customer offers.** Fan catalog quotes use the generic `/api/payments/webhook` (`PAYMENTS_WEBHOOK_SECRET`) plus operator delivery attestation. There is **no** complete isolated buyer checkout/fulfillment adapter in this wave: no dedicated provider invoice-for-offer, no automated fulfillment SLA, no buyer refund path.
+- **Unsupported products stay disabled.** Retired SKUs (`polaroid_set`, `voice_note`, `gfe_day`) are not live catalog items. A screenshot is never payment. Live copy quotes catalog SKUs at exact minor units — not a guessed spend ladder.
+- Do **not** claim Plisio settles fan offers.
+

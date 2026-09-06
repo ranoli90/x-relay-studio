@@ -6,6 +6,7 @@ import { ensureSeed } from "./seed.server.ts";
 import { processInbound, tickAgentJobs } from "./brain.server.ts";
 import { applyMarkPaid } from "./pay.ts";
 import { goldSummary } from "./eval.ts";
+import { personaLivePulse } from "@/lib/conversation/policy.ts";
 import { clockLabel, clockParts, inWindow } from "./clock.ts";
 import { formatUsd } from "./catalog.ts";
 import { listActivity } from "./activity.server.ts";
@@ -66,8 +67,12 @@ export const loadDesk = createServerFn({ method: "GET" })
         background_run: boolean;
         quiet_start: number;
         quiet_end: number;
+        emergency_stop?: boolean;
+        automation_mode?: string;
       }>(
-        `select id, handle, display_name, timezone, auto_send, background_run, quiet_start, quiet_end
+        `select id, handle, display_name, timezone, auto_send, background_run, quiet_start, quiet_end,
+                coalesce(emergency_stop, false) as emergency_stop,
+                coalesce(automation_mode, 'draft') as automation_mode
            from agent_personas where id = $1`,
         [personaId],
       )
@@ -144,15 +149,21 @@ export const loadDesk = createServerFn({ method: "GET" })
       [userId],
     );
     const activity = await listActivity(userId, 40);
-    const liveUntil = Date.now() - 120_000;
+    const writerOk = calls.some(
+      (c) => (c.task === "write" || c.task === "hard_write") && c.outcome === "ok",
+    );
+    const livePulse = personaLivePulse({
+      autoSend: Boolean(persona.auto_send),
+      automationMode: persona.automation_mode,
+      emergencyStop: Boolean(persona.emergency_stop),
+      goldAllowed: evals.autoSendAllowed,
+      writerOk,
+    });
     const roster: DeskRosterEntry[] = rosterRows.map((r) => {
-      const recent = activity.some(
-        (a) => a.agentName === r.name && Date.parse(a.createdAt) >= liveUntil,
-      );
       return {
         name: r.name,
         tone: r.tone,
-        live: Boolean(persona.auto_send) && (Boolean(persona.background_run) || recent),
+        live: livePulse,
         threadCount: Number(r.thread_count ?? 0),
       };
     });
@@ -162,12 +173,14 @@ export const loadDesk = createServerFn({ method: "GET" })
         handle: persona.handle,
         displayName: persona.display_name,
         timezone: persona.timezone,
-        autoSend: persona.auto_send,
+        autoSend: Boolean(persona.auto_send),
         hour,
         clockLabel: clockLabel(hour, clock, minute),
         quiet,
         backgroundRun: Boolean(persona.background_run),
         agentName: persona.display_name,
+        emergencyStop: Boolean(persona.emergency_stop),
+        automationMode: persona.automation_mode ?? "draft",
       },
       seats,
       catalog: catalog.map(
@@ -602,18 +615,17 @@ export const setAutoSend = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((d: { on: boolean }) => d)
   .handler(async ({ context, data }) => {
-    if (data.on && !goldSummary().autoSendAllowed) {
-      throw new Error("Gold threads have to pass before auto-send turns on.");
-    }
     const personaId = await ensureSeed(context.userId);
     const sql = await getSql();
-    await sql.query(`update agent_personas set auto_send = $1 where id = $2 and user_id = $3`, [
-      data.on,
+    const on = Boolean(data.on);
+    await sql.query(`update agent_personas set auto_send = $1, automation_mode = $2 where id = $3 and user_id = $4`, [
+      on,
+      on ? "approved_auto" : "draft",
       personaId,
       context.userId,
     ]);
-    if (data.on) kickAgentLoop(context.userId);
-    return { ok: true, on: data.on };
+    kickAgentLoop(context.userId);
+    return { ok: true, on };
   });
 
 export const setBackgroundRun = createServerFn({ method: "POST" })
@@ -622,12 +634,37 @@ export const setBackgroundRun = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const personaId = await ensureSeed(context.userId);
     const sql = await getSql();
+    const on = Boolean(data.on);
     await sql.query(
       `update agent_personas set background_run = $1 where id = $2 and user_id = $3`,
-      [data.on, personaId, context.userId],
+      [on, personaId, context.userId],
     );
-    if (data.on) kickAgentLoop(context.userId);
-    return { ok: true, on: data.on };
+    kickAgentLoop(context.userId);
+    return { ok: true, on };
+  });
+
+export const setEmergencyStop = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: { on: boolean }) => d)
+  .handler(async ({ context, data }) => {
+    const personaId = await ensureSeed(context.userId);
+    const sql = await getSql();
+    const on = Boolean(data.on);
+    await sql.query(
+      `update agent_personas
+          set emergency_stop = $1,
+              auto_send = case when $1 then false else auto_send end,
+              automation_mode = case when $1 then 'off' else automation_mode end
+        where id = $2 and user_id = $3`,
+      [on, personaId, context.userId],
+    );
+    await sql.query(
+      `update telegram_user_sessions set emergency_stop = $1, automation_armed = case when $1 then false else automation_armed end
+        where user_id = $2`,
+      [on, context.userId],
+    ).catch(() => undefined);
+    kickAgentLoop(context.userId);
+    return { ok: true, on };
   });
 
 export const runScheduler = createServerFn({ method: "POST" })

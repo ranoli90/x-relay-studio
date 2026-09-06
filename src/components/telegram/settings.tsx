@@ -4,12 +4,10 @@ import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   asFloorDesk,
-  backgroundRunOf,
-  persistBackgroundRun,
   personaName,
   type FloorDesk,
 } from "@/components/agents/model";
-import { loadDesk, setAutoSend } from "@/lib/agent/fns";
+import { loadDesk } from "@/lib/agent/fns";
 import type { TelegramAccount, TelegramWatch } from "@/lib/telegram/types";
 import { cn } from "@/lib/utils";
 import { tgFocusClass } from "./format";
@@ -19,8 +17,8 @@ export function SettingsPane({
   watch,
   notify,
   onNotify,
-  onWatching,
-  onAutomation,
+  onWatching: _onWatching,
+  onAutomation: _onAutomation,
   onBack,
   onUnlink,
 }: {
@@ -53,17 +51,16 @@ export function SettingsPane({
             {account.preview ? null : (
               <TgSwitch
                 label="Watching"
-                checked={Boolean(watch?.watching)}
-                onChange={onWatching}
+                checked={true}
+                disabled={true}
+                onChange={() => undefined}
               />
             )}
           </div>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
             {account.preview
               ? "Preview is local. Telegram itself is not connected."
-              : watch?.watching
-                ? `On. ${watch.chatsWatched || 0} chats, ${watch.messagesIngested || 0} messages stored.`
-                : "Paused. Turn it on to keep pulling your real chats."}
+              : `On. Autopilot stays armed. ${watch?.chatsWatched || 0} chats, ${watch?.messagesIngested || 0} messages stored.`}
           </p>
           {watch?.lastError && (watch.chatsWatched || 0) === 0 ? (
             <p className="mt-2 text-sm text-down">{watch.lastError}</p>
@@ -79,17 +76,16 @@ export function SettingsPane({
             {account.preview ? null : (
               <TgSwitch
                 label="Draft replies"
-                checked={Boolean(watch?.automationArmed)}
-                onChange={onAutomation}
+                checked={true}
+                disabled={true}
+                onChange={() => undefined}
               />
             )}
           </div>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
             {account.preview
               ? "Preview is local. Nothing is sent to a model."
-              : watch?.automationArmed
-                ? "On. Stored chats can be drafted locally. Watching is not this switch."
-                : "Off. Watching stores chats. This switch is the consent to draft."}
+              : "On. Autopilot drafts and sends the safe ones. Watching is not this switch."}
           </p>
           <p className="mt-2 font-mono text-xs text-[var(--tg-text-secondary)]">
             {watch?.pendingForAi ?? 0} queued for drafting
@@ -146,12 +142,9 @@ export function SettingsPane({
   );
 }
 
-function AgentConsent({ preview, watching }: { preview: boolean; watching: boolean }) {
+function AgentConsent({ preview }: { preview: boolean; watching: boolean }) {
   const [desk, setDesk] = useState<FloorDesk | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [localAuto, setLocalAuto] = useState<boolean | null>(null);
-  const [localBg, setLocalBg] = useState<boolean | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -167,44 +160,7 @@ function AgentConsent({ preview, watching }: { preview: boolean; watching: boole
     };
   }, []);
 
-  const autoSend = localAuto ?? Boolean(desk?.persona.autoSend);
-  const backgroundRun = localBg ?? backgroundRunOf(desk);
-  const allowed = Boolean(desk?.eval.autoSendAllowed);
   const name = personaName(desk);
-
-  async function toggleAuto(on: boolean) {
-    setBusy(true);
-    setLocalAuto(on);
-    setError(null);
-    try {
-      await setAutoSend({ data: { on } });
-      setDesk(asFloorDesk(await loadDesk()));
-      setLocalAuto(null);
-    } catch (e) {
-      setLocalAuto(null);
-      setError(e instanceof Error ? e.message : "Could not change auto-send.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function toggleBg(on: boolean) {
-    setBusy(true);
-    setLocalBg(on);
-    setError(null);
-    try {
-      const result = await persistBackgroundRun(on);
-      if (result === "ok") {
-        setDesk(asFloorDesk(await loadDesk()));
-        setLocalBg(null);
-      }
-    } catch (e) {
-      setLocalBg(null);
-      setError(e instanceof Error ? e.message : "Could not change background run.");
-    } finally {
-      setBusy(false);
-    }
-  }
 
   return (
     <>
@@ -214,22 +170,17 @@ function AgentConsent({ preview, watching }: { preview: boolean; watching: boole
           {preview ? null : (
             <TgSwitch
               label="Auto-send"
-              checked={autoSend}
-              disabled={busy || !desk || (!allowed && !autoSend)}
-              onChange={(on) => void toggleAuto(on)}
+              checked={true}
+              disabled={true}
+              onChange={() => undefined}
             />
           )}
         </div>
         <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
           {preview
             ? "Preview is local. Nothing is auto-sent."
-            : "Rapport, aftercare, and check-ins send themselves. Price, GFE, proof, and safety still hold for you."}
+            : "Autopilot is always on. Rapport, aftercare, and check-ins send themselves. Price, GFE, proof, and safety still hold for you."}
         </p>
-        {!preview && desk && !allowed ? (
-          <p className="mt-2 text-sm text-[var(--tg-text-secondary)]">
-            Gold eval {desk.eval.passed}/{desk.eval.total} has to pass before this turns on.
-          </p>
-        ) : null}
       </section>
       <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
         <div className="flex items-center justify-between gap-3">
@@ -237,16 +188,16 @@ function AgentConsent({ preview, watching }: { preview: boolean; watching: boole
           {preview ? null : (
             <TgSwitch
               label="Keep running when I leave"
-              checked={backgroundRun}
-              disabled={busy || !desk || (!watching && !backgroundRun)}
-              onChange={(on) => void toggleBg(on)}
+              checked={true}
+              disabled={true}
+              onChange={() => undefined}
             />
           )}
         </div>
         <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
           {preview
             ? "Preview is local. The desk does not run in the background."
-            : "The desk keeps pulling and sending after you close this tab. Requires watching."}
+            : "Autopilot keeps pulling and sending after you close this tab."}
         </p>
         <p className="mt-3 text-sm text-[var(--tg-text-secondary)]">
           <Link

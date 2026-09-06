@@ -7,9 +7,10 @@ import {
   type TelegramPeerKind,
 } from "./peer.ts";
 import { TelegramError } from "./errors.ts";
+import { preSendFence } from "../conversation/mirror.ts";
 
 export type AgentSendResult =
-  | { ok: true; status: "sent" | "not_live"; telegramMessageId?: number }
+  | { ok: true; status: "sent"; telegramMessageId?: number }
   | { ok: false; reason: string };
 
 export type AgentSendPath = "live" | "not_live";
@@ -148,10 +149,19 @@ export async function agentSendToPeer(opts: {
   peerId?: string | null;
   body: string;
   agentName?: string;
+  threadId?: string;
+  accountGeneration?: number;
+  consentEpoch?: number;
+  takeover?: boolean;
+  optOut?: boolean;
+  emergencyStop?: boolean;
 }): Promise<AgentSendResult> {
   const body = opts.body.trim();
   if (!body) return { ok: false, reason: "empty" };
   if (body.length > 4000) return { ok: false, reason: "too_long" };
+
+  const fence = preSendFence(opts);
+  if (!fence.allow) return { ok: false, reason: fence.reason };
 
   const chat = await resolveChat(opts.userId, opts.chatId, opts.peerId);
   if (!chat) return { ok: false, reason: "chat_not_found" };
@@ -172,17 +182,7 @@ export async function agentSendToPeer(opts: {
   });
 
   if (path === "not_live") {
-    try {
-      await commitLocal({
-        userId: opts.userId,
-        chatId: chat.id,
-        body,
-        authorName,
-      });
-    } catch (err) {
-      return { ok: false, reason: failReason(err, "invalid") };
-    }
-    return { ok: true, status: "not_live" };
+    return { ok: false, reason: "not_live" };
   }
 
   const { assertSessionLive, decryptSessionMaterial, saveSignedIn, persistMappedError } =
@@ -198,17 +198,7 @@ export async function agentSendToPeer(opts: {
     if (err instanceof TelegramError && err.code === "flood") {
       return { ok: false, reason: "flood" };
     }
-    try {
-      await commitLocal({
-        userId: opts.userId,
-        chatId: chat.id,
-        body,
-        authorName,
-      });
-    } catch (commitErr) {
-      return { ok: false, reason: failReason(commitErr, "invalid") };
-    }
-    return { ok: true, status: "not_live" };
+    return { ok: false, reason: "not_live" };
   }
 
   const peerId = chat.peerId!;
@@ -273,6 +263,12 @@ export async function agentSendToPeer(opts: {
       err instanceof Error ? err.message : "send rate limited",
     );
     return { ok: false, reason: failReason(err, "flood") };
+  }
+
+  const fenceLive = preSendFence(opts);
+  if (!fenceLive.allow) {
+    await failSendIntent(intentId, opts.userId, "failed", fenceLive.reason);
+    return { ok: false, reason: fenceLive.reason };
   }
 
   try {

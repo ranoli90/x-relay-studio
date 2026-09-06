@@ -179,5 +179,6 @@ describe("mtproto device pin", () => {
     assert.equal(opts.systemVersion.includes("Node"), false);
     assert.equal(opts.deviceModel.includes("Node"), false);
     assert.equal(opts.requestRetries, 1);
+    assert.equal(mtprotoClientOpts("tcp", "auth").requestRetries, 5);
   });
 });

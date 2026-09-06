@@ -6,6 +6,16 @@ A screenshot is never paid.
 
 ---
 
+## 0. Two ledgers — do not mix them
+
+Plisio `createThreadInvoice` sells **operator desk credits** (thread packs). It is not customer-offer payment and does not settle a fan custom, GFE, or call.
+
+Customer offers use the generic `/api/payments/webhook` (`PAYMENTS_WEBHOOK_SECRET`) plus operator delivery attestation. There is **no** complete isolated buyer checkout/fulfillment adapter in this wave: no dedicated provider invoice-for-offer, no merchant-bound fulfillment SLA, no buyer refund path. Operator credit purchase cannot mark a customer offer paid.
+
+Unsupported / retired products stay disabled (`polaroid_set`, `voice_note`, `gfe_day`). Do **not** claim Plisio settles fan offers.
+
+---
+
 ## 1. Plisio account (no ID on the standard plan)
 
 1. Sign up at https://plisio.net with email + password. Do not upload an ID unless they later force a higher plan.
@@ -33,11 +43,11 @@ Set these in **Vercel → Project → Settings → Environment Variables** (Prod
 | `DATABASE_URL` | Neon pooled URL | Desk invoices / credit lots live here. Run migration `0020_desk_credits.sql` and `0021_plisio_only.sql`. |
 | `BETTER_AUTH_SECRET` | 32+ random bytes | Sessions. Already required. |
 
-### Required for the fan → operator catalog rail (separate ledger)
+### Required for the fan catalog webhook (separate ledger — not Plisio, not desk credits)
 
 | Name | What it does |
 |---|---|
-| `PAYMENTS_WEBHOOK_SECRET` | Bearer secret for `/api/payments/webhook`. Fan catalog only. Does **not** mint desk threads. Do not reuse `CRON_SECRET`. |
+| `PAYMENTS_WEBHOOK_SECRET` | Bearer secret for `/api/payments/webhook`. Fan catalog offers only. Does **not** mint desk threads. Does **not** create a buyer checkout. Do not reuse `CRON_SECRET` or `PLISIO_SECRET`. |
 
 ### Optional — first-payment $5 off (Telegram + Discord)
 
@@ -97,3 +107,6 @@ Confirm tables exist: `desk_billing`, `desk_credit_lots`, `desk_invoices`, `desk
 - Do not use OxaPay (US merchants banned).
 - Do not treat a screenshot, “I paid”, or a pending/unconfirmed tx as paid.
 - Do not mix fan catalog money with desk thread credits.
+- Do not treat a paid Plisio desk-credit invoice as fan-offer settlement.
+- Do not re-enable retired SKUs (`polaroid_set`, `voice_note`, `gfe_day`) as live products.
+

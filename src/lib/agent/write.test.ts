@@ -190,7 +190,7 @@ describe("F17 handoff and rejected output", () => {
     assert.equal(/grok|openrouter|x-ai|remote/i.test(out.model), false);
   });
 
-  it("empty or irrelevant gold sets cannot enable auto-send", () => {
+  it("goldSummary still requires a full kill+handoff set", () => {
     assert.equal(goldSummary([]).autoSendAllowed, false);
     const onlyAllow: GoldResult[] = [
       { id: "x", name: "x", ok: true, workflow: "W5_DAY_ARC", safety: "allow", detail: "pass" },
@@ -229,17 +229,18 @@ describe("richer local lines", () => {
     assert.equal(validateDraft(text, DEFAULT_CATALOG, 18, [], writeCapsFor(src)), null);
   });
 
-  it("W5 can use the clock claim for this hour without contradicting it", () => {
+  it("W5 can use a partner fact without volunteering a warehouse alibi on a greeting", () => {
     const src = input("W5_DAY_ARC", {
       hour: 23,
       clock: WAREHOUSE,
       diary: [{ voice: "HIM", body: "Dog is named Duke." }],
+      inbound: "i'll send a pic later",
     });
     const out = writeLocal(src);
     const text = out.bubbles.join("\n\n");
     assert.equal(out.dropped, false);
     assert.match(text, /duke/i);
-    assert.match(text.toLowerCase(), /warehouse|on shift/);
+    assert.equal(/warehouse|on shift/.test(text.toLowerCase()), false);
     assert.equal(validateDraft(text, DEFAULT_CATALOG, 23, WAREHOUSE, writeCapsFor(src)), null);
   });
 
@@ -256,6 +257,14 @@ describe("richer local lines", () => {
     }
     assert.equal(/got it to you/.test(w10.bubbles.join(" ").toLowerCase()), false);
     assert.match(w16.bubbles.join(" ").toLowerCase(), /warehouse|on shift|ping you/i);
+  });
+
+  it("W4 spoken custom is catalog custom_clip, not a guessed ladder rung", () => {
+    const out = writeLocal(input("W4_QUALIFY", { inbound: "how much?" }));
+    const text = out.bubbles.join(" ");
+    assert.equal(out.dropped, false);
+    assert.match(text, /a custom is \$25/i);
+    assert.equal(/\$40|\$60|\$80/.test(text), false);
   });
 
   it("W10 may claim delivery only when confirmed, and can still remember HIM", () => {

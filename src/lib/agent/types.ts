@@ -44,6 +44,8 @@ export type Intent =
   | "age_probe"
   | "time_waste"
   | "menu"
+  | "identity_ask"
+  | "opt_out"
   | "other";
 
 export type Archetype =
@@ -264,6 +266,8 @@ export type DeskSnapshot = {
     quiet: boolean;
     backgroundRun: boolean;
     agentName: string;
+    emergencyStop?: boolean;
+    automationMode?: string;
   };
   seats: SeatRow[];
   catalog: CatalogRow[];

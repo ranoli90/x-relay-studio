@@ -3,11 +3,12 @@ import { describe, it } from "node:test";
 import { runSafety, safetyBlocksGenerate } from "./safety.ts";
 import { understandLocal } from "./understand.ts";
 import { buildPlan, routeWorkflow } from "./route.ts";
-import { inventedPrice } from "./catalog.ts";
-import { DEFAULT_CATALOG } from "./catalog.ts";
+import { DEFAULT_CATALOG, findSku, formatUsd, inventedPrice } from "./catalog.ts";
 import { validateDraft } from "./write.ts";
 import { clockContradiction } from "./clock.ts";
 import { GOLD, goldSummary, runGold } from "./eval.ts";
+import { buildFanMemory } from "./memory.ts";
+import { previewCustomLadder, quoteCustom, spokenCustomLine } from "./pricing.ts";
 
 describe("safety_gate", () => {
   it("kills minor language", () => {
@@ -101,6 +102,11 @@ describe("catalog + validator", () => {
     assert.equal(inventedPrice("custom is $15", DEFAULT_CATALOG), 15);
     assert.equal(inventedPrice("custom is $25", DEFAULT_CATALOG), null);
   });
+  it("exact minor units beat a rounded global allowlist", () => {
+    assert.equal(inventedPrice("video call is $25", DEFAULT_CATALOG), null);
+    assert.equal(inventedPrice("video call is $25", DEFAULT_CATALOG, 12000), 25);
+    assert.equal(inventedPrice("that's $25.49", DEFAULT_CATALOG, 2500), 25.49);
+  });
   it("drops leaked strategy fields", () => {
     const drop = validateDraft("strategy=one_sku trust_score 9", DEFAULT_CATALOG, 16, []);
     assert.ok(drop);
@@ -113,6 +119,42 @@ describe("catalog + validator", () => {
   });
 });
 
+describe("live custom quote vs guessed spend", () => {
+  it("guessed high lifetimeCents does not change the spoken custom price vs catalog", () => {
+    const custom = findSku(DEFAULT_CATALOG, "custom_clip");
+    assert.ok(custom);
+    const catalogSpoken = `a custom is ${formatUsd(custom.priceCents)}`;
+    const mem = buildFanMemory({
+      inbound: "how much for a custom",
+      diary: [],
+      last: [],
+      lifetimeCents: 80_000,
+    });
+    assert.equal(mem.price.lastPaidCents, 0);
+    assert.equal(mem.price.lifetimeCents, 80_000);
+    assert.equal(spokenCustomLine(DEFAULT_CATALOG, mem.price), catalogSpoken);
+    const guessed = spokenCustomLine(DEFAULT_CATALOG, {
+      lastPaidCents: 8000,
+      rejects: 0,
+      ghosts: 0,
+      lifetimeCents: 80_000,
+    });
+    assert.equal(guessed, catalogSpoken);
+    const stored = buildFanMemory({
+      inbound: "how much for a custom",
+      diary: [],
+      last: [],
+      lifetimeCents: 50_000,
+      stored: JSON.stringify({ lastPaidCents: 8000 }),
+    });
+    assert.equal(stored.price.lastPaidCents, 8000);
+    assert.equal(spokenCustomLine(DEFAULT_CATALOG, stored.price), catalogSpoken);
+    assert.equal(quoteCustom({ lastPaidCents: 8000, rejects: 0, ghosts: 0, lifetimeCents: 80_000 }).cents, custom.priceCents);
+    const preview = previewCustomLadder({ lastPaidCents: 8000, rejects: 0, ghosts: 0, lifetimeCents: 80_000 });
+    assert.equal(preview.cents > custom.priceCents, true);
+  });
+});
+
 describe("gold threads", () => {
   it("beats the gold set", () => {
     const results = runGold(GOLD);
@@ -121,9 +163,9 @@ describe("gold threads", () => {
     const summary = runGold(GOLD);
     assert.equal(summary.every((r) => r.ok), true);
   });
-  it("allows auto-send only when every gold thread passes", () => {
+  it("gold still runs; autopilot is not gated on it", () => {
     const s = goldSummary();
     assert.equal(s.passed, s.total);
-    assert.equal(s.autoSendAllowed, true);
+    assert.equal(s.total > 0, true);
   });
 });

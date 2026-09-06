@@ -2,6 +2,18 @@
 
 export type MtprotoTransport = "tcp" | "wss";
 
+/** Login/sign-in may consume attempts on DC migrate and CONNECTION_NOT_INITED. */
+export type MtprotoPurpose = "auth" | "write";
+
+/**
+ * teleproto/gramjs invoke loops `while (attempt < requestRetries)`.
+ * `1` is a single try — a PHONE_MIGRATE redirect exhausts the budget
+ * before the request is repeated on the new DC.
+ * Writes stay at 1 so a timeout cannot double-send a message.
+ */
+export const WRITE_REQUEST_RETRIES = 1;
+export const AUTH_REQUEST_RETRIES = 5;
+
 function envFlag(key: string): string | undefined {
   const value = process.env[key]?.trim();
   return value ? value : undefined;
@@ -35,17 +47,32 @@ export function isAccountFrozen(raw: string): boolean {
   );
 }
 
+/** Library exhausted its invoke loop (often after a DC redirect). */
+export function isRequestBudgetFailure(raw: string): boolean {
+  return /request was unsuccessful \d+ time/i.test(raw);
+}
+
+/** Telegram told the client to finish the RPC on another data center. */
+export function isDcMigrate(raw: string): boolean {
+  return /PHONE_MIGRATE|USER_MIGRATE|NETWORK_MIGRATE|FILE_MIGRATE|CONNECTION_NOT_INITED/i.test(
+    raw,
+  );
+}
+
 /**
  * Pin a stable unofficial Web fingerprint.
  * Never embed process.version — Telegram treats a Node bump as a new client
  * on the same auth key and freezes the account.
  */
-export function mtprotoClientOpts(transport: MtprotoTransport = "tcp") {
+export function mtprotoClientOpts(
+  transport: MtprotoTransport = "tcp",
+  purpose: MtprotoPurpose = "write",
+) {
   const forceWss = envFlag("TELEGRAM_MTPROTO_WSS") === "true";
   const useWSS = forceWss || transport === "wss";
   return {
     connectionRetries: 2,
-    requestRetries: 1,
+    requestRetries: purpose === "auth" ? AUTH_REQUEST_RETRIES : WRITE_REQUEST_RETRIES,
     timeout: 12,
     autoReconnect: false,
     retryDelay: 800,

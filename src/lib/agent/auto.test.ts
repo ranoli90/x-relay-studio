@@ -13,17 +13,19 @@ function input(extra: Partial<DecideAutoSendInput> = {}): DecideAutoSendInput {
     killed: false,
     bubbleCount: 1,
     safetyVerdict: "allow",
+    generationOrigin: "validated_model",
+    automationMode: "approved_auto",
     ...extra,
   };
 }
 
 describe("decideAutoSend", () => {
-  it("gold off", () => {
-    assert.equal(decideAutoSend(input({ goldAllowed: false })), false);
+  it("gold off still auto-sends an approved-auto validated reply", () => {
+    assert.equal(decideAutoSend(input({ goldAllowed: false })), true);
   });
 
-  it("quiet", () => {
-    assert.equal(decideAutoSend(input({ quiet: true })), false);
+  it("quiet does not block autopilot", () => {
+    assert.equal(decideAutoSend(input({ quiet: true })), true);
   });
 
   it("takeover", () => {
@@ -34,7 +36,7 @@ describe("decideAutoSend", () => {
     assert.equal(decideAutoSend(input({ workflow: "W6_CLOSE_NOW" })), false);
   });
 
-  it("W5 auto when enabled", () => {
+  it("W5 auto when approved-auto and validated", () => {
     assert.equal(decideAutoSend(input({ workflow: "W5_DAY_ARC" })), true);
   });
 
@@ -60,7 +62,15 @@ describe("decideAutoSend", () => {
     assert.equal(decideAutoSend(input({ workflow: "W16_QUEUE" })), true);
   });
 
-  it("persona switch off", () => {
-    assert.equal(decideAutoSend(input({ personaAutoSend: false })), false);
+  it("persona switch off does not auto-send", () => {
+    assert.equal(decideAutoSend(input({ personaAutoSend: false, automationMode: "draft" })), false);
+    assert.equal(decideAutoSend(input({ personaAutoSend: false, automationMode: "approved_auto" })), false);
+  });
+
+  it("local templates, emergency stop, and opt-out never auto-send", () => {
+    assert.equal(decideAutoSend(input({ generationOrigin: "local_template" })), false);
+    assert.equal(decideAutoSend(input({ emergencyStop: true })), false);
+    assert.equal(decideAutoSend(input({ partnerOptOut: true })), false);
+    assert.equal(decideAutoSend(input({ accountLive: false })), false);
   });
 });

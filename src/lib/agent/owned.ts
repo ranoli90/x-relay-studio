@@ -97,7 +97,7 @@ export async function applyApproveDraft(
   if (!body) return { ok: false, reason: "not_found" };
   await sql.query(
     `update agent_messages
-        set role = 'persona', status = 'approved', body = $1, auto = false
+        set status = 'approved', body = $1, auto = false
       where id = $2 and user_id = $3`,
     [body, row.id, userId],
   );

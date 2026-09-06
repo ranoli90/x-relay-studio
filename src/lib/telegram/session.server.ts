@@ -29,6 +29,8 @@ export type UserSessionRow = {
   auth_dead?: boolean;
   lease_owner?: string | null;
   account_generation?: number;
+  activation_watermark?: string | Date | null;
+  emergency_stop?: boolean;
 };
 
 function iso(value: string | Date | null | undefined): string | null {
@@ -72,7 +74,8 @@ export function toWatch(row: UserSessionRow | null, pendingForAi = 0): TelegramW
 const SESSION_COLS = `user_id, api_id, api_hash_enc, phone, phone_code_hash_enc, session_enc,
             needs_password, watching, last_sync_at, last_sync_ok_at, last_error, chats_watched,
             messages_ingested, openrouter_key_enc, openrouter_ok_at, automation_armed,
-            checks_json, onboarded_at, flood_until, auth_dead, lease_owner, account_generation`;
+            checks_json, onboarded_at, flood_until, auth_dead, lease_owner, account_generation,
+            activation_watermark, emergency_stop`;
 
 export async function getUserSession(userId: string): Promise<UserSessionRow | null> {
   const sql = await getSql();
@@ -256,11 +259,12 @@ export async function setWatching(userId: string, watching: boolean): Promise<Us
   const live = assertSessionLive(await getUserSession(userId));
   const sql = await getSql();
   await sql.query(
-    `update telegram_user_sessions set watching = $2, updated_at = now()
+    `update telegram_user_sessions set watching = true, updated_at = now()
       where user_id = $1 and coalesce(auth_dead, false) = false
-        and coalesce(account_generation, 1) = $3`,
-    [userId, watching, Number(live.account_generation) || 1],
+        and coalesce(account_generation, 1) = $2`,
+    [userId, Number(live.account_generation) || 1],
   );
+  void watching;
   const next = await getUserSession(userId);
   if (!next) throw new TelegramError("invalid", "Connect Telegram first.", 404);
   return next;
@@ -269,21 +273,25 @@ export async function setWatching(userId: string, watching: boolean): Promise<Us
 export async function setAutomationArmed(userId: string, armed: boolean): Promise<UserSessionRow> {
   const live = assertSessionLive(await getUserSession(userId));
   const sql = await getSql();
+  const on = Boolean(armed);
   await sql.query(
-    `update telegram_user_sessions set automation_armed = $2, updated_at = now()
-      where user_id = $1 and coalesce(account_generation, 1) = $3`,
-    [userId, armed, Number(live.account_generation) || 1],
+    `update telegram_user_sessions set automation_armed = $3, updated_at = now()
+      where user_id = $1 and coalesce(account_generation, 1) = $2`,
+    [userId, Number(live.account_generation) || 1, on],
   );
-  if (!armed) {
-    await sql.query(
-      `update telegram_messages set ai_status = 'held'
-        where user_id = $1 and ai_status = 'queued'`,
-      [userId],
-    );
-  }
   const next = await getUserSession(userId);
   if (!next) throw new TelegramError("invalid", "Connect Telegram first.", 404);
   return next;
+}
+
+export async function stampActivationWatermark(userId: string, at = new Date()): Promise<void> {
+  const sql = await getSql();
+  await sql.query(
+    `update telegram_user_sessions
+        set activation_watermark = coalesce(activation_watermark, $2)
+      where user_id = $1`,
+    [userId, at.toISOString()],
+  ).catch(() => undefined);
 }
 
 export async function recordSync(opts: {

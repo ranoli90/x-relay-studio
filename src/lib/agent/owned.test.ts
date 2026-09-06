@@ -175,7 +175,7 @@ describe("F16 approveDraft is never sent", () => {
         "select role, status, auto from agent_messages",
       )
     ).rows[0];
-    assert.equal(msg.role, "persona");
+    assert.equal(msg.role, "draft");
     assert.equal(msg.status, "approved");
     assert.equal(msg.auto, false);
     await pg.close();
