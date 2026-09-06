@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -60,7 +60,18 @@ test("an explicit process-env override wins over the file", () => {
 });
 
 test("the template ships auth off", () => {
-  assert.deepEqual(readAppEnv(projectRoot()), { VITE_AUTH_ENABLED: "false" });
+  // Template invariant: a fixture workspace, not this auth-on product root.
+  const template = makeWorkspace('{"VITE_AUTH_ENABLED":"false"}');
+  assert.deepEqual(readAppEnv(template), { VITE_AUTH_ENABLED: "false" });
+});
+
+test("this product ships auth on", () => {
+  const env = readAppEnv(projectRoot());
+  assert.notEqual(env.VITE_AUTH_ENABLED, "false");
+  assert.ok(
+    existsSync(join(projectRoot(), "src/routes/login.tsx")),
+    "login route must exist when auth is on",
+  );
 });
 
 test("vite loadEnv resolves the wrapped value", () => {
@@ -80,7 +91,9 @@ test("the wrapped command runs with the app env applied", async () => {
     "-e",
     PRINT_FLAG,
   ]);
-  assert.equal(stdout, "false");
+  const merged = mergeAppEnv(readAppEnv(projectRoot()), process.env);
+  assert.equal(stdout, String(merged.VITE_AUTH_ENABLED));
+  assert.notEqual(stdout, "false");
 });
 
 test("the wrapped command sees an explicit override, not the file value", async () => {
@@ -124,5 +137,7 @@ test("the CLI still runs when invoked through a symlinked path", async () => {
     "-e",
     PRINT_FLAG,
   ]);
-  assert.equal(stdout, "false");
+  const merged = mergeAppEnv(readAppEnv(projectRoot()), process.env);
+  assert.equal(stdout, String(merged.VITE_AUTH_ENABLED));
+  assert.notEqual(stdout, "");
 });

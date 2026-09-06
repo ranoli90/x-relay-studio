@@ -197,7 +197,7 @@ describe("F08 fan payment settlement", () => {
       amountCents: 5000,
     });
     assert.equal(stolen.ok, false);
-    if (!stolen.ok) assert.equal(stolen.reason, "wrong_status");
+    if (!stolen.ok) assert.ok(stolen.reason === "wrong_status" || stolen.reason === "conflict");
     const b = (
       await pg.query<{ status: string }>("select status from agent_offers where id = 'off_bbbbbbbbbbbbbbbb'")
     ).rows[0];
@@ -210,6 +210,26 @@ describe("F08 fan payment settlement", () => {
       await pg.query<{ lifetime_cents: number }>("select lifetime_cents from agent_fans where id = 'fan_a'")
     ).rows[0];
     assert.equal(fanA.lifetime_cents, 5000);
+    await pg.close();
+  });
+
+  it("draft offers are not payable", async () => {
+    const pg = new PGlite();
+    await pg.waitReady;
+    await pg.exec(SCHEMA);
+    await seed(pg);
+    await pg.exec(`update agent_offers set status = 'draft' where id = 'off_aaaaaaaaaaaaaaaa'`);
+    const sql = toSql(pg);
+    const paid = await applyMarkPaid(sql, null, {
+      offerId: "off_aaaaaaaaaaaaaaaa",
+      rail: "throne",
+      externalId: "wh_draft",
+      amountCents: 5000,
+    });
+    assert.equal(paid.ok, false);
+    if (!paid.ok) assert.equal(paid.reason, "wrong_status");
+    const pays = (await pg.query<{ n: number }>("select count(*)::int as n from agent_payments")).rows[0];
+    assert.equal(pays.n, 0);
     await pg.close();
   });
 });

@@ -34,9 +34,10 @@ export const Route = createFileRoute("/api/cron/studio")({
         const { ensureAgentLoop, tickAutoSendOnce } = await import("@/lib/agent/loop.server");
         ensureAgentLoop();
         const lease = await withCronLock(async () => {
+          // Telegram conversation work first so X scrape/drip cannot starve inbound.
+          const auto = await tickAutoSendOnce();
           const scrape = await tickDueSources(6);
           const live = await tickLiveAll(4);
-          const auto = await tickAutoSendOnce();
           return { scrape, live, auto };
         });
         if (!lease.ran) {

@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 import {
   deskActivity,
   personaName,
+  safeCallOutcome,
   wfLabel,
   type ActivityRow,
   type FloorDesk,
@@ -46,6 +47,9 @@ export function ActivityFeed({
 
   const rows = deskActivity(desk);
   const name = personaName(desk);
+  const emergencyStop = Boolean(desk.persona.emergencyStop);
+  const autoSend = Boolean(desk.persona.autoSend) && !emergencyStop;
+  const planHeld = Boolean(snapshot?.plan?.hold) || emergencyStop || !autoSend;
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -61,7 +65,7 @@ export function ActivityFeed({
             <p className="mt-1 text-sm leading-relaxed text-muted">{snapshot.plan.reason}</p>
             <p className="mt-2 font-mono text-xs text-subtle">
               {snapshot.plan.strategy} · {snapshot.plan.tactic}
-              {snapshot.plan.hold ? " · hold" : " · auto"}
+              {planHeld ? " · hold" : " · auto"}
             </p>
           </div>
         ) : null}
@@ -94,6 +98,32 @@ export function ActivityFeed({
               </li>
             ))}
           </ul>
+        ) : null}
+        {desk.calls?.length ? (
+          <div className="border-b border-border px-4 py-3">
+            <p className="font-mono text-xs uppercase tracking-widest text-subtle">Calls</p>
+            <ul className="mt-2 space-y-1.5">
+              {desk.calls.slice(0, 6).map((c) => {
+                const outcome = safeCallOutcome(c.outcome);
+                const failed = outcome !== "ok" && outcome !== "local";
+                return (
+                  <li
+                    key={c.id}
+                    className={cn(
+                      "flex items-baseline justify-between gap-2 font-mono text-xs",
+                      failed ? "text-down" : "text-muted",
+                    )}
+                  >
+                    <span className="min-w-0 truncate uppercase tracking-wider">
+                      {c.task}
+                      {c.fallback ? " · fallback" : ""}
+                    </span>
+                    <span className="shrink-0">{outcome}</span>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         ) : null}
         {snapshot?.diary.length ? (
           <div className="border-b border-border px-4 py-3">

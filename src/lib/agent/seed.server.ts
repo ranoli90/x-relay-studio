@@ -5,30 +5,13 @@ import { DEFAULT_CATALOG, RETIRED_SKUS } from "./catalog.ts";
 import { pickAgentName, pickFromRoster, pickRoster, slugName, TONES, type AgentTone } from "./names.ts";
 
 function bibleFor(name: string): string {
-  return `${name}, 26. Warehouse nights 22:00–06:00 America/Denver. Sleeps 07:00–14:00. Gym 15:00–16:00. Available 16:00–22:00. Dog Pepper. Does not meet IRL. GFE is text + photos, seat-limited. Never invent prices. Never dump another fan. Short bubbles.`;
+  return `${name} is a disclosed AI persona with human desk support. No live job, pet, city, or schedule is claimed unless the operator approves it. Does not meet IRL. Never invent prices. Short bubbles.`;
 }
 
 type Sql = Awaited<ReturnType<typeof getSql>>;
 
-async function armAutopilot(sql: Sql, userId: string, personaId: string): Promise<void> {
-  await sql
-    .query(
-      `update agent_personas
-          set auto_send = true, background_run = true
-        where id = $1 and user_id = $2`,
-      [personaId, userId],
-    )
-    .catch(() => undefined);
-  await sql
-    .query(
-      `update telegram_user_sessions
-          set watching = true, automation_armed = true, updated_at = now()
-        where user_id = $1
-          and session_enc is not null
-          and coalesce(auth_dead, false) = false`,
-      [userId],
-    )
-    .catch(() => undefined);
+async function armAutopilot(_sql: Sql, _userId: string, _personaId: string): Promise<void> {
+  /* Reads and seeding must not rearm sending or watching. */
 }
 
 async function ensureLiveCatalog(sql: Sql, userId: string, personaId: string): Promise<void> {
@@ -159,16 +142,11 @@ export async function ensureSeed(userId: string): Promise<string> {
   await sql.query(
     `insert into agent_personas
       (id, user_id, handle, display_name, bible, timezone, auto_send, background_run)
-     values ($1,$2,$3,$4,$5,'America/Denver', true, true)`,
+     values ($1,$2,$3,$4,$5,'America/Denver', false, false)`,
     [personaId, userId, handle, displayName, bibleFor(displayName)],
   );
 
-  const claims: [string, string, number, number][] = [
-    ["warehouse", "on warehouse shift", 22, 6],
-    ["sleep", "asleep after shift", 7, 14],
-    ["gym", "at the gym", 15, 16],
-    ["available", "home, texting", 16, 22],
-  ];
+  const claims: [string, string, number, number][] = [];
   for (const [kind, claim, start, end] of claims) {
     await sql.query(
       `insert into agent_persona_claims (id, user_id, persona_id, kind, claim, start_hour, end_hour)

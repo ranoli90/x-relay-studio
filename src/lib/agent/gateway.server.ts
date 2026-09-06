@@ -2,8 +2,7 @@
  * Model gateway. We own the route table. Never openrouter/auto.
  * Classify is cheap/local. Writer is adult-permissive (xAI / OpenRouter).
  */
-import { chatOpenRouter, extractJson, openRouterConfigured } from "@/lib/openrouter.server";
-import { getSql } from "@/lib/db";
+import { chatOpenRouter, extractJson, openRouterConfigured, ProviderError } from "../openrouter.server.ts";
 import { newId } from "./ids.ts";
 import type { WriteInput, WriteResult } from "./types.ts";
 import {
@@ -12,7 +11,14 @@ import {
   splitBubbles,
   writeCapsFor,
   shouldSkipRemoteWrite,
+  LOCAL_WRITER_MODEL,
 } from "./write.ts";
+import {
+  buildWriterMessages,
+  remainingDeadlineMs,
+  unusableFinish,
+  WRITER_UNTRUSTED_POLICY,
+} from "../conversation/generate.ts";
 
 export type AgentTask =
   | "understand"
@@ -107,13 +113,19 @@ async function logCall(opts: {
   latencyMs: number;
   outcome: string;
   fallback: boolean;
+  finishReason?: string | null;
+  generationId?: string | null;
+  safeError?: string | null;
+  usageJson?: string | null;
 }) {
   try {
+    const { getSql } = await import("../db.ts");
     const sql = await getSql();
     await sql.query(
       `insert into agent_model_calls
-        (id, user_id, thread_id, task, model, latency_ms, outcome, fallback)
-       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        (id, user_id, thread_id, task, model, latency_ms, outcome, fallback,
+         finish_reason, provider_generation_id, safe_error, usage_json)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
       [
         newId("call"),
         opts.userId,
@@ -123,10 +135,34 @@ async function logCall(opts: {
         opts.latencyMs,
         opts.outcome,
         opts.fallback,
+        opts.finishReason ?? null,
+        opts.generationId ?? null,
+        opts.safeError ?? null,
+        opts.usageJson ?? null,
       ],
     );
   } catch {
-    /* logging must never break the brain */
+    try {
+      const { getSql } = await import("../db.ts");
+      const sql = await getSql();
+      await sql.query(
+        `insert into agent_model_calls
+          (id, user_id, thread_id, task, model, latency_ms, outcome, fallback)
+         values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [
+          newId("call"),
+          opts.userId,
+          opts.threadId ?? null,
+          opts.task,
+          opts.model,
+          opts.latencyMs,
+          opts.outcome,
+          opts.fallback,
+        ],
+      );
+    } catch {
+      /* logging must never break the brain */
+    }
   }
 }
 
@@ -136,7 +172,7 @@ async function chatXai(opts: {
   maxTokens: number;
   timeoutMs: number;
   json?: boolean;
-}): Promise<{ text: string; model: string }> {
+}): Promise<{ text: string; model: string; finishReason: string | null }> {
   const key = xaiKey();
   if (!key) throw new Error("XAI_API_KEY missing");
   const res = await fetch("https://api.x.ai/v1/chat/completions", {
@@ -157,12 +193,26 @@ async function chatXai(opts: {
   if (!res.ok) throw new Error(`xAI ${res.status}`);
   const body = (await res.json()) as {
     model?: string;
-    choices?: { message?: { content?: string } }[];
+    choices?: {
+      finish_reason?: string;
+      message?: { content?: string; refusal?: string };
+    }[];
   };
-  const text = body.choices?.[0]?.message?.content ?? "";
-  if (!text.trim()) throw new Error("empty");
-  return { text, model: body.model ?? opts.model };
+  const choice = body.choices?.[0];
+  const text = choice?.message?.content ?? "";
+  const finishReason = choice?.finish_reason ?? null;
+  if (choice?.message?.refusal) {
+    throw new ProviderError("model refusal", "refusal");
+  }
+  const bad = unusableFinish(finishReason, text);
+  if (bad) {
+    throw new ProviderError(`model ${bad}`, bad);
+  }
+  if (!text.trim()) throw new ProviderError("empty", "empty");
+  return { text, model: body.model ?? opts.model, finishReason };
 }
+
+type TaskResult = { text: string; model: string; fallback: boolean; finishReason?: string | null };
 
 export async function runTask(opts: {
   userId: string;
@@ -170,46 +220,101 @@ export async function runTask(opts: {
   task: AgentTask;
   messages: { role: "system" | "user" | "assistant"; content: string }[];
   json?: boolean;
-}): Promise<{ text: string; model: string; fallback: boolean } | null> {
+}): Promise<TaskResult | null> {
   const route = TABLE[opts.task];
   const started = Date.now();
   const models = [route.primary, ...route.fallback];
+  const budgetMs = route.timeoutMs;
 
   if (openRouterConfigured()) {
-    try {
-      const result = await chatOpenRouter({
-        messages: opts.messages,
-        maxTokens: route.maxTokens,
-        timeoutMs: route.timeoutMs,
-        json: opts.json,
-        temperature: opts.task === "write" || opts.task === "hard_write" ? 0.6 : 0.2,
-        models,
-        providerSort: route.sort,
-      });
-      await logCall({
-        userId: opts.userId,
-        threadId: opts.threadId,
-        task: opts.task,
-        model: result.model,
-        latencyMs: Date.now() - started,
-        outcome: "ok",
-        fallback: false,
-      });
-      return { text: result.text, model: result.model, fallback: false };
-    } catch {
-      /* fall through to xAI / local */
+    const remaining = remainingDeadlineMs(started, budgetMs);
+    if (remaining > 0) {
+      try {
+        const result = await chatOpenRouter({
+          messages: opts.messages,
+          maxTokens: route.maxTokens,
+          timeoutMs: remaining,
+          deadlineMs: remaining,
+          json: opts.json,
+          temperature: opts.task === "write" || opts.task === "hard_write" ? 0.6 : 0.2,
+          models,
+          providerSort: route.sort,
+        });
+        const bad = unusableFinish(result.finishReason, result.text);
+        if (bad) {
+          await logCall({
+            userId: opts.userId,
+            threadId: opts.threadId,
+            task: opts.task,
+            model: result.model,
+            latencyMs: Date.now() - started,
+            outcome: bad,
+            fallback: false,
+            finishReason: result.finishReason,
+            generationId: result.generationId,
+            safeError: bad,
+            usageJson: result.usage ? JSON.stringify(result.usage) : null,
+          });
+          return null;
+        }
+        await logCall({
+          userId: opts.userId,
+          threadId: opts.threadId,
+          task: opts.task,
+          model: result.model,
+          latencyMs: Date.now() - started,
+          outcome: "ok",
+          fallback: false,
+          finishReason: result.finishReason,
+          generationId: result.generationId,
+          usageJson: result.usage ? JSON.stringify(result.usage) : null,
+        });
+        return { text: result.text, model: result.model, fallback: false, finishReason: result.finishReason };
+      } catch (err) {
+        const safe = err instanceof ProviderError ? err.safeError : "unknown";
+        await logCall({
+          userId: opts.userId,
+          threadId: opts.threadId,
+          task: opts.task,
+          model: models[0],
+          latencyMs: Date.now() - started,
+          outcome: err instanceof Error ? err.message.slice(0, 80) : "fail",
+          fallback: false,
+          safeError: safe,
+        });
+        if (err instanceof ProviderError && (safe === "refusal" || safe === "truncated" || safe === "empty")) {
+          return null;
+        }
+        /* fall through to xAI / local within the same deadline */
+      }
     }
   }
 
-  if (xaiKey() && (opts.task === "write" || opts.task === "hard_write" || opts.task === "plan")) {
+  const xaiRemaining = remainingDeadlineMs(started, budgetMs);
+  if (xaiKey() && xaiRemaining > 200 && (opts.task === "write" || opts.task === "hard_write" || opts.task === "plan")) {
     try {
       const result = await chatXai({
         model: "grok-4.5",
         messages: opts.messages,
         maxTokens: route.maxTokens,
-        timeoutMs: Math.min(route.timeoutMs, 12_000),
+        timeoutMs: Math.min(xaiRemaining, 12_000),
         json: opts.json,
       });
+      const bad = unusableFinish(result.finishReason, result.text);
+      if (bad) {
+        await logCall({
+          userId: opts.userId,
+          threadId: opts.threadId,
+          task: opts.task,
+          model: result.model,
+          latencyMs: Date.now() - started,
+          outcome: bad,
+          fallback: true,
+          finishReason: result.finishReason,
+          safeError: bad,
+        });
+        return null;
+      }
       await logCall({
         userId: opts.userId,
         threadId: opts.threadId,
@@ -218,9 +323,11 @@ export async function runTask(opts: {
         latencyMs: Date.now() - started,
         outcome: "ok",
         fallback: true,
+        finishReason: result.finishReason,
       });
-      return { text: result.text, model: result.model, fallback: true };
+      return { text: result.text, model: result.model, fallback: true, finishReason: result.finishReason };
     } catch (err) {
+      const safe = err instanceof ProviderError ? err.safeError : "unknown";
       await logCall({
         userId: opts.userId,
         threadId: opts.threadId,
@@ -229,6 +336,7 @@ export async function runTask(opts: {
         latencyMs: Date.now() - started,
         outcome: err instanceof Error ? err.message.slice(0, 80) : "fail",
         fallback: true,
+        safeError: safe,
       });
       return null;
     }
@@ -248,45 +356,13 @@ export async function runTask(opts: {
 
 export async function writeWithGateway(userId: string, threadId: string, input: WriteInput): Promise<WriteResult> {
   const local = writeLocal(input);
-  if (!writerAvailable()) return local;
-  // Handoff / kill / W2 safety / no-rails holds never call the model (including hard_write).
   if (shouldSkipRemoteWrite(input, local)) return local;
+  if (!writerAvailable()) {
+    return { bubbles: [], dropped: true, dropReason: "provider_unavailable", model: LOCAL_WRITER_MODEL };
+  }
 
   const caps = writeCapsFor(input);
-  const rails =
-    caps.allowedMethods && caps.allowedMethods.length > 0
-      ? caps.allowedMethods.join(", ")
-      : "(none — do not name any rail or payment method)";
-  const catalogLines = input.catalog
-    .map((c) => `${c.sku} ${c.title} $${(c.priceCents / 100).toFixed(0)} rail=${c.rail}`)
-    .join("\n");
-  const diary = input.diary.map((d) => `${d.voice}: ${d.body}`).join("\n");
-  const last = input.last.map((m) => `${m.role}: ${m.body}`).join("\n");
-  const clock = input.clock.map((c) => `${c.kind} ${c.startHour}-${c.endHour} ${c.claim}`).join("; ");
-  const proofLine = caps.proofAvailable
-    ? "An unused proof asset is reserved. You may offer that reserved asset. Never promise a live selfie or a recycled live."
-    : "NO proof asset is reserved. Do not promise a selfie, verification pic, same-outfit, live proof, or that you can send one.";
-  const deliveryLine = caps.deliveryConfirmed
-    ? "Delivery is confirmed. You may say you got it to them."
-    : "Delivery is NOT confirmed. Do not claim you sent, delivered, or that it is in their inbox.";
-
-  const system = `You write as ${input.personaName}. Short Telegram bubbles. Lowercase ok. No emoji. Never say you are an AI.
-Never invent a price or a payment rail. Catalog only:
-${catalogLines}
-Only these payment rails may be named: ${rails}
-${proofLine}
-${deliveryLine}
-Life clock now hour=${input.hour}: ${clock}
-Do not contradict ME claims or the clock (no gym+bed at the wrong hour).
-Forbidden in output: strategy=, trust_score, gfe_ready, as an ai, as a language model, openrouter, system prompt, gift cards, restriction workarounds, bypass language, prices not on the list, payment methods not on the allowlist.
-Plan you must follow: workflow=${input.plan.workflow} tactic=${input.plan.tactic} sku=${input.plan.sku ?? "none"}
-hold=${input.plan.hold} is about whether the desk may auto-send. You still write the draft. Do not mention hold, workflow ids, or plan fields.
-Sound like a person who remembers one fact and asks one thing. Do not write a bare "hey what's up" as the whole reply.
-${input.bible}
-Diary for THIS fan only:
-${diary}`;
-
-  const user = `Fan ${input.fanName} just said:\n${input.inbound}\n\nLast 20:\n${last}\n\nWrite 1-2 short bubbles. Split with a blank line.`;
+  const { system, user } = buildWriterMessages(input, caps);
 
   const llm = await runTask({
     userId,
@@ -297,11 +373,18 @@ ${diary}`;
       { role: "user", content: user },
     ],
   });
-  if (!llm) return local;
+  if (!llm) {
+    return { bubbles: [], dropped: true, dropReason: "generation_failed", model: LOCAL_WRITER_MODEL };
+  }
+  const badFinish = unusableFinish(llm.finishReason, llm.text);
+  if (badFinish) {
+    return { bubbles: [], dropped: true, dropReason: badFinish, model: llm.model };
+  }
   const drop = validateDraft(llm.text, input.catalog, input.hour, input.clock, caps);
-  // Failed remote text does not smear a remote model id onto a successful local draft.
-  if (drop) return local;
+  if (drop) {
+    return { bubbles: [], dropped: true, dropReason: `validator_rejected: ${drop}`, model: llm.model };
+  }
   return { bubbles: splitBubbles(llm.text), dropped: false, dropReason: null, model: llm.model };
 }
 
-export { extractJson, TABLE as ROUTE_TABLE };
+export { extractJson, TABLE as ROUTE_TABLE, buildWriterMessages, WRITER_UNTRUSTED_POLICY };
