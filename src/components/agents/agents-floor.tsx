@@ -9,6 +9,9 @@ import {
   loadThread,
   markDelivered,
   operatorSend,
+  setAutoSend,
+  setBackgroundRun,
+  setEmergencyStop,
   setTakeover,
   simulateInbound,
   simulatePay,
@@ -157,9 +160,10 @@ export function AgentsFloor() {
 
   const selected = thread?.thread.id ?? null;
   const name = threadAgent(thread?.thread) || personaName(desk);
-  const autoSend = true;
-  const backgroundRun = true;
-  const live = true;
+  const emergencyStop = Boolean(desk?.persona.emergencyStop);
+  const autoSend = Boolean(desk?.persona.autoSend) && !emergencyStop;
+  const backgroundRun = Boolean(desk?.persona.backgroundRun) && !emergencyStop;
+  const live = Boolean(desk) && autoSend && backgroundRun;
   const typing =
     latestActivityForThread(desk ? deskActivity(desk) : [], selected)?.kind === "typing";
 
@@ -190,17 +194,51 @@ export function AgentsFloor() {
           <div className="hidden items-center md:flex">
             <FloorSwitch
               label="Auto-send"
-              checked={true}
-              disabled={true}
-              title="Autopilot is always on. Rapport, aftercare, and check-ins send themselves"
-              onChange={() => undefined}
+              checked={autoSend}
+              disabled={!desk || emergencyStop}
+              title={
+                emergencyStop
+                  ? "Emergency stop is on. Auto-send is held."
+                  : autoSend
+                    ? "Approved auto replies are live for this desk"
+                    : "Auto-send is off. Drafts stay on the desk until you send or approve."
+              }
+              onChange={(on) => {
+                void setAutoSend({ data: { on } })
+                  .then(() => reload())
+                  .catch((e) => setError(e instanceof Error ? e.message : "Could not update auto-send."));
+              }}
             />
             <FloorSwitch
               label="Keep running"
-              checked={true}
-              disabled={true}
-              title="Autopilot keeps pulling and sending after you close this tab"
-              onChange={() => undefined}
+              checked={backgroundRun}
+              disabled={!desk || emergencyStop}
+              title={
+                emergencyStop
+                  ? "Emergency stop is on. Background work is held."
+                  : backgroundRun
+                    ? "Background pull stays on after you close this tab"
+                    : "Background run is off. Work continues only while this tab is open."
+              }
+              onChange={(on) => {
+                void setBackgroundRun({ data: { on } })
+                  .then(() => reload())
+                  .catch((e) => setError(e instanceof Error ? e.message : "Could not update background run."));
+              }}
+            />
+            <FloorSwitch
+              label="Stop"
+              checked={emergencyStop}
+              title={
+                emergencyStop
+                  ? "Emergency stop is on. Nothing auto-sends until you turn this off."
+                  : "Halt all auto-send and background replies immediately"
+              }
+              onChange={(on) => {
+                void setEmergencyStop({ data: { on } })
+                  .then(() => reload())
+                  .catch((e) => setError(e instanceof Error ? e.message : "Could not update emergency stop."));
+              }}
             />
           </div>
           <UserButton />
@@ -208,17 +246,35 @@ export function AgentsFloor() {
         <div className="flex items-center gap-1 overflow-x-auto px-2 pb-2 md:hidden">
           <FloorSwitch
             label="Auto-send"
-            checked={true}
-            disabled={true}
-            title="Autopilot is always on. Rapport, aftercare, and check-ins send themselves"
-            onChange={() => undefined}
+            checked={autoSend}
+            disabled={!desk || emergencyStop}
+            title={emergencyStop ? "Emergency stop is on" : "Toggle auto-send"}
+            onChange={(on) => {
+              void setAutoSend({ data: { on } })
+                .then(() => reload())
+                .catch((e) => setError(e instanceof Error ? e.message : "Could not update auto-send."));
+            }}
           />
           <FloorSwitch
             label="Keep running"
-            checked={true}
-            disabled={true}
-            title="Autopilot keeps pulling and sending after you close this tab"
-            onChange={() => undefined}
+            checked={backgroundRun}
+            disabled={!desk || emergencyStop}
+            title={emergencyStop ? "Emergency stop is on" : "Toggle background run"}
+            onChange={(on) => {
+              void setBackgroundRun({ data: { on } })
+                .then(() => reload())
+                .catch((e) => setError(e instanceof Error ? e.message : "Could not update background run."));
+            }}
+          />
+          <FloorSwitch
+            label="Stop"
+            checked={emergencyStop}
+            title="Emergency stop"
+            onChange={(on) => {
+              void setEmergencyStop({ data: { on } })
+                .then(() => reload())
+                .catch((e) => setError(e instanceof Error ? e.message : "Could not update emergency stop."));
+            }}
           />
         </div>
       </header>

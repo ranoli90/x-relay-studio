@@ -18,7 +18,18 @@ The LLM is a mouth with tools. We own the OpenRouter route table. `openrouter/au
 
 `INGEST → SAFETY → TRIAGE → QUALIFY → (PAY) → DAY-ARC → GFE_INVITE → CONTRACT → FULFILL → AFTERCARE`
 
-Auto-send (only after gold threads pass): rapport, aftercare, memory callback, park. Draft-only: first offer, price, customs, GFE contract, are-you-real, anger, spend cap, whales. First GFE contract is always human.
+Conversation automation is **off until an operator turns it on**. After migration `0031_conversation_repair.sql`, existing autopilot rows are held in `draft` with `auto_send=false`. Auto-send requires all of:
+
+- operator Auto-send switch on (`automation_mode = approved_auto`)
+- a validated model reply (local templates never auto-send)
+- no emergency stop, partner opt-out, takeover, or unknown adult eligibility on restricted commercial workflows
+- a live Telegram peer and confirmed transport acknowledgment
+
+Reads, desk seeding, and page loads do not rearm sending. Emergency **Stop** on the floor persists across reloads. Historical Telegram import (messages at or before the account activation watermark) is stored as `imported` and does not trigger replies.
+
+Drafts, operator notes, and unsent approvals are not conversation history. The model sees confirmed inbound plus provider-acknowledged outbound only. Quotes are exact minor units on an approved offer; a screenshot is never payment.
+
+The LLM is a disclosed AI persona with human desk support. It must not invent biography, human identity, proof, scarcity, or a price that is not on the catalog/quote.
 
 ## Production requirements
 

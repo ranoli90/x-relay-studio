@@ -11,14 +11,19 @@ export function findSku(catalog: CatalogRow[], sku: string | null | undefined): 
   return catalog.find((r) => r.sku === sku) ?? null;
 }
 
-export function inventedPrice(text: string, catalog: CatalogRow[]): number | null {
-  const allow = allowedPrices(catalog);
+export function inventedPrice(text: string, catalog: CatalogRow[], exactMinor?: number | null): number | null {
   const re = new RegExp(PRICE.source, "g");
   let m: RegExpExecArray | null;
   while ((m = re.exec(text))) {
     const dollars = Number(m[1]);
     if (!Number.isFinite(dollars)) continue;
-    if (!allow.has(Math.round(dollars))) return dollars;
+    const minor = Math.round(dollars * 100);
+    if (typeof exactMinor === "number") {
+      if (minor !== exactMinor) return dollars;
+      continue;
+    }
+    const row = catalog.find((r) => r.priceCents === minor);
+    if (!row) return dollars;
   }
   return null;
 }

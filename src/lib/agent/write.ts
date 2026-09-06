@@ -4,6 +4,8 @@ import { buildFanMemory, factHook } from "./memory.ts";
 import { neverPhotoEighty, spokenCustomLine } from "./pricing.ts";
 import { runSafety, safetyBlocksGenerate } from "./safety.ts";
 import type { CatalogRow, ClockSlot, ReplyPlan, WriteInput, WriteResult } from "./types.ts";
+import { spokenName } from "../conversation/names.ts";
+import { isGreetingOnly, isIdentityQuestion, isThanksOnly } from "../conversation/text.ts";
 
 /** Local templates never borrow a remote gateway model id. */
 export const LOCAL_WRITER_MODEL = "local/understand";
@@ -39,8 +41,8 @@ const KNOWN_METHODS: { re: RegExp; key: string }[] = (
 export type WriteCaps = {
   proofAvailable?: boolean;
   deliveryConfirmed?: boolean;
-  /** Server-owned rails on the offer. Empty means none; omit to use catalog/SKU rails. */
   allowedMethods?: readonly string[] | null;
+  exactPriceMinor?: number | null;
 };
 
 type WriterInput = WriteInput & WriteCaps;
@@ -100,8 +102,8 @@ export function validateDraft(
   if (!caps.deliveryConfirmed && DELIVERY_CLAIM.test(text)) {
     return "delivery claim without confirmation";
   }
-  const price = inventedPrice(text, catalog);
-  if (price != null) return `price $${price} is not on the allowlist`;
+  const price = inventedPrice(text, catalog, caps.exactPriceMinor);
+  if (price != null) return `price $${price} is not on the quoted item`;
   const clock = clockContradiction(text, hour, claims);
   if (clock) return clock;
   return null;
@@ -115,7 +117,6 @@ export function splitBubbles(text: string): string[] {
     .slice(0, 2);
 }
 
-/** Caps the gateway must pass into validateDraft for remote text. */
 export function writeCapsFor(input: WriteInput): WriteCaps {
   const writerInput = input as WriterInput;
   const sku = findSku(input.catalog, liveSku(input.plan.sku));
@@ -123,19 +124,16 @@ export function writeCapsFor(input: WriteInput): WriteCaps {
     proofAvailable: Boolean(writerInput.proofAvailable),
     deliveryConfirmed: Boolean(writerInput.deliveryConfirmed),
     allowedMethods: allowedMethodsFor(writerInput, sku?.rail),
+    exactPriceMinor: sku?.priceCents ?? writerInput.exactPriceMinor ?? null,
   };
 }
 
-/**
- * Remote write is skipped on handoff/kill/safety holds and on payment-rail holds.
- * plan.hold (ALWAYS_DRAFT) is about send, not about writing a draft.
- */
 export function shouldSkipRemoteWrite(input: WriteInput, local: WriteResult): boolean {
   if (isHandoffPlan(input.plan)) return true;
   if (input.plan.workflow === "W2_SAFETY") return true;
   if (!local.dropped) return false;
   const reason = local.dropReason ?? "";
-  return /handoff|safety|kill|no allowed payment methods/i.test(reason);
+  return /handoff|safety|kill|opt_out|no allowed payment methods/i.test(reason);
 }
 
 function himSlice(input: WriteInput): string {
@@ -150,10 +148,6 @@ function himSlice(input: WriteInput): string {
     return true;
   });
   return distinct?.body ?? hims[hims.length - 1]?.body ?? "";
-}
-
-function usSlice(input: WriteInput): string {
-  return input.diary.find((d) => d.voice === "US")?.body ?? "";
 }
 
 function railPhrase(methods: string[]): string | null {
@@ -185,11 +179,6 @@ function clipText(body: string, max: number): string {
   return (s.length <= max ? s : s.slice(0, max).trim()).toLowerCase();
 }
 
-function firstName(fanName: string): string {
-  const n = fanName.trim().split(/\s+/)[0] ?? "";
-  return n || "you";
-}
-
 function lastInbound(input: WriteInput): string {
   if (input.inbound.trim()) return input.inbound.trim();
   for (let i = input.last.length - 1; i >= 0; i--) {
@@ -199,11 +188,6 @@ function lastInbound(input: WriteInput): string {
   return "";
 }
 
-function greetingOnly(s: string): boolean {
-  return /^(hi|hey|hello|yo|wyd|sup|hiya|hey you)[\s!.?]*$/i.test(s.trim());
-}
-
-/** Diary is included even when leaky — validateDraft still holds those drafts. */
 function diaryFact(body: string): string {
   return clipText(body, 88);
 }
@@ -215,11 +199,11 @@ function inboundSlice(
   claims: ClockSlot[],
   caps: WriteCaps,
 ): string {
-  if (!raw.trim() || greetingOnly(raw)) return "";
+  if (!raw.trim() || isGreetingOnly(raw)) return "";
   const s = clipText(raw, 48);
   if (s.length < 8) return "";
   if (LEAK.test(s) || BYPASS.test(s) || PROOF_PROMISE.test(s) || DELIVERY_CLAIM.test(s)) return "";
-  if (inventedPrice(s, catalog) != null) return "";
+  if (inventedPrice(s, catalog, caps.exactPriceMinor) != null) return "";
   if (unallowedMethod(s, caps.allowedMethods ?? [])) return "";
   if (clockContradiction(s, hour, claims)) return "";
   return s;
@@ -232,11 +216,15 @@ function two(a: string, b?: string | null): string {
   return first || second;
 }
 
+function vocative(name: string | null): string {
+  return name ? ` ${name.toLowerCase()}` : "";
+}
+
 export function writeLocal(input: WriteInput): WriteResult {
   const { plan } = input as WriterInput;
-  // Human-owned threads never go through the ordinary persona writer.
   if (isHandoffPlan(plan)) return hold("handoff: writer skipped");
   const safety = runSafety(input.inbound ?? "");
+  if (safety.codes.includes("opt_out")) return hold("opt_out: writer skipped");
   if (safetyBlocksGenerate(safety.verdict)) {
     return hold(`safety ${safety.verdict}: writer skipped`);
   }
@@ -256,32 +244,30 @@ export function writeLocal(input: WriteInput): WriteResult {
   });
   const price = sku ? formatUsd(sku.priceCents) : null;
   const him = diaryFact(himSlice(input));
-  const us = diaryFact(usSlice(input));
-  const name = mem.facts.theirName || firstName(input.fanName);
+  const name = mem.facts.theirName || spokenName(input.fanName);
   const rails = railPhrase(methods);
-  const clock = activeClaim(input.hour, input.clock);
   const last = inboundSlice(lastInbound(input), input.catalog, input.hour, input.clock, caps);
   const hook = factHook(mem);
+  if (LEAK.test(him) || LEAK.test(last) || LEAK.test(input.inbound)) {
+    return hold("leaked internal field");
+  }
 
   const text = localLine(plan, {
     name,
     skuTitle: sku?.title ?? null,
     price,
     him,
-    us,
     rails,
     proofAvailable: Boolean(caps.proofAvailable),
     deliveryConfirmed: Boolean(caps.deliveryConfirmed),
-    clockClaim: clock?.claim.trim() ? clock.claim.trim().toLowerCase() : null,
     last,
     hook,
     burned: Boolean(mem.facts.burned),
     customLine: spokenCustomLine(input.catalog, mem.price),
+    inbound: input.inbound,
   });
 
   const drop = validateDraft(text, input.catalog, input.hour, input.clock, caps);
-  // Invalid copy is held, not replaced with a successful fallback draft.
-  // writeWithGateway must not relabel these local bubbles with a remote model id.
   if (drop) return hold(drop);
   return { bubbles: splitBubbles(text), dropped: false, dropReason: null, model: LOCAL_WRITER_MODEL };
 }
@@ -289,30 +275,35 @@ export function writeLocal(input: WriteInput): WriteResult {
 function localLine(
   plan: ReplyPlan,
   x: {
-    name: string;
+    name: string | null;
     skuTitle: string | null;
     price: string | null;
     him: string;
-    us: string;
     rails: string | null;
     proofAvailable: boolean;
     deliveryConfirmed: boolean;
-    clockClaim: string | null;
     last: string;
     hook: string | null;
     burned: boolean;
     customLine: string;
+    inbound: string;
   },
 ): string {
-  const name = x.name.toLowerCase();
-  const fact = x.hook || x.him || x.us;
-  const clock = x.clockClaim;
+  const name = vocative(x.name);
+  const fact = x.hook || x.him;
+
+  if (isIdentityQuestion(x.inbound)) {
+    return two(
+      "i'm an ai persona with a human on the desk if something needs a person",
+      "what did you actually want to talk about?",
+    );
+  }
 
   switch (plan.workflow) {
     case "W4_QUALIFY": {
       const heard = x.last
-        ? `hey ${name} — you said ${x.last}. i don't do long free chats`
-        : `hey ${name} — i don't do long free chats`;
+        ? `hey${name} — you said ${x.last}. i don't do long free chats`
+        : `hey${name} — i don't do long free chats`;
       const door = x.customLine
         ? `${x.customLine} if you actually want to look, otherwise we can leave it`
         : `what are you looking for — a custom, a dropbox, or just talking a bit first?`;
@@ -320,39 +311,24 @@ function localLine(
     }
     case "W5_DAY_ARC": {
       if (plan.tactic === "discover_custom" || plan.sku === "custom_clip" || plan.sku === "custom_mid") {
-        return two(
-          `sure ${name}. what would you want me to do in it, and how long?`,
-          `and how's your day going`,
-        );
+        return two(`sure${name}. what would you want me to do in it, and how long?`, `and how's your day going`);
       }
-      const mem = fact
-        ? clock
-          ? `${clock} here. still thinking about ${fact}`
-          : `still thinking about ${fact}`
-        : clock
-          ? `${clock} here`
-          : null;
+      if (isGreetingOnly(x.inbound) || !x.inbound.trim()) {
+        return "hey, how's it going?";
+      }
+      if (isThanksOnly(x.inbound)) return "of course";
       if (x.last) {
         const asked = /[?]/.test(x.last) || /^(how|what|why|who|where|when|did|does|is|are)\b/.test(x.last);
-        const react = asked
-          ? clock
-            ? `yeah ${name} — ${clock} here`
-            : `yeah ${name}`
-          : /\b(pic|photo)\b/.test(x.last)
-            ? `yeah ${name}, i'll be looking for that`
-            : `you said ${x.last}`;
-        const ask = asked
-          ? mem ?? `what are you up to`
-          : mem ?? `how's that going`;
-        return two(react, ask);
+        if (/\b(pic|photo)\b/.test(x.last)) return two(`yeah${name}, i'll be looking for that`, fact ? `how's ${fact}` : null);
+        if (asked) return two(`yeah${name}`, fact ? `how's ${fact}` : `what's up with that`);
+        return two(`you said ${x.last}`, fact ? `how's ${fact}` : `how's that going`);
       }
-      const open = mem ? `hey ${name} — ${mem}` : `hey ${name} — how's your day going`;
-      return two(open, fact ? `how's your day going` : `what are you up to`);
+      return fact ? two(`hey${name}`, `how's ${fact}`) : `hey${name || ""}`.trim() || "hey";
     }
     case "W6_CLOSE_NOW":
       if (x.burned) {
         return two(
-          `i get why you'd be careful ${name}`,
+          `i get why you'd be careful${name}`,
           `${x.customLine} if you want to start small. ${x.rails ? `that's on ${x.rails}` : "tell me what you want first"}`,
         );
       }
@@ -369,68 +345,53 @@ function localLine(
         );
       }
       if (x.skuTitle && x.price && x.rails) {
-        return `yeah ${name}, ${x.skuTitle.toLowerCase()} is ${x.price} on ${x.rails}`;
+        return `yeah${name}, ${x.skuTitle.toLowerCase()} is ${x.price} on ${x.rails}`;
       }
-      return two(`what are you wanting exactly, ${name}?`, `then i can tell you the price`);
+      return two(`what are you wanting exactly${name}?`, `then i can tell you the price`);
     case "W7_GFE":
       return two(
-        `yeah ${name} we can talk about that. i like talking first so it doesn't feel fake`,
-        fact
-          ? `still thinking about ${fact} — what are you wanting out of it this week?`
-          : `what are you wanting out of it this week?`,
+        `yeah${name} we can talk about that. i like talking first so it doesn't feel fake`,
+        fact ? `still thinking about ${fact} — what are you wanting out of it this week?` : `what are you wanting out of it this week?`,
       );
     case "W8_OFFER":
       return x.rails
-        ? `${name} i saw that. if it lands on ${x.rails} i'll see it. a screenshot isn't the receipt here`
+        ? `${(x.name ?? "hey").toLowerCase()} i saw that. if it lands on ${x.rails} i'll see it. a screenshot isn't the receipt here`
         : `a screenshot isn't the receipt here`;
     case "W10_AFTERCARE":
       if (x.deliveryConfirmed) {
-        return two(
-          `got it to you, ${name}. how you feeling, still good?`,
-          fact ? `still thinking about ${fact}` : null,
-        );
+        return two(`got it to you${name}. how you feeling, still good?`, fact ? `still thinking about ${fact}` : null);
       }
       return two(
-        `${name}, if it went through you'll have it. if not, tell me and i'll check — i won't mark it delivered from a screenshot`,
+        `${x.name ?? "hey"}, if it went through you'll have it. if not, tell me and i'll check — i won't mark it delivered from a screenshot`,
         fact ? `still thinking about ${fact}` : null,
       );
     case "W11_REACTIVATE": {
-      const mem = fact;
-      const open = mem
-        ? `hey ${name} — still think about ${mem}`
-        : `hey ${name}, been a minute. how's your week`;
-      const ask = x.last ? `you said ${x.last}. how've you been` : mem ? `how've you been` : null;
+      const open = fact ? `hey${name} — still think about ${fact}` : `hey${name}, been a minute. how's your week`;
+      const ask = x.last ? `you said ${x.last}. how've you been` : fact ? `how've you been` : null;
       return two(open, ask);
     }
     case "W12_OBJECTION":
       return plan.tactic === "not_her" || x.burned
         ? two(
-            `ugh yeah that sucks ${name}, i'm not her`,
+            `ugh yeah that sucks${name}, i'm not her`,
             `we can start small or just talk a bit first so you're not guessing. what did you actually want?`,
           )
         : two(`we can figure price after i know what you want`, `what are you thinking?`);
     case "W13_PROOF":
       return x.proofAvailable
-        ? `fair, i get it ${name}. i have one reserved still if you want that — not a recycled live`
-        : `i hear you ${name}. i don't have a proof asset ready for this, so i won't pretend i do. give me a minute`;
+        ? `fair, i get it${name}. i have one reserved still if you want that — not a recycled live`
+        : `i hear you${name}. i don't have a proof asset ready for this, so i won't pretend i do. give me a minute`;
     case "W14_MEDIA_IN":
       return `got the pic. i wait for the rail to ping before i mark it paid`;
     case "W15_HANDOFF":
       return "";
-    case "W16_QUEUE": {
-      const open = clock
-        ? `hey ${name} — ${clock}, so i'm slow. i'll ping you in a bit`
-        : `hey ${name} — buried in something, i'll ping you in a bit`;
-      return two(open, x.last ? `not ignoring you` : null);
-    }
+    case "W16_QUEUE":
+      return two(`hey${name} — buried in something, i'll ping you in a bit`, x.last ? `not ignoring you` : null);
     case "W2_SAFETY":
       if (plan.tactic === "no_irl") return `i don't meet. this stays here.`;
       if (plan.tactic === "ignore_payload") return `no. what did you actually want?`;
       return `i only talk to adults, and i don't do that.`;
     default:
-      return two(
-        fact ? `hey ${name} — still thinking about ${fact}` : `hey ${name}`,
-        x.last ? `you said ${x.last}. what's up with that` : `what's up`,
-      );
+      return two(fact ? `hey${name}` : `hey${name}`.trim() || "hey", x.last ? `how's that going` : `what's up`);
   }
 }

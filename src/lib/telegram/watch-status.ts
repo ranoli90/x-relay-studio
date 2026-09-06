@@ -50,3 +50,28 @@ export function watchIsLocked(
 ): boolean {
   return Boolean(watch?.authDead) || floodSecondsLeft(watch?.floodUntil, now) > 0;
 }
+
+export type InboundAiStatus = "outbound" | "imported" | "queued";
+
+/**
+ * Bootstrap history is imported-only. Actionable queue requires a watermark
+ * and a message strictly after it. Clock-skew ties stay imported.
+ */
+export function classifyInboundAiStatus(opts: {
+  fromSelf: boolean;
+  createdAt?: string | Date | null;
+  watermark?: string | Date | null;
+}): InboundAiStatus {
+  if (opts.fromSelf) return "outbound";
+  if (!opts.watermark) return "imported";
+  const created = opts.createdAt ? new Date(opts.createdAt).getTime() : NaN;
+  const mark = new Date(opts.watermark).getTime();
+  if (!Number.isFinite(created) || !Number.isFinite(mark)) return "imported";
+  if (created <= mark) return "imported";
+  return "queued";
+}
+
+export function retryBackoffMs(attemptCount: number): number {
+  const n = Math.max(1, Math.min(8, Math.floor(attemptCount) || 1));
+  return Math.min(15 * 60_000, 15_000 * 2 ** (n - 1));
+}

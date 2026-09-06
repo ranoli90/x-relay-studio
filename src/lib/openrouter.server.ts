@@ -1,3 +1,5 @@
+import { classifyFinishReason, classifyHttpStatus, type SafeErrorClass } from "@/lib/conversation/generate.ts";
+
 /**
  * OpenRouter is locked in — the key never leaves the server and is never
  * asked for in the UI. Production fails closed if OPENROUTER_API_KEY is missing.
@@ -31,16 +33,32 @@ export type ChatOptions = {
 export type ChatResult = {
   text: string;
   model: string;
+  finishReason?: string | null;
+  generationId?: string | null;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number } | null;
+  safeError?: SafeErrorClass | null;
 };
+
+export class ProviderError extends Error {
+  readonly status: number | null;
+  readonly safeError: SafeErrorClass;
+  constructor(message: string, safeError: SafeErrorClass, status: number | null = null) {
+    super(message);
+    this.name = "ProviderError";
+    this.status = status;
+    this.safeError = safeError;
+  }
+}
 
 function requireKey(): string {
   if (!OPENROUTER_API_KEY) {
-    throw new Error(
+    throw new ProviderError(
       "OPENROUTER_API_KEY is not set. Rewrites are disabled until the operator configures a key.",
+      "missing_key",
     );
   }
   if (!OPENROUTER_API_KEY.startsWith("sk-or-")) {
-    throw new Error("OPENROUTER_API_KEY does not look like an OpenRouter key.");
+    throw new ProviderError("OPENROUTER_API_KEY does not look like an OpenRouter key.", "unauthorized");
   }
   return OPENROUTER_API_KEY;
 }
@@ -65,6 +83,20 @@ function isModelUnavailable(status: number, body: string): boolean {
   );
 }
 
+function isTerminalGenerationError(err: unknown): boolean {
+  if (err instanceof ProviderError) {
+    return (
+      err.safeError === "refusal" ||
+      err.safeError === "truncated" ||
+      err.safeError === "empty" ||
+      err.safeError === "unauthorized" ||
+      err.safeError === "payment_required" ||
+      err.safeError === "missing_key"
+    );
+  }
+  return false;
+}
+
 export async function chatOpenRouter(opts: ChatOptions): Promise<ChatResult> {
   requireKey();
   const models = opts.models?.length ? opts.models : [DEFAULT_MODEL, ...FALLBACK_MODELS];
@@ -74,6 +106,7 @@ export async function chatOpenRouter(opts: ChatOptions): Promise<ChatResult> {
     try {
       return await chatOnce(model, opts, models);
     } catch (err) {
+      if (isTerminalGenerationError(err)) throw err;
       const message = err instanceof Error ? err.message : String(err);
       lastErr = message;
       if (!isModelUnavailable(0, message) && !message.includes("404")) {
@@ -136,8 +169,9 @@ async function chatOnce(model: string, opts: ChatOptions, models: string[]): Pro
 
     const raw = await res.text();
     if (!res.ok) {
+      const safe = classifyHttpStatus(res.status);
       if (isModelUnavailable(res.status, raw)) {
-        throw new Error(`model unavailable: ${model}`);
+        throw new ProviderError(`model unavailable: ${model}`, "unavailable", res.status);
       }
       let detail = `OpenRouter error ${res.status}`;
       try {
@@ -147,33 +181,74 @@ async function chatOnce(model: string, opts: ChatOptions, models: string[]): Pro
         if (raw) detail = raw.slice(0, 280);
       }
       if (res.status === 401 || res.status === 403) {
-        throw new Error("The OpenRouter key was rejected. It may be expired or out of credits.");
+        throw new ProviderError(
+          "The OpenRouter key was rejected. It may be expired or out of credits.",
+          "unauthorized",
+          res.status,
+        );
+      }
+      if (res.status === 402) {
+        throw new ProviderError("OpenRouter payment required.", "payment_required", res.status);
       }
       if (res.status === 429) {
-        throw new Error("X search is being rate-limited. Wait a few seconds and try again.");
+        throw new ProviderError("X search is being rate-limited. Wait a few seconds and try again.", "rate_limited", res.status);
       }
-      throw new Error(detail);
+      throw new ProviderError(detail, safe, res.status);
     }
 
     const data = JSON.parse(raw) as {
+      id?: string;
       model?: string;
-      choices?: { message?: { content?: string | Array<{ type?: string; text?: string }> } }[];
+      choices?: {
+        finish_reason?: string;
+        native_finish_reason?: string;
+        message?: { content?: string | Array<{ type?: string; text?: string }>; refusal?: string };
+      }[];
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
       error?: { message?: string };
     };
-    if (data.error?.message) throw new Error(data.error.message);
+    if (data.error?.message) throw new ProviderError(data.error.message, "unknown");
 
-    const content = data.choices?.[0]?.message?.content;
+    const choice = data.choices?.[0];
+    const content = choice?.message?.content;
     const text =
       typeof content === "string"
         ? content
         : Array.isArray(content)
           ? content.map((p) => p.text ?? "").join("")
           : "";
-    if (!text.trim()) throw new Error("The model returned an empty reply.");
-    return { text, model: data.model ?? model };
+    const finishReason = choice?.finish_reason ?? choice?.native_finish_reason ?? null;
+    const classified = classifyFinishReason(finishReason, text);
+    const usage = data.usage
+      ? {
+          promptTokens: data.usage.prompt_tokens,
+          completionTokens: data.usage.completion_tokens,
+          totalTokens: data.usage.total_tokens,
+        }
+      : null;
+    if (choice?.message?.refusal) {
+      throw new ProviderError("model refusal", "refusal");
+    }
+    if (classified === "truncated") {
+      throw new ProviderError("model truncated the reply", "truncated");
+    }
+    if (classified === "refusal") {
+      throw new ProviderError("model refused the completion", "refusal");
+    }
+    if (!text.trim() || classified === "empty") {
+      throw new ProviderError("The model returned an empty reply.", "empty");
+    }
+    return {
+      text,
+      model: data.model ?? model,
+      finishReason,
+      generationId: data.id ?? null,
+      usage,
+      safeError: null,
+    };
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      throw new Error("The search took too long. Try a tighter query.");
+      throw new ProviderError("The search took too long. Try a tighter query.", "timeout");
     }
     throw err;
   } finally {

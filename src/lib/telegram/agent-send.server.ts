@@ -172,17 +172,7 @@ export async function agentSendToPeer(opts: {
   });
 
   if (path === "not_live") {
-    try {
-      await commitLocal({
-        userId: opts.userId,
-        chatId: chat.id,
-        body,
-        authorName,
-      });
-    } catch (err) {
-      return { ok: false, reason: failReason(err, "invalid") };
-    }
-    return { ok: true, status: "not_live" };
+    return { ok: false, reason: "not_live" };
   }
 
   const { assertSessionLive, decryptSessionMaterial, saveSignedIn, persistMappedError } =
@@ -198,17 +188,7 @@ export async function agentSendToPeer(opts: {
     if (err instanceof TelegramError && err.code === "flood") {
       return { ok: false, reason: "flood" };
     }
-    try {
-      await commitLocal({
-        userId: opts.userId,
-        chatId: chat.id,
-        body,
-        authorName,
-      });
-    } catch (commitErr) {
-      return { ok: false, reason: failReason(commitErr, "invalid") };
-    }
-    return { ok: true, status: "not_live" };
+    return { ok: false, reason: "not_live" };
   }
 
   const peerId = chat.peerId!;

@@ -11,6 +11,8 @@
 | `TELEGRAM_MTPROTO_ENABLED` | default on | set `false` to kill the user client |
 | `REDDIT_ENABLED` | default on | set `false` to refuse OAuth start |
 | `CRON_ENABLED` | default on | set `false` to no-op `/api/cron/studio` |
-| Migrations | `npm run db:migrate` from a laptop or a release job | never from `vite build` |
+| Migrations | `npm run db:migrate` from a laptop or a release job | never from `vite build`. `0031_conversation_repair.sql` is additive and holds existing autopilot in `draft` until an operator reviews Auto-send. |
+
+Telegram conversation work is synthetic-only until the Telegram-to-external-AI permission gate (XR-048) is reviewed. Live partner sends, invoices, and paid provider probes are not authorized by the conversation-repair wave.
 
 Production boot fails closed without `DATABASE_URL` and `BETTER_AUTH_SECRET`.

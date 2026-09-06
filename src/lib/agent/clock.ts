@@ -48,19 +48,24 @@ function pad(n: number): string {
   return String(n).padStart(2, "0");
 }
 
-/** Draft contradicts ME claims + clock (gym+bed at 15:02, etc.). */
+/** Draft contradicts an approved first-person activity claim. Questions/negations/partner talk do not. */
 export function clockContradiction(draft: string, hour: number, claims: ClockSlot[]): string | null {
   const active = activeClaim(hour, claims);
+  if (!active) return null;
   const lower = draft.toLowerCase();
+  if (/\?/.test(draft)) return null;
+  if (/\b(not|don't|dont|never)\b/.test(lower) && /\b(gym|work|warehouse|bed|asleep)\b/.test(lower)) {
+    return null;
+  }
+  if (/^(how|what|why|who|where|when|did|does|is|are)\b/.test(lower)) return null;
   const mentions: { key: string; re: RegExp }[] = [
-    { key: "gym", re: /\b(gym|workout|just (got )?back from (the )?gym)\b/ },
-    { key: "sleep", re: /\b(in bed|just woke|asleep|napping|going to sleep)\b/ },
-    { key: "warehouse", re: /\b(at work|warehouse|on shift|clock(ed)? in)\b/ },
-    { key: "available", re: /\b(just got off|free all night|laying around)\b/ },
+    { key: "gym", re: /\b(i['’]?m (at )?(the )?gym|((i )?(just )?(got )?back from (the )?gym)|i('m| am) working out)\b/ },
+    { key: "sleep", re: /\b(i['’]?m (in bed|asleep|napping)|i just woke)\b/ },
+    { key: "warehouse", re: /\b(i['’]?m (at work|on (warehouse )?shift|at the warehouse)|i clock(ed)? in)\b/ },
+    { key: "available", re: /\b(i just got off|i['’]?m free all night)\b/ },
   ];
   const hit = mentions.find((m) => m.re.test(lower));
   if (!hit) return null;
-  if (!active) return null;
   const kind = active.kind.toLowerCase();
   if (hit.key === kind) return null;
   if (kind.includes(hit.key)) return null;

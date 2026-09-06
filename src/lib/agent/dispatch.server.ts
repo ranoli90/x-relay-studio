@@ -1,25 +1,26 @@
+import { classifyTransportResult } from "@/lib/conversation/outbox.ts";
+
 export type AutoDispatchInput = {
   userId: string;
   peer: string;
   chat?: string;
   body: string;
   agentName: string;
+  threadId?: string;
+  accountGeneration?: number;
+  consentEpoch?: number;
+  takeover?: boolean;
+  optOut?: boolean;
+  emergencyStop?: boolean;
 };
 
 export type AutoDispatchResult =
-  | { status: "ok" }
+  | { status: "ok"; telegramMessageId?: string }
   | { status: "not_live" }
+  | { status: "uncertain"; error: string }
   | { status: "fail"; error: string };
 
 type PeerSend = (opts: Record<string, unknown>) => Promise<unknown>;
-
-function asRecord(v: unknown): Record<string, unknown> | null {
-  return v && typeof v === "object" ? (v as Record<string, unknown>) : null;
-}
-
-function isNotLiveText(s: string): boolean {
-  return /not_live|skipped|preview|unlinked|auth_dead|chat_not_found|not onboarded/i.test(s);
-}
 
 function classifyThrown(err: unknown): AutoDispatchResult {
   const msg = err instanceof Error ? err.message : String(err);
@@ -30,26 +31,27 @@ function classifyThrown(err: unknown): AutoDispatchResult {
   ) {
     return { status: "not_live" };
   }
-  if (isNotLiveText(msg)) return { status: "not_live" };
-  return { status: "fail", error: msg.slice(0, 240) };
+  const outcome = classifyTransportResult(undefined, err);
+  if (outcome.kind === "not_live") return { status: "not_live" };
+  if (outcome.kind === "uncertain") return { status: "uncertain", error: outcome.reason };
+  return { status: "fail", error: outcome.kind === "failed_definitive" ? outcome.reason : msg.slice(0, 240) };
 }
 
 function classifyReturned(value: unknown): AutoDispatchResult {
-  if (value == null || value === true) return { status: "ok" };
-  if (value === false) return { status: "fail", error: "dispatch rejected" };
-  const rec = asRecord(value);
-  if (!rec) return { status: "ok" };
-  const status = String(rec.status ?? rec.reason ?? rec.code ?? "");
-  if (isNotLiveText(status)) return { status: "not_live" };
-  if (rec.ok === false) {
-    if (isNotLiveText(String(rec.reason ?? rec.error ?? ""))) return { status: "not_live" };
-    return { status: "fail", error: String(rec.error ?? rec.reason ?? "dispatch failed").slice(0, 240) };
+  const outcome = classifyTransportResult(value);
+  switch (outcome.kind) {
+    case "sent_confirmed":
+      return { status: "ok", telegramMessageId: outcome.transportMessageId };
+    case "not_live":
+      return { status: "not_live" };
+    case "uncertain":
+    case "local":
+    case "blocked":
+      return { status: "uncertain", error: outcome.reason };
+    case "failed_definitive":
+    case "canceled_stale":
+      return { status: "fail", error: outcome.reason };
   }
-  if (/fail|error/i.test(status) && !/ok|sent/i.test(status)) {
-    return { status: "fail", error: String(rec.error ?? rec.reason ?? status).slice(0, 240) };
-  }
-  if (rec.ok === true || /ok|sent/i.test(status) || status === "") return { status: "ok" };
-  return { status: "ok" };
 }
 
 async function loadPeerSend(): Promise<PeerSend | null> {
@@ -67,6 +69,9 @@ async function loadPeerSend(): Promise<PeerSend | null> {
 }
 
 export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<AutoDispatchResult> {
+  if (opts.emergencyStop) return { status: "fail", error: "emergency_stop" };
+  if (opts.takeover) return { status: "fail", error: "takeover" };
+  if (opts.optOut) return { status: "fail", error: "opt_out" };
   let send: PeerSend | null;
   try {
     send = await loadPeerSend();
@@ -81,6 +86,9 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
       chatId: opts.chat ?? opts.peer,
       body: opts.body,
       agentName: opts.agentName,
+      threadId: opts.threadId,
+      accountGeneration: opts.accountGeneration,
+      consentEpoch: opts.consentEpoch,
     });
     return classifyReturned(result);
   } catch (err) {

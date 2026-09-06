@@ -10,6 +10,9 @@ export type RouteCtx = {
   overflow: boolean;
   whale: boolean;
   firstOfferSent: boolean;
+  activeFulfillment?: boolean;
+  pendingQuestion?: string | null;
+  optOut?: boolean;
 };
 
 export function routeWorkflow(
@@ -18,11 +21,13 @@ export function routeWorkflow(
   ctx: RouteCtx,
 ): WorkflowId {
   if (safety.verdict === "kill") return "W15_HANDOFF";
+  if (safety.codes.includes("opt_out") || u.intent === "opt_out" || ctx.optOut) return "W15_HANDOFF";
   if (safety.verdict === "handoff") return "W15_HANDOFF";
   if (safety.codes.includes("irl")) return "W2_SAFETY";
   if (safety.codes.includes("injection")) return "W2_SAFETY";
   if (ctx.takeover) return "W15_HANDOFF";
   if (ctx.overflow) return "W16_QUEUE";
+  if (u.intent === "identity_ask") return "W5_DAY_ARC";
   if (u.mediaKind === "receipt" || u.intent === "receipt") return "W14_MEDIA_IN";
   if (u.intent === "payment_claim") return "W8_OFFER";
   if (u.intent === "are_you_real") return "W13_PROOF";
@@ -31,6 +36,9 @@ export function routeWorkflow(
   if (u.intent === "custom" || ctx.whale) return "W15_HANDOFF";
   if (u.intent === "objection_burned" || u.objection === "burned") return "W12_OBJECTION";
   if (u.intent === "objection_price" || u.objection === "price") return "W12_OBJECTION";
+  if (ctx.activeFulfillment && (u.intent === "greeting" || u.intent === "other" || u.intent === "aftercare")) {
+    return "W10_AFTERCARE";
+  }
   if (ctx.justDelivered) return "W10_AFTERCARE";
   if (u.gfeNamed || u.intent === "gfe_ask") return "W7_GFE";
   if (u.intent === "price_ask" || u.intent === "content_ask" || u.intent === "menu") return "W6_CLOSE_NOW";
@@ -39,7 +47,7 @@ export function routeWorkflow(
     return "W4_QUALIFY";
   }
   if (ctx.lifetimeCents > 0) return "W5_DAY_ARC";
-  if (u.intent === "greeting" && ctx.lifetimeCents === 0) return "W4_QUALIFY";
+  if (u.intent === "greeting") return "W5_DAY_ARC";
   return "W5_DAY_ARC";
 }
 
@@ -92,7 +100,7 @@ export function buildPlan(
         ...base,
         strategy: "relational",
         tactic: "memory_plus_loop",
-        reason: "Known fan. Trust up, one fact, one open loop.",
+        reason: "Known fan or ordinary chat. Answer the message. No forced pitch.",
         checkInHours: 4,
       };
     case "W6_CLOSE_NOW":

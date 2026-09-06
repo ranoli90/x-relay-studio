@@ -1,5 +1,13 @@
 import type { DiaryVoice } from "./types.ts";
 import type { PriceState } from "./pricing.ts";
+import {
+  applyFactEvents,
+  extractProposedFacts,
+  parseLegacyNotes,
+  usablePartnerFacts,
+  type StoredFact,
+} from "../conversation/facts.ts";
+import { spokenName } from "../conversation/names.ts";
 
 export type FanVibe = "sweet" | "direct" | "playful" | "quiet";
 
@@ -20,6 +28,7 @@ export type FanMemory = {
   facts: FanFacts;
   notes: string[];
   price: PriceState;
+  factLog: StoredFact[];
 };
 
 export type StoredFanNotes = {
@@ -31,16 +40,11 @@ export type StoredFanNotes = {
   lastPaidCents?: number;
   rejects?: number;
   ghosts?: number;
+  factLog?: StoredFact[];
 };
 
 const WANT =
   /\b(i want|i'm into|im into|looking for|can you|send me|do you do)\b(.{0,80})/i;
-
-const PET = /\b(?:my )?(?:dog|cat|puppy|kitten)(?:\s+(?:is )?(?:named|called))?\s+([A-Z][a-z]{1,12})\b/;
-const PET_LOWER = /\b(?:my )?(?:dog|cat|puppy|kitten)(?:\s+(?:is )?(?:named|called))?\s+([a-z]{2,12})\b/i;
-const JOB = /\b(?:i work (?:at|as)|i'm a|im a|my job is)\s+(.{2,40})/i;
-const CITY = /\b(?:i live in|i'm in|im in|from)\s+([A-Z][a-zA-Z]+(?:\s+[A-Z][a-zA-Z]+)?)/;
-const THEIR_NAME = /\b(?:my name is|i'm|im|this is)\s+([A-Z][a-z]{1,16})\b/;
 
 export function emptyMemory(lifetimeCents = 0): FanMemory {
   return {
@@ -50,30 +54,22 @@ export function emptyMemory(lifetimeCents = 0): FanMemory {
     facts: {},
     notes: [],
     price: { lastPaidCents: 0, rejects: 0, ghosts: 0, lifetimeCents },
+    factLog: [],
   };
 }
 
 export function extractFacts(text: string): FanFacts {
+  const proposed = extractProposedFacts(text, { voice: "inbound" });
   const facts: FanFacts = {};
-  const pet = PET.exec(text) || PET_LOWER.exec(text);
-  if (pet) facts.pet = pet[1].replace(/^./, (c) => c.toUpperCase());
-  const job = JOB.exec(text);
-  if (job) facts.job = job[1].replace(/[.!?].*$/, "").trim().slice(0, 40);
-  const city = CITY.exec(text);
-  if (city) facts.city = city[1].trim();
-  const name = THEIR_NAME.exec(text);
-  if (name && !/^(into|looking|just|not|so|the|here)$/i.test(name[1])) {
-    facts.theirName = name[1];
-  }
-  if (/\b(got burned|last girl|she took (the )?money|scammed)\b/i.test(text)) {
-    facts.burned = true;
-  }
-  if (/\b(too expensive|too much|cheaper|broke)\b/i.test(text)) {
-    facts.priceSensitive = true;
-  }
-  if (/\b(gfe|sext|video call|custom|dropbox)\b/i.test(text)) {
-    const like = text.match(/\b(gfe|sexting|video call|custom|dropbox)\b/i);
-    if (like) facts.likes = like[1].toLowerCase();
+  for (const p of proposed) {
+    if (p.assertion !== "asserted" || p.thirdParty || p.subject !== "partner") continue;
+    if (p.predicate === "pet") facts.pet = p.value;
+    if (p.predicate === "job") facts.job = p.value;
+    if (p.predicate === "city") facts.city = p.value;
+    if (p.predicate === "name") facts.theirName = p.value;
+    if (p.predicate === "burned") facts.burned = true;
+    if (p.predicate === "price_sensitive") facts.priceSensitive = true;
+    if (p.predicate === "likes") facts.likes = p.value;
   }
   return facts;
 }
@@ -91,15 +87,25 @@ export function mergeFacts(base: FanFacts, extra: FanFacts): FanFacts {
 }
 
 export function parseStoredNotes(raw: string | null | undefined): StoredFanNotes {
+  const parsed = parseLegacyNotes(raw);
   if (!raw) return {};
   try {
     const v = JSON.parse(raw) as StoredFanNotes;
-    if (v && typeof v === "object") return v;
+    if (!v || typeof v !== "object" || Array.isArray(v)) return { notes: parsed.notes };
+    return {
+      wants: parsed.wants,
+      needs: parsed.needs,
+      vibe: parsed.vibe ?? undefined,
+      notes: parsed.notes,
+      lastPaidCents: parsed.lastPaidCents,
+      rejects: parsed.rejects,
+      ghosts: parsed.ghosts,
+      factLog: Array.isArray(v.factLog) ? v.factLog : [],
+      facts: v.facts && typeof v.facts === "object" && !Array.isArray(v.facts) ? v.facts : {},
+    };
   } catch {
-    /* plain text notes from an older row */
-    return { notes: [raw.slice(0, 140)] };
+    return { notes: parsed.notes };
   }
-  return {};
 }
 
 export function serializeMemory(mem: FanMemory): string {
@@ -108,16 +114,18 @@ export function serializeMemory(mem: FanMemory): string {
     needs: mem.needs,
     vibe: mem.vibe,
     facts: mem.facts,
-    notes: mem.notes.slice(0, 8),
+    notes: mem.notes.slice(-12),
     lastPaidCents: mem.price.lastPaidCents,
     rejects: mem.price.rejects,
     ghosts: mem.price.ghosts,
+    factLog: mem.factLog.slice(-80),
   };
   return JSON.stringify(stored);
 }
 
 export function inferVibe(inbound: string, last: { role: string; body: string }[]): FanVibe {
-  const blob = `${inbound} ${last.map((m) => m.body).join(" ")}`.toLowerCase();
+  const partnerOnly = last.filter((m) => m.role === "fan" || m.role === "inbound").map((m) => m.body);
+  const blob = `${inbound} ${partnerOnly.join(" ")}`.toLowerCase();
   if (/\b(just tell me|how much|menu|rates?)\b/.test(blob)) return "direct";
   if (/\b(lol|lmao|haha)\b/.test(blob)) return "playful";
   if (inbound.trim().split(/\s+/).length <= 3) return "quiet";
@@ -136,59 +144,68 @@ export function buildFanMemory(opts: {
   mem.wants = stored.wants ?? null;
   mem.needs = stored.needs ?? null;
   mem.vibe = stored.vibe ?? "sweet";
-  mem.facts = stored.facts ?? {};
-  mem.notes = stored.notes ?? [];
+  mem.notes = Array.isArray(stored.notes) ? stored.notes.filter((n) => typeof n === "string") : [];
   if (typeof stored.lastPaidCents === "number") mem.price.lastPaidCents = stored.lastPaidCents;
   if (typeof stored.rejects === "number") mem.price.rejects = stored.rejects;
   if (typeof stored.ghosts === "number") mem.price.ghosts = stored.ghosts;
   mem.price.lifetimeCents = opts.lifetimeCents;
+  mem.factLog = Array.isArray(stored.factLog) ? stored.factLog : [];
+
+  const chronological = [...opts.diary].reverse();
+  let t = 0;
+  for (const line of chronological) {
+    const proposed = extractProposedFacts(line.body, {
+      voice: line.voice,
+      speaker: line.voice === "ME" ? "persona" : "partner",
+    });
+    mem.factLog = applyFactEvents(mem.factLog, proposed, `1970-01-01T00:00:${String(t).padStart(2, "0")}Z`);
+    t += 1;
+  }
+  mem.factLog = applyFactEvents(mem.factLog, extractProposedFacts(opts.inbound, { voice: "inbound" }), new Date().toISOString());
+
+  const usable = usablePartnerFacts(mem.factLog);
+  mem.facts = {
+    pet: usable.pet,
+    job: usable.job,
+    city: usable.city,
+    theirName: usable.name || (typeof stored.facts?.theirName === "string" ? stored.facts.theirName : undefined),
+    burned: usable.burned === "true" ? true : stored.facts?.burned,
+    priceSensitive: usable.price_sensitive === "true" ? true : stored.facts?.priceSensitive,
+    likes: usable.likes,
+  };
 
   const him = opts.diary.filter((d) => d.voice === "HIM").map((d) => d.body);
-  const us = opts.diary.filter((d) => d.voice === "US").map((d) => d.body);
-  for (const line of [...him, ...us, opts.inbound]) {
-    mem.facts = mergeFacts(mem.facts, extractFacts(line));
-  }
-  mem.notes = [...mem.notes, ...him].filter(Boolean).slice(0, 8);
+  mem.notes = [...mem.notes, ...him].filter((n) => typeof n === "string" && n.trim()).slice(-12);
 
-  const wantHit = WANT.exec(opts.inbound) || him.map((h) => WANT.exec(h)).find(Boolean);
+  const wantHit = WANT.exec(opts.inbound);
   if (wantHit) mem.wants = (wantHit[2] ?? wantHit[0]).trim().slice(0, 80);
 
   if (mem.facts.burned) mem.needs = mem.needs ?? "proof he will not get burned";
-  else if (/\b(lonely|need company|talk|check in)\b/i.test(`${opts.inbound} ${him.join(" ")}`)) {
-    mem.needs = "company / check-ins";
-  } else if (mem.facts.likes) {
-    mem.needs = mem.facts.likes;
-  }
+  else if (mem.facts.likes) mem.needs = mem.facts.likes;
 
   mem.vibe = inferVibe(opts.inbound, opts.last);
   if (mem.facts.priceSensitive) mem.price.rejects = Math.max(mem.price.rejects, 1);
-  if (opts.lifetimeCents > 0 && mem.price.lastPaidCents === 0) {
-    mem.price.lastPaidCents = Math.min(opts.lifetimeCents, 8000);
-  }
   return mem;
 }
 
-export function memoryPromptBlock(name: string, bible: string, mem: FanMemory): string {
-  const who =
-    mem.facts.theirName ||
-    (name && name.toLowerCase() !== "unknown" ? name : "this person");
+export function memoryPromptBlock(personaName: string, bible: string, mem: FanMemory): string {
+  const who = mem.facts.theirName || "this person";
+  const spoken = spokenName(who);
   const factBits = [
-    mem.facts.pet ? `pet=${mem.facts.pet}` : "",
-    mem.facts.job ? `job=${mem.facts.job}` : "",
-    mem.facts.city ? `city=${mem.facts.city}` : "",
-    mem.facts.burned ? "got burned before — do not rush money" : "",
+    mem.facts.pet ? `their pet=${mem.facts.pet}` : "",
+    mem.facts.job ? `their job=${mem.facts.job}` : "",
+    mem.facts.city ? `their city=${mem.facts.city}` : "",
+    mem.facts.burned ? "they said they got burned before — do not rush money" : "",
     mem.facts.priceSensitive ? "price-sensitive" : "",
-    mem.facts.likes ? `likes=${mem.facts.likes}` : "",
+    mem.facts.likes ? `they like=${mem.facts.likes}` : "",
   ].filter(Boolean);
   return [
-    `You are Maya. Stay Maya. Bible: ${bible}`,
-    `This chat is only with ${who}. Do not mix fans. Do not mention another fan.`,
+    `You write as ${personaName}. Bible (character, not live proof): ${bible}`,
+    `This chat is only with ${spoken ?? who}. Do not mix partners. Persona facts and partner facts are different.`,
     mem.wants ? `They want: ${mem.wants}` : "They have not named a want yet.",
-    mem.needs ? `They need: ${mem.needs}` : "Need still unknown.",
-    factBits.length ? `Facts you already know: ${factBits.join("; ")}` : "No durable facts yet.",
-    `Tone for them: ${mem.vibe}. Match it.`,
-    "Ask how they are. Use a known fact if you have one. Do not pitch unless they named content.",
-    "Never say a photo is $80. Customs start at $25.",
+    factBits.length ? `Accepted partner facts: ${factBits.join("; ")}` : "No durable partner facts yet.",
+    `Tone for them: ${mem.vibe}. Match it. A fact may be known without being said.`,
+    "Do not invent a job, pet, city, or live activity. Answer identity questions honestly.",
   ].join("\n");
 }
 

@@ -19,10 +19,12 @@ import {
   recordSync,
   saveChecks,
   saveSignedIn,
+  stampActivationWatermark,
 } from "./session.server";
 import { fetchMe, pullInbox } from "./mtproto.server";
 import { redactPreview } from "./preview";
 import { appendMessage, getAccount, getChatPeer, upsertLinkedAccount, upsertUserChat } from "./snapshot.server";
+import { classifyInboundAiStatus } from "./watch-status.ts";
 
 function scopedChatId(userId: string, dialogChatId: string): string {
   const uid = userId.replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 36);
@@ -31,7 +33,7 @@ function scopedChatId(userId: string, dialogChatId: string): string {
 
 const FRESH_MS = 45_000;
 
-/** Live session is enough. Watching is no longer a gate — autopilot is always on. */
+/** Live session is enough to pull history. Watching is not send authorization. */
 export function sessionReadyForBackgroundWatch(
   row:
     | {
@@ -40,10 +42,13 @@ export function sessionReadyForBackgroundWatch(
         has_session?: boolean | null;
         hasSession?: boolean | null;
         auth_dead?: boolean | null;
+        emergency_stop?: boolean | null;
+        background_run?: boolean | null;
       }
     | null
     | undefined,
 ): boolean {
+  if (row?.emergency_stop) return false;
   const enc = row?.session_enc;
   const hasEnc = typeof enc === "string" ? enc.length > 0 : Boolean(enc);
   const hasSession = Boolean(row?.has_session ?? row?.hasSession ?? hasEnc);
@@ -137,9 +142,20 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
       }
 
       const byChat = new Map(histories.map((h) => [h.chatId, h.messages]));
+      const watermark = row.activation_watermark ?? null;
+      let newestInbound: string | null = null;
       for (const [dialogChatId, pulled] of byChat) {
         const chatId = scopedChatId(userId, dialogChatId);
         for (const msg of pulled) {
+          const aiStatus = classifyInboundAiStatus({
+            fromSelf: msg.fromSelf,
+            createdAt: msg.createdAt,
+            watermark,
+          });
+          if (!msg.fromSelf && msg.createdAt) {
+            const iso = typeof msg.createdAt === "string" ? msg.createdAt : new Date(msg.createdAt).toISOString();
+            if (!newestInbound || iso > newestInbound) newestInbound = iso;
+          }
           const saved = await appendMessage({
             userId,
             chatId,
@@ -149,10 +165,13 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
             telegramMessageId: msg.telegramMessageId,
             createdAt: msg.createdAt,
             bumpUnread: false,
-            aiStatus: msg.fromSelf ? "outbound" : "queued",
+            aiStatus,
           });
           if (saved) ingested += 1;
         }
+      }
+      if (!watermark) {
+        await stampActivationWatermark(userId, newestInbound ? new Date(newestInbound) : new Date());
       }
 
       await recordSync({
