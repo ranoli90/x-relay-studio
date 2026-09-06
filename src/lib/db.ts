@@ -90,6 +90,8 @@ async function applyNeonMigrations(pool: import("pg").Pool): Promise<void> {
     for (;;) {
       try {
         await client.query("BEGIN");
+        await client.query("SET LOCAL statement_timeout = 0");
+        await client.query("SET LOCAL lock_timeout = 0");
         await client.query("SELECT pg_advisory_xact_lock($1)", [MIGRATION_LOCK_KEY]);
         const applied = (await client.query("SELECT name FROM _migrations")).rows.map(
           (r: { name: string }) => r.name,
@@ -122,7 +124,7 @@ async function applyNeonMigrations(pool: import("pg").Pool): Promise<void> {
   }
 }
 
-/** Read-only: production requests do not apply DDL. `scripts/migrate.mjs` is the release path. */
+/** Read-only assert. Kept for XRELAY_MIGRATE_ON_START=0. Default path applies DDL. */
 async function assertNeonSchema(pool: import("pg").Pool): Promise<void> {
   const client = await pool.connect();
   try {
@@ -165,10 +167,15 @@ function createNeonSql(): Promise<Sql> {
       void client.query("set lock_timeout = 8000");
     });
     try {
-      const migrateHere =
-        process.env.XRELAY_MIGRATE_ON_START === "1" || !isProductionRuntime();
-      if (migrateHere) await applyNeonMigrations(pool);
-      else await assertNeonSchema(pool);
+      // F09: vite build still never migrates. After Reddit #21 and kernel #31,
+      // production fail-closed on pending files and printed operator copy on
+      // BindDesk. Neon now applies pending files on first connect (same
+      // advisory lock as scripts/migrate.mjs). Set XRELAY_MIGRATE_ON_START=0
+      // to keep the old fail-closed assert.
+      const failClosed =
+        process.env.XRELAY_MIGRATE_ON_START === "0" && isProductionRuntime();
+      if (failClosed) await assertNeonSchema(pool);
+      else await applyNeonMigrations(pool);
     } catch (err) {
       globalRef.__pgPool__ = undefined;
       await pool.end().catch(() => undefined);

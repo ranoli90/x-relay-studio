@@ -2,8 +2,10 @@
 /**
  * Deploy-time database migrator (node-postgres, `pg`).
  *
- * Runs from `npm run db:migrate` — never from `vite build`.
- * Production deploys must migrate with a release credential before serving traffic.
+ * Runs from `npm run db:migrate` — never from `vite build` (F09).
+ * Production also applies pending files on first Neon connect
+ * (`src/lib/db.ts`, same advisory lock). Set XRELAY_MIGRATE_ON_START=0
+ * to fail-closed instead. This script remains the laptop/release path.
  * in ../migrations to DATABASE_URL. Each file is applied in one transaction and
  * recorded in a `_migrations` table, so it runs once and is safe to re-run.
  *
