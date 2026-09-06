@@ -84,6 +84,9 @@ export type JobRow = {
   handoff_from_mode?: string | null;
   retention_status?: string | null;
   retention_expires_at?: string | Date | null;
+  batch_id?: string | null;
+  batch_size?: number;
+  batch_index?: number;
 };
 
 export type CommandRow = {
@@ -176,6 +179,9 @@ export function toPublicJob(
     cleanupPending: Boolean(row.cleanup_summary && /pending/i.test(row.cleanup_summary)),
     permittedActions: actions,
     capabilities: caps,
+    batchId: row.batch_id ?? null,
+    batchSize: Number(row.batch_size ?? 1),
+    batchIndex: Number(row.batch_index ?? 1),
   };
 }
 
@@ -239,6 +245,11 @@ export async function createOrReuseDraft(
     expectedUsername?: string;
     idempotencyKey: string;
     body: unknown;
+    waitReason?: string | null;
+    batchId?: string | null;
+    batchSize?: number;
+    batchIndex?: number;
+    predecessorJobId?: string | null;
   },
 ): Promise<{ job: JobRow; reused: boolean }> {
   const hash = hashIdempotency(opts.userId, "createOnboarding", opts.idempotencyKey);
@@ -275,12 +286,26 @@ export async function createOrReuseDraft(
       const rows = await tx.query<JobRow>(
         `insert into reddit_onboarding_jobs (
            id, user_id, mode, intent, status, step, connection_state, version,
-           workflow_version, use_case_version, environment_id, expected_username
+           workflow_version, use_case_version, environment_id, expected_username,
+           wait_reason, batch_id, batch_size, batch_index, predecessor_job_id
          ) values (
            $1, $2, $3, $4, 'draft', 'consent', 'not_started', 1,
-           $5, 'data-api-v1', $6, $7
+           $5, 'data-api-v1', $6, $7, $8, $9, $10, $11, $12
          ) returning *`,
-        [id, opts.userId, opts.mode, opts.intent, redditWorkflowVersion(), environmentId(), opts.expectedUsername ?? null],
+        [
+          id,
+          opts.userId,
+          opts.mode,
+          opts.intent,
+          redditWorkflowVersion(),
+          environmentId(),
+          opts.expectedUsername ?? null,
+          opts.waitReason ?? null,
+          opts.batchId ?? null,
+          opts.batchSize ?? 1,
+          opts.batchIndex ?? 1,
+          opts.predecessorJobId ?? null,
+        ],
       );
       const job = rows[0];
       await tx.query(
@@ -297,7 +322,12 @@ export async function createOrReuseDraft(
         actorKind: "owner",
         actorId: opts.userId,
         jobVersion: 1,
-        details: { mode: opts.mode, intent: opts.intent },
+        details: {
+          mode: opts.mode,
+          intent: opts.intent,
+          batchId: opts.batchId ?? null,
+          batchIndex: opts.batchIndex ?? 1,
+        },
       });
       return { job, reused: false };
     });

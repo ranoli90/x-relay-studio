@@ -63,6 +63,7 @@ export async function loadOnboardingSchema(pg: PGlite): Promise<void> {
   await pg.exec(migrationSql("0028_reddit_onboarding_backfill.sql"));
   await pg.exec(migrationSql("0029_reddit_onboarding_lifecycle.sql"));
   await pg.exec(migrationSql("0030_reddit_browser_host.sql"));
+  await pg.exec(migrationSql("0032_reddit_create_batch.sql"));
 }
 
 export async function schema(pg: PGlite): Promise<void> {

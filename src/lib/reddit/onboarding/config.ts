@@ -52,14 +52,14 @@ export function redditRuntimeClass(): RedditRuntimeClass {
 }
 
 /**
- * Coordinator/UI. Default on only in local non-deployed development.
- * Vercel (including preview) and production stay off unless REDDIT_ONBOARDING_ENABLED is explicit.
- * Do not treat a hosted preview as locally testable.
+ * Coordinator/UI. On by default so Reddit opens to Create vs Connect.
+ * Operator can still set REDDIT_ONBOARDING_ENABLED=false to hide it.
+ * Assisted live signup stays a separate explicit flag.
  */
 export function redditOnboardingEnabled(): boolean {
   const explicit = readFlag("REDDIT_ONBOARDING_ENABLED");
   if (explicit !== undefined) return explicit;
-  return !isDeployed();
+  return true;
 }
 
 /** Live assisted execution. Always off unless explicitly enabled. */

@@ -8,7 +8,7 @@ Safety cleanup can run while new onboarding is disabled. Missing production depe
 
 | Flag | Default | Notes |
 |---|---|---|
-| `REDDIT_ONBOARDING_ENABLED` | local on; **off on every Vercel host** | Hosted preview is not automatically on. `VERCEL` is set there. Set explicit `true` on a named preview if you want the coordinator. |
+| `REDDIT_ONBOARDING_ENABLED` | default on | Coordinator: Create 1–5 accounts, or connect one you already have. Set `false` to hide it. |
 | `REDDIT_ASSISTED_SIGNUP_ENABLED` | off | Live browser signup. Fake provider cannot run this in production. Steel or local Chromium can. |
 | `REDDIT_REMOTE_OAUTH_ENABLED` | off | Ordinary OAuth stays in the owner’s browser. |
 | `REDDIT_DRAFTING_ENABLED` | off | OpenRouter draft composer. Never triggered by signup. |
@@ -29,7 +29,7 @@ The Grok preview turns Reddit setup **on locally only**:
 - `REDDIT_DRAFTING_ENABLED=true`
 - `REDDIT_EMAIL_BINDING_ENABLED=true`
 
-Automate / Manual / I already have an account all run against the local fixture page. CAPTCHA, terms, and final submit stay owner clicks on that page. No Reddit account is created. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
+Create 1–5 / Connect my own run against the local fixture page. CAPTCHA, terms, and final submit stay owner clicks on that page. No Reddit account is created. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
 
 Unattended Reddit signup is **not implemented and is forbidden**: no CAPTCHA solver, no terms auto-accept, no silent OAuth consent.
 
@@ -106,7 +106,7 @@ If resume is stuck: cancel the job (cleanup should release browser resources) an
 
 Use reconnect when tokens are missing, decrypt fails closed, or health says reauth.
 
-1. Owner uses **I already have a Reddit account** (or dashboard Add → existing).
+1. Owner uses **Connect my own** (or dashboard Add → connect).
 2. Ordinary OAuth runs in the owner’s browser. Do not move studio cookies into Browserbase.
 3. Reconnecting the same Reddit identity must not consume another slot of the cap of 8.
 4. After credential rotation, start a **new** attempt. Do not reuse an authorization code.

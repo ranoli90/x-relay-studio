@@ -40,7 +40,7 @@ This work is additive on that SHA. The repository was not reset.
 - `migrations/0027_reddit_onboarding.sql`, `migrations/0028_reddit_onboarding_backfill.sql`
 - `src/lib/reddit/onboarding/*` (types, machine, policy, store, vault, worker-core, fake + Browserbase adapters)
 - `src/workers/reddit-onboarding.ts` (Postgres worker; no-op without `DATABASE_URL`)
-- `src/components/reddit/onboarding/*` (chooser first: Automate, Manual, I already have an account)
+- `src/components/reddit/onboarding/*` (chooser first: Create 1–5, or Connect my own)
 - Dashboard Add opens the same coordinator
 
 ## Tests run
@@ -117,5 +117,23 @@ Preserved `feat/reddit-onboarding` (did not reset). Unattended Reddit signup rem
 `npm run test:reddit-onboarding`: **122 passed, 0 failed, 3 skipped**. Typecheck clean.
 
 Live Reddit, live Browserbase, production migrate, and merge/deploy were **not** done.
+
+## Continuation — Create 1–5 or Connect my own
+
+The Reddit door hid the chooser on hosted (`REDDIT_ONBOARDING_ENABLED` defaulted off) and buried connect as a ghost control. First screen is now two options:
+
+- **Create accounts** — pick 1–5. Five queues all five and starts making them in order (one live job; remaining slots on `reddit_onboarding_batches`).
+- **Connect my own** — ordinary OAuth.
+
+`0032_reddit_create_batch.sql` is additive. Unattended CAPTCHA/terms still not implemented. Assisted live start still needs a real browser host (Steel / local / Browserbase), not fake-on-Vercel.
+
+## Continuation — Create 1–5 or Connect my own
+
+The Reddit door hid the chooser on hosted (`REDDIT_ONBOARDING_ENABLED` defaulted off) and buried connect as a ghost control. First screen is now two options:
+
+- **Create accounts** — pick 1–5. Five queues all five and starts making them in order (one live job; remaining slots on `reddit_onboarding_batches`).
+- **Connect my own** — ordinary OAuth.
+
+`0032_reddit_create_batch.sql` is additive. Unattended CAPTCHA/terms still not implemented. Assisted live start still needs a real browser host (Steel / local / Browserbase), not fake-on-Vercel.
 
 

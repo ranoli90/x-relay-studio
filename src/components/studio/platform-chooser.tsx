@@ -75,8 +75,8 @@ export function PlatformChooser({ deskNumber }: { deskNumber: string }) {
           <PlatformCard
             to="/reddit"
             label="Reddit"
-            kicker="Connect"
-            description="Create the Reddit app, Allow, health, then inbox."
+            kicker="Create or connect"
+            description="Make 1–5 accounts, or connect one you already have."
             icon={<RedditTile />}
             accent
           />

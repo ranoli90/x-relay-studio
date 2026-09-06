@@ -49,23 +49,23 @@ describe("reddit onboarding environment defaults", () => {
     assert.equal(redditRuntimeClass(), "local");
   });
 
-  it("defaults off on Vercel preview because VERCEL is set", () => {
+  it("defaults on for Vercel preview so Create vs Connect is visible", () => {
     process.env.VERCEL = "1";
     process.env.VERCEL_ENV = "preview";
     process.env.NODE_ENV = "production";
     delete process.env.REDDIT_ONBOARDING_ENABLED;
-    assert.equal(redditOnboardingEnabled(), false);
+    assert.equal(redditOnboardingEnabled(), true);
     assert.equal(redditRuntimeClass(), "hosted_preview");
   });
 
-  it("defaults off in production and still honors explicit true", () => {
+  it("defaults on in production and still honors explicit false", () => {
     process.env.VERCEL = "1";
     process.env.VERCEL_ENV = "production";
     process.env.NODE_ENV = "production";
     delete process.env.REDDIT_ONBOARDING_ENABLED;
-    assert.equal(redditOnboardingEnabled(), false);
-    process.env.REDDIT_ONBOARDING_ENABLED = "true";
     assert.equal(redditOnboardingEnabled(), true);
+    process.env.REDDIT_ONBOARDING_ENABLED = "false";
+    assert.equal(redditOnboardingEnabled(), false);
   });
 
   it("keeps drafting, publish, email binding, assisted signup, and fixture off by default", () => {

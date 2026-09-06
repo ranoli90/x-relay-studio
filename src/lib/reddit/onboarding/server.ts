@@ -8,6 +8,7 @@ import {
   confirmSubmitSchema,
   continueManualSchema,
   createOnboardingSchema,
+  queueCreateAccountsSchema,
   eventsQuerySchema,
   jobIdQuerySchema,
   saveDetailsSchema,
@@ -48,7 +49,7 @@ import {
   assistedApprovalStatus,
   redditDraftingEnabled,
 } from "./config.ts";
-import { ASSISTANCE_CONSENT_VERSION, OnboardingError, REVIEWED_SIGNUP_URL } from "./types.ts";
+import { ASSISTANCE_CONSENT_VERSION, ACCOUNT_CAP, CREATE_BATCH_MAX, OnboardingError, REVIEWED_SIGNUP_URL } from "./types.ts";
 import { drainOwnedPreview, selectProvider } from "./worker-core.ts";
 import { isPlausibleOrigin, redirectUriFromOrigin } from "../origin.ts";
 import { getApp, insertTicket, purgeExpiredTickets, toPublicApp, countAccounts, listAccounts, cancelTicketsForJob, getAccount, upsertApp } from "../store.ts";
@@ -74,6 +75,19 @@ import {
   publicSteelHost,
   saveSteelHost,
 } from "./browser-host.ts";
+import {
+  cancelOpenBatch,
+  countLiveAccounts,
+  getBatch,
+  getOpenBatch,
+  hostedBrowserReady,
+  markBatchRunning,
+  queueCreateBatch,
+  recordBatchJobFinished,
+  recoverOpenBatch,
+  remainingCreateSlots,
+  toPublicBatch,
+} from "./batch.ts";
 
 async function sql(): Promise<SqlLike> {
   return getSql();
@@ -109,6 +123,44 @@ function throwOnboarding(err: unknown): never {
   throw err;
 }
 
+async function startQueuedCreateJob(
+  db: SqlLike,
+  opts: { userId: string; jobId: string; idempotencyKey: string },
+) {
+  let job = await requireJob(db, opts.userId, opts.jobId);
+  if (job.status === "draft") {
+    job = await saveDetails(db, {
+      userId: opts.userId,
+      jobId: job.id,
+      version: Number(job.version),
+      expectedUsername: job.expected_username ?? undefined,
+      retainContext: false,
+      retainPassword: false,
+      assistanceConsent: true,
+    });
+    const { job: queued } = await enqueueCommand(db, {
+      userId: opts.userId,
+      jobId: job.id,
+      version: Number(job.version),
+      kind: "start",
+      idempotencyKey: `${opts.idempotencyKey}:start`,
+      payload: { consentVersion: ASSISTANCE_CONSENT_VERSION },
+      operation: "startOnboarding",
+    });
+    job = await transitionJob(db, {
+      userId: opts.userId,
+      jobId: job.id,
+      expectedVersion: Number(queued.version),
+      event: { type: "OWNER_STARTS" },
+      eventType: "started",
+      patch: { reserved_browser_seconds: sessionBudgetSeconds() },
+    });
+    await drainOwnedPreview(db, opts.userId, job.id);
+    job = (await getJob(db, opts.userId, job.id)) || job;
+  }
+  return job;
+}
+
 export const getOnboardingBootstrap = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
@@ -124,17 +176,23 @@ export const getOnboardingBootstrap = createServerFn({ method: "GET" })
       appConfigured: Boolean(app),
       connectorEnabled: redditConnectorEnabled(),
     });
-    const job = redditOnboardingEnabled() ? await import("./store.ts").then((m) => m.getActiveJob(db, context.userId)) : null;
+    if (redditOnboardingEnabled()) {
+      await recoverOpenBatch(db, context.userId).catch(() => null);
+    }
+    const job = redditOnboardingEnabled() ? await getActiveJob(db, context.userId) : null;
+    const batch = redditOnboardingEnabled() ? await getOpenBatch(db, context.userId) : null;
     const resume = redditOnboardingEnabled() ? await listResumeCandidates(db, context.userId) : [];
     const previewUsesLocal = redditBrowserProvider() === "local" || onboardingFixtureEnabled();
     const steelHost = await publicSteelHost(db, context.userId, previewUsesLocal).catch(() =>
       emptySteelHost(previewUsesLocal),
     );
+    const accountCount = await countLiveAccounts(db, context.userId);
     return {
       onboardingEnabled: redditOnboardingEnabled(),
       assistedAvailable: caps.canStartAssistedSignup && redditAssistedSignupEnabled(),
       assistedUnavailableReason: assistedUnavailableReason(caps),
       currentJob: job ? toPublicJob(job, { appConfigured: Boolean(app) }) : null,
+      currentBatch: batch ? toPublicBatch(batch) : null,
       resumeCandidates: resume,
       capabilities: caps,
       sessionMaxSeconds: sessionBudgetSeconds(),
@@ -143,6 +201,10 @@ export const getOnboardingBootstrap = createServerFn({ method: "GET" })
       fixtureEnabled: onboardingFixtureEnabled(),
       provider: redditBrowserProvider(),
       steelHost,
+      accountCount,
+      accountCap: ACCOUNT_CAP,
+      remainingCreateSlots: remainingCreateSlots(accountCount),
+      createBatchMax: CREATE_BATCH_MAX,
     };
   });
 
@@ -164,6 +226,77 @@ export const createOnboarding = createServerFn({ method: "POST" })
       );
       const app = await getApp(context.userId);
       return toPublicJob(job, { appConfigured: Boolean(app) });
+    } catch (err) {
+      throwOnboarding(err);
+    }
+  });
+
+export const queueRedditCreates = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => queueCreateAccountsSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    if (!redditOnboardingEnabled()) throw new Error("Reddit onboarding is not enabled.");
+    try {
+      const db = await sql();
+      if (onboardingFixtureEnabled()) {
+        await seedFixtureApp(context.userId, "http://127.0.0.1:8080/api/reddit/oauth/callback");
+      }
+      const queued = await runOnboardingTx((tx) =>
+        queueCreateBatch(tx, {
+          userId: context.userId,
+          count: data.count,
+          idempotencyKey: data.idempotencyKey,
+        }),
+      );
+      let job = queued.job;
+      let batch = queued.batch;
+      const canStart = hostedBrowserReady();
+      if (canStart) {
+        job = await startQueuedCreateJob(db, {
+          userId: context.userId,
+          jobId: job.id,
+          idempotencyKey: data.idempotencyKey,
+        });
+        const running = await markBatchRunning(db, context.userId, batch.id);
+        if (running) batch = running;
+      }
+      if (onboardingFixtureEnabled()) {
+        let currentId = job.id;
+        let currentVersion = Number(job.version);
+        let currentUsername = job.expected_username;
+        for (;;) {
+          const finished = await finishIsolatedFixtureSignup(db, {
+            userId: context.userId,
+            jobId: currentId,
+            version: currentVersion,
+            username: currentUsername,
+          });
+          job = finished.job;
+          const advanced = await recordBatchJobFinished(db, {
+            userId: context.userId,
+            job: finished.job,
+            outcome: "completed",
+            idempotencyKey: `${data.idempotencyKey}:advance:${finished.job.batch_index ?? 0}`,
+          });
+          if (advanced.batch) batch = advanced.batch;
+          if (!advanced.nextJob) break;
+          const next = await startQueuedCreateJob(db, {
+            userId: context.userId,
+            jobId: advanced.nextJob.id,
+            idempotencyKey: `${data.idempotencyKey}:${advanced.nextJob.batch_index ?? 0}`,
+          });
+          currentId = next.id;
+          currentVersion = Number(next.version);
+          currentUsername = next.expected_username;
+        }
+      }
+      const app = await getApp(context.userId);
+      const freshBatch = (await getBatch(db, context.userId, batch.id)) ?? batch;
+      return {
+        job: toPublicJob(job, { appConfigured: Boolean(app) }),
+        batch: toPublicBatch(freshBatch),
+        started: canStart,
+      };
     } catch (err) {
       throwOnboarding(err);
     }
@@ -525,8 +658,29 @@ export const confirmConnectedIdentity = createServerFn({ method: "POST" })
         event: { type: "HEALTH_USABLE_OWNER_CONFIRMS" },
         eventType: "connection_finalized",
       });
+      const advanced = await recordBatchJobFinished(db, {
+        userId: context.userId,
+        job: next,
+        outcome: "completed",
+        idempotencyKey: `batch-advance:${next.id}`,
+      });
+      if (advanced.nextJob && hostedBrowserReady()) {
+        await startQueuedCreateJob(db, {
+          userId: context.userId,
+          jobId: advanced.nextJob.id,
+          idempotencyKey: `batch-start:${advanced.nextJob.id}`,
+        });
+        if (advanced.batch) await markBatchRunning(db, context.userId, advanced.batch.id);
+      }
       const app = await getApp(context.userId);
-      return toPublicJob(next, { appConfigured: Boolean(app) });
+      const latest = advanced.nextJob
+        ? (await getJob(db, context.userId, advanced.nextJob.id)) || advanced.nextJob
+        : next;
+      return {
+        job: toPublicJob(next, { appConfigured: Boolean(app) }),
+        nextJob: advanced.nextJob ? toPublicJob(latest, { appConfigured: Boolean(app) }) : null,
+        batch: advanced.batch ? toPublicBatch(advanced.batch) : null,
+      };
     } catch (err) {
       throwOnboarding(err);
     }
@@ -565,6 +719,7 @@ export const cancelOnboarding = createServerFn({ method: "POST" })
             target: job.provider_session_id,
           });
         }
+        await cancelOpenBatch(tx, context.userId, cancelled);
         return cancelled;
       });
       const db = await sql();

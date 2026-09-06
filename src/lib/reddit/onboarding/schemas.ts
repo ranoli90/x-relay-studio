@@ -28,6 +28,14 @@ export const createOnboardingSchema = z
   })
   .strict();
 
+export const queueCreateAccountsSchema = z
+  .object({
+    count: z.number().int().min(1).max(5),
+    idempotencyKey: idempotencyKeySchema,
+    correlationId: correlationIdSchema,
+  })
+  .strict();
+
 export const autoIsolatedOnboardingSchema = z
   .object({
     mode: z.enum(JOB_MODES),

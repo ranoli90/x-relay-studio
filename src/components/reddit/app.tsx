@@ -2,10 +2,8 @@ import { Link } from "@tanstack/react-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getBootstrap } from "@/lib/reddit/server";
 import type { RedditAccountPublic, RedditAppPublic } from "@/lib/reddit/types";
-import { AddAccount } from "./add-account";
 import { Dashboard } from "./dashboard";
 import { HealthConfirm } from "./health-confirm";
-import { SetupApp } from "./setup-app";
 import { DoorSkeleton } from "@/components/screen-stack";
 import { OnboardingCoordinator } from "./onboarding/coordinator";
 import { getOnboardingBootstrap } from "@/lib/reddit/onboarding/server";
@@ -31,6 +29,7 @@ export function RedditApp() {
   const [pendingId, setPendingId] = useState<string | null>(cached?.pendingId ?? null);
   const [addingFirst, setAddingFirst] = useState(cached?.addingFirst ?? false);
   const [onboardingOn, setOnboardingOn] = useState(true);
+  const [openBatch, setOpenBatch] = useState(false);
   const lastUser = useRef(userId);
 
   const reload = useCallback(async () => {
@@ -50,6 +49,12 @@ export function RedditApp() {
     setPendingId(boot.pendingAccountId);
     setAddingFirst(addingFirstNext);
     setOnboardingOn(onboarding.onboardingEnabled);
+    setOpenBatch(
+      Boolean(
+        onboarding.currentBatch &&
+          (onboarding.currentBatch.status === "queued" || onboarding.currentBatch.status === "running"),
+      ),
+    );
     setLoading(false);
   }, [userId]);
 
@@ -69,11 +74,9 @@ export function RedditApp() {
     return <DoorSkeleton />;
   }
 
-  if (onboardingOn && (!app.configured || addingFirst || accounts.every((a) => !a.onboardedAt))) {
+  if (openBatch || !app.configured || addingFirst || accounts.every((a) => !a.onboardedAt)) {
     return <OnboardingCoordinator onFinished={() => void reload()} />;
   }
-
-  if (!app.configured) return <SetupApp onSaved={() => void reload()} />;
 
   if (!onboardingOn) {
     const pending = accounts.find((a) => a.id === pendingId && !a.onboardedAt);
@@ -88,10 +91,6 @@ export function RedditApp() {
         />
       );
     }
-  }
-
-  if (addingFirst || accounts.every((a) => !a.onboardedAt)) {
-    return <AddAccount onConnected={() => void reload()} />;
   }
 
   return <Dashboard accounts={accounts} onChanged={() => void reload()} />;

@@ -131,6 +131,7 @@ export const ASSISTANCE_CONSENT_VERSION = "reddit-onboarding-assistance-v1";
 export const USE_CASE_VERSION = "data-api-v1";
 export const WORKFLOW_ID = "email-signup";
 export const ACCOUNT_CAP = 8;
+export const CREATE_BATCH_MAX = 5;
 export const MAX_MODEL_CALLS = 8;
 export const DEFAULT_SESSION_SECONDS = 900;
 export const DEFAULT_GLOBAL_CONCURRENCY = 3;
@@ -201,6 +202,9 @@ export type OnboardingJobPublic = {
   cleanupPending: boolean;
   permittedActions: PermittedAction[];
   capabilities: CapabilityMap;
+  batchId: string | null;
+  batchSize: number;
+  batchIndex: number;
 };
 
 export type OnboardingEventPublic = {
@@ -210,6 +214,18 @@ export type OnboardingEventPublic = {
   occurredAt: string;
   jobVersion: number;
   details: Record<string, string | number | boolean | null>;
+};
+
+export type BatchStatus = "queued" | "running" | "completed" | "cancelled";
+
+export type OnboardingBatchPublic = {
+  id: string;
+  size: number;
+  completedCount: number;
+  failedCount: number;
+  currentIndex: number;
+  status: BatchStatus;
+  currentJobId: string | null;
 };
 
 export type ResumeCandidate = {
@@ -227,6 +243,7 @@ export type OnboardingBootstrap = {
   assistedAvailable: boolean;
   assistedUnavailableReason: string | null;
   currentJob: OnboardingJobPublic | null;
+  currentBatch: OnboardingBatchPublic | null;
   resumeCandidates: ResumeCandidate[];
   capabilities: CapabilityMap;
   sessionMaxSeconds: number;
@@ -235,6 +252,10 @@ export type OnboardingBootstrap = {
   fixtureEnabled: boolean;
   provider: BrowserProviderName;
   steelHost: SteelHostPublic;
+  accountCount: number;
+  accountCap: number;
+  remainingCreateSlots: number;
+  createBatchMax: number;
 };
 
 export type SteelHostPublic = {

@@ -6,7 +6,7 @@ This feature is additive. Existing Reddit dashboard, OAuth, and unrelated platfo
 
 Production defaults:
 
-- `REDDIT_ONBOARDING_ENABLED` off (or unset in production)
+- `REDDIT_ONBOARDING_ENABLED=false` hides Create vs Connect and restores the previous Setup app → Connect → Health path if any leftover door still uses it. Connected accounts remain.
 - `REDDIT_ASSISTED_SIGNUP_ENABLED` off
 - `REDDIT_BROWSER_PROVIDER=fake` is rejected for assisted signup in production
 

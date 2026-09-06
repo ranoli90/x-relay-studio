@@ -30,8 +30,10 @@ import {
   confirmSignupSubmission,
   getOnboardingControlView,
   autoRunIsolatedOnboarding,
+  queueRedditCreates,
 } from "@/lib/reddit/onboarding/server";
 import type {
+  OnboardingBatchPublic,
   OnboardingBootstrap,
   OnboardingEventPublic,
   OnboardingJobPublic,
@@ -77,12 +79,12 @@ export function OnboardingCoordinator({
 }) {
   const [boot, setBoot] = useState<OnboardingBootstrap | null>(null);
   const [job, setJob] = useState<OnboardingJobPublic | null>(null);
+  const [batch, setBatch] = useState<OnboardingBatchPublic | null>(null);
   const [events, setEvents] = useState<OnboardingEventPublic[]>([]);
   const [screen, setScreen] = useState<Screen>("chooser");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [username, setUsername] = useState("");
-  const [selected, setSelected] = useState<"assisted" | "manual" | null>(null);
   const [pendingAccount, setPendingAccount] = useState<RedditAccountPublic | null>(null);
   const [controlView, setControlView] = useState<ControlViewState | null>(null);
   const [steelBusy, setSteelBusy] = useState(false);
@@ -105,9 +107,11 @@ export function OnboardingCoordinator({
   const loadBoot = useCallback(async () => {
     const next = await getOnboardingBootstrap();
     setBoot(next);
+    setBatch(next.currentBatch);
     if (
       next.fixtureEnabled &&
       next.currentJob &&
+      !next.currentBatch &&
       !autoFinishTried.current &&
       !["completed", "cancelled", "failed", "blocked", "expired"].includes(next.currentJob.status)
     ) {
@@ -258,7 +262,6 @@ export function OnboardingCoordinator({
       }
       opKeys.current.delete(op);
       setJob(next);
-      setSelected(mode);
       setScreen(
         intent === "connect_existing"
           ? boot?.appConfigured || boot?.fixtureEnabled
@@ -268,6 +271,36 @@ export function OnboardingCoordinator({
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start setup.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function queueCreates(count: number) {
+    setBusy(true);
+    setError(null);
+    const op = `queue:${count}`;
+    const keys = rememberKey(opKeys.current, op);
+    try {
+      const queued = await queueRedditCreates({
+        data: {
+          count,
+          idempotencyKey: keys.idempotencyKey,
+          correlationId: keys.correlationId,
+        },
+      });
+      opKeys.current.delete(op);
+      setJob(queued.job);
+      setBatch(queued.batch);
+      if (queued.job.expectedUsername) setUsername(queued.job.expectedUsername);
+      if (queued.batch.status === "completed") {
+        setScreen("result");
+        onFinished();
+        return;
+      }
+      setScreen(screenFor(queued.job, Boolean(boot?.appConfigured || boot?.fixtureEnabled)));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not queue those accounts.");
     } finally {
       setBusy(false);
     }
@@ -447,14 +480,14 @@ export function OnboardingCoordinator({
           </div>
         ) : null}
         <ModeSelector
-          assistedAvailable={boot.assistedAvailable}
-          assistedReason={boot.assistedUnavailableReason}
-          selected={selected}
-          onSelect={(mode) => {
-            setSelected(mode);
-            void begin(mode, "create");
-          }}
-          onExisting={() => void begin("manual", "connect_existing")}
+          remainingSlots={boot.remainingCreateSlots}
+          accountCount={boot.accountCount}
+          accountCap={boot.accountCap}
+          createMax={boot.createBatchMax}
+          busy={busy}
+          error={error}
+          onCreate={(count) => void queueCreates(count)}
+          onConnect={() => void begin("manual", "connect_existing")}
         />
         {boot.steelHost ? (
         <SteelHostCard
@@ -510,6 +543,7 @@ export function OnboardingCoordinator({
     return frame(
       <OnboardingProgress
         job={job}
+        batch={batch}
         events={events}
         busy={busy}
         fixture={Boolean(boot.fixtureEnabled)}
@@ -701,7 +735,7 @@ export function OnboardingCoordinator({
             if (job) {
               try {
                 const fresh = await getOnboardingJob({ data: { jobId: job.id } });
-                const next = await confirmConnectedIdentity({
+                const confirmed = await confirmConnectedIdentity({
                   data: {
                     jobId: fresh.id,
                     version: fresh.version,
@@ -710,7 +744,15 @@ export function OnboardingCoordinator({
                     correlationId: rememberKey(opKeys.current, `confirm:${fresh.id}`).correlationId,
                   },
                 });
-                setJob(next);
+                if (confirmed.batch) setBatch(confirmed.batch);
+                if (confirmed.nextJob) {
+                  setJob(confirmed.nextJob);
+                  if (confirmed.nextJob.expectedUsername) setUsername(confirmed.nextJob.expectedUsername);
+                  setPendingAccount(null);
+                  setScreen(screenFor(confirmed.nextJob, Boolean(boot?.appConfigured || boot?.fixtureEnabled)));
+                  return;
+                }
+                setJob(confirmed.job);
               } catch (e: unknown) {
                 setError(e instanceof Error ? e.message : "Could not finish setup confirmation.");
                 return;
@@ -733,6 +775,7 @@ export function OnboardingCoordinator({
     return frame(
       <OnboardingResult
         job={job}
+        batch={batch}
         onDashboard={onFinished}
         onManage={() => setScreen("saved")}
         onLater={onFinished}
@@ -755,7 +798,11 @@ function screenFor(job: OnboardingJobPublic, appConfigured: boolean): Screen {
   if (job.step === "oauth") return appConfigured ? "oauth" : "app";
   if (job.step === "app_access" || job.step === "app_credentials") return appConfigured ? "oauth" : "app";
   if (job.controlOwner === "user") return "control";
-  if (job.status === "draft") return job.intent === "connect_existing" ? (appConfigured ? "oauth" : "app") : "details";
+  if (job.status === "draft") {
+    if (job.intent === "connect_existing") return appConfigured ? "oauth" : "app";
+    if (job.batchId) return "progress";
+    return "details";
+  }
   return "progress";
 }
 
