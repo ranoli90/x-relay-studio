@@ -1,5 +1,6 @@
 import { classifyTransportResult } from "../conversation/outbox.ts";
 import { preSendFence } from "../conversation/mirror.ts";
+import { revalidateForSend, type FinalState } from "../operator/state.ts";
 
 export type AutoDispatchInput = {
   userId: string;
@@ -13,6 +14,7 @@ export type AutoDispatchInput = {
   takeover?: boolean;
   optOut?: boolean;
   emergencyStop?: boolean;
+  captured?: FinalState;
 };
 
 export type AutoDispatchResult =
@@ -46,13 +48,31 @@ function classifyReturned(value: unknown): AutoDispatchResult {
     case "not_live":
       return { status: "not_live" };
     case "uncertain":
+      return { status: "uncertain", error: outcome.reason };
     case "local":
     case "blocked":
-      return { status: "uncertain", error: outcome.reason };
     case "failed_definitive":
     case "canceled_stale":
       return { status: "fail", error: outcome.reason };
   }
+}
+
+function capturedFromOpts(opts: AutoDispatchInput): FinalState {
+  if (opts.captured) return opts.captured;
+  return {
+    accountGeneration: opts.accountGeneration ?? 1,
+    consentEpoch: opts.consentEpoch ?? 1,
+    permissionRevision: 1,
+    businessRevision: null,
+    emergencyStop: Boolean(opts.emergencyStop),
+    takeover: Boolean(opts.takeover),
+    optOut: Boolean(opts.optOut),
+    automationMode: "approved_auto",
+    processingPermission: true,
+    conversationPermitted: true,
+    accountLive: true,
+    assetApprovalOk: true,
+  };
 }
 
 async function loadPeerSend(): Promise<PeerSend | null> {
@@ -79,8 +99,32 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
     return classifyThrown(err);
   }
   if (!send) return { status: "not_live" };
-  const fenceAgain = preSendFence(opts);
-  if (!fenceAgain.allow) return { status: "fail", error: fenceAgain.reason };
+
+  const captured = capturedFromOpts(opts);
+  let live: FinalState;
+  try {
+    const { loadLiveFinalState } = await import("../operator/persist.server.ts");
+    live = await loadLiveFinalState(opts.userId, opts.threadId);
+  } catch {
+    return { status: "fail", error: "state_unavailable" };
+  }
+  const check = revalidateForSend(captured, live);
+  if (!check.allow) return { status: "fail", error: check.reason };
+
+  try {
+    const { recordDispatchAttempt } = await import("../operator/persist.server.ts");
+    await recordDispatchAttempt({
+      userId: opts.userId,
+      conversationId: opts.threadId ?? opts.chat ?? opts.peer,
+      body: opts.body,
+      captured,
+      live,
+      status: "sending",
+    }).catch(() => undefined);
+  } catch {
+    /* send_attempts table may be pending */
+  }
+
   try {
     const result = await send({
       userId: opts.userId,
@@ -89,13 +133,55 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
       body: opts.body,
       agentName: opts.agentName,
       threadId: opts.threadId,
-      accountGeneration: opts.accountGeneration,
-      consentEpoch: opts.consentEpoch,
-      takeover: opts.takeover,
-      optOut: opts.optOut,
-      emergencyStop: opts.emergencyStop,
+      accountGeneration: captured.accountGeneration,
+      consentEpoch: captured.consentEpoch,
+      permissionRevision: captured.permissionRevision,
+      businessRevision: captured.businessRevision,
+      takeover: captured.takeover,
+      optOut: captured.optOut,
+      emergencyStop: captured.emergencyStop,
+      captured,
     });
-    return classifyReturned(result);
+    const classified = classifyReturned(result);
+    if (classified.status === "ok") {
+      const again = await import("../operator/persist.server.ts")
+        .then((m) => m.loadLiveFinalState(opts.userId, opts.threadId))
+        .catch(() => null);
+      if (again) {
+        const post = revalidateForSend(captured, again);
+        if (!post.allow) {
+          try {
+            const { finishDispatchAttempt } = await import("../operator/persist.server.ts");
+            await finishDispatchAttempt(opts.userId, opts.threadId ?? opts.peer, "uncertain", post.reason);
+          } catch {
+            /* ignore */
+          }
+          // Transport may have delivered. Uncertain blocks retry (TG-15) and is not confirmed (TG-14).
+          return { status: "uncertain", error: post.reason };
+        }
+      }
+    }
+    try {
+      const { finishDispatchAttempt } = await import("../operator/persist.server.ts");
+      const status =
+        classified.status === "ok"
+          ? "confirmed"
+          : classified.status === "uncertain"
+            ? "uncertain"
+            : classified.status === "not_live"
+              ? "failed"
+              : "failed";
+      await finishDispatchAttempt(
+        opts.userId,
+        opts.threadId ?? opts.peer,
+        status,
+        classified.status === "ok" ? null : "error" in classified ? classified.error : classified.status,
+        classified.status === "ok" ? classified.telegramMessageId : undefined,
+      );
+    } catch {
+      /* ignore */
+    }
+    return classified;
   } catch (err) {
     return classifyThrown(err);
   }

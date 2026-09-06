@@ -102,6 +102,9 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
       const account = await getAccount(userId);
       const selfId = account?.telegramUserId ?? 0;
       const focusPeer = opts?.chatId ? await getChatPeer(userId, opts.chatId) : null;
+      const preferChatIds = await import("@/lib/operator/persist.server")
+        .then((m) => m.pickIngestPeerIds(userId))
+        .catch(() => [] as string[]);
       const { dialogs, histories, session } = await pullInbox({
         apiId: material.apiId,
         apiHash: material.apiHash,
@@ -109,10 +112,9 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
         selfId,
         dialogLimit: 40,
         historyLimit: opts?.historyLimit ?? 40,
-        // XR-041: a small fair set per poll instead of only dialogs[0].
-        // Bounded. Flood wait and session cooldowns still apply; do not raise this
-        // to chase completeness or bypass Telegram backpressure.
+        // XR-041 / operator ingest: a small fair set per poll instead of only dialogs[0].
         historyChats: fairHistoryChats(skipDialogs),
+        preferChatIds,
         skipPhotoPeers: [],
         photoLimit: 0,
         focusChatId: opts?.chatId ?? null,
@@ -122,19 +124,28 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
       });
       if (session !== material.session) await saveSignedIn({ userId, session, generation });
 
-      const openId = opts?.chatId ?? null;
+      const acks = await (await import("@/lib/db")).getSql()
+        .then((sql) =>
+          sql.query<{ conversation_id: string; last_visible_at: string | Date }>(
+            `select conversation_id, last_visible_at from conversation_read_acks where user_id = $1`,
+            [userId],
+          ),
+        )
+        .catch(() => [] as { conversation_id: string; last_visible_at: string | Date }[]);
+      const ackAt = new Map(
+        acks.map((a) => [a.conversation_id, new Date(a.last_visible_at).getTime()]),
+      );
       for (const dialog of dialogs) {
         const chatId = scopedChatId(userId, dialog.chatId);
-        const open = Boolean(
-          openId &&
-            (openId === chatId || openId.endsWith(dialog.chatId) || openId.includes(dialog.peerId)),
-        );
+        const lastAt = dialog.lastAt ? Date.parse(dialog.lastAt) : 0;
+        const seen = ackAt.get(chatId) ?? 0;
+        const keepRead = seen > 0 && lastAt > 0 && seen >= lastAt;
         await upsertUserChat({
           id: chatId,
           userId,
           title: dialog.title,
           peerId: dialog.peerId,
-          unread: open ? 0 : dialog.unread,
+          unread: keepRead ? 0 : dialog.unread,
           pinned: dialog.pinned,
           muted: dialog.muted,
           lastPreview: redactPreview(dialog.lastPreview),

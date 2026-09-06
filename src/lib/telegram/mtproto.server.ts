@@ -337,6 +337,7 @@ export async function pullInbox(opts: Creds & {
   dialogLimit?: number;
   historyLimit?: number;
   historyChats?: number;
+  preferChatIds?: string[];
   skipPhotoPeers?: string[];
   photoLimit?: number;
   focusChatId?: string | null;
@@ -395,6 +396,13 @@ export async function pullInbox(opts: Creds & {
     }
 
     const focus = opts.focusChatId ? String(opts.focusChatId).replace(/^.*_/, "") : null;
+    const preferred = new Set((opts.preferChatIds ?? []).map((id) => String(id)));
+    const ranked = preferred.size
+      ? [
+          ...dialogs.filter((d) => preferred.has(d.chatId) || preferred.has(d.peerId)),
+          ...dialogs.filter((d) => !preferred.has(d.chatId) && !preferred.has(d.peerId)),
+        ]
+      : dialogs;
     const targets = focus
       ? (dialogs.filter((d) => d.chatId === focus || d.peerId === focus).length
           ? dialogs.filter((d) => d.chatId === focus || d.peerId === focus)
@@ -407,7 +415,7 @@ export async function pullInbox(opts: Creds & {
                 peerKind: opts.focusPeerKind ?? peerKindFromId(focus),
               } as InboxDialog,
             ])
-      : dialogs.slice(0, Math.max(0, opts.historyChats ?? 1));
+      : ranked.slice(0, Math.max(0, opts.historyChats ?? 1));
 
     for (const t of targets) {
       if (!t.peerId) continue;

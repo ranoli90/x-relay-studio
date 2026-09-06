@@ -19,6 +19,7 @@ import type {
 } from "./types";
 
 type View = "list" | "chat" | "profile" | "edit" | "settings" | "peer";
+export type ShellTab = "inbox" | "business" | "media" | "settings";
 
 export type TelegramUiErrorSource = "local" | "provider";
 
@@ -31,6 +32,7 @@ type TelegramState = {
   errorSource: TelegramUiErrorSource | null;
   snapshot: TelegramSnapshot | null;
   view: View;
+  shellTab: ShellTab;
   selectedChatId: string | null;
   messages: TelegramMessage[];
   messageCache: Record<string, TelegramMessage[]>;
@@ -47,6 +49,8 @@ type TelegramState = {
   send: (body: string) => Promise<boolean>;
   setDraft: (chatId: string, value: string) => void;
   setView: (view: View) => void;
+  setShellTab: (tab: ShellTab) => void;
+  ackVisibleChat: (chatId: string) => Promise<void>;
   setProfileOpen: (open: boolean) => void;
   setFolder: (folder: TelegramFolder) => void;
   setNotify: (on: boolean) => void;
@@ -102,6 +106,8 @@ function emptyLinkedSnapshot(configured: boolean, generation: number): TelegramS
   };
 }
 
+let draftTimers: Record<string, number> = {};
+
 export const useTelegram = create<TelegramState>((set, get) => {
   function epoch() {
     return { generation: get().generation, selectedChatId: get().selectedChatId };
@@ -115,6 +121,7 @@ export const useTelegram = create<TelegramState>((set, get) => {
       messageCache: {} as Record<string, TelegramMessage[]>,
       drafts: {} as Record<string, string>,
       view: "list" as const,
+      shellTab: "inbox" as const,
       sending: false,
       sendingChatId: null as string | null,
       messagesLoading: false,
@@ -132,6 +139,7 @@ export const useTelegram = create<TelegramState>((set, get) => {
     errorSource: null,
     snapshot: null,
     view: "list",
+    shellTab: "inbox",
     selectedChatId: null,
     messages: [],
     messageCache: {},
@@ -143,6 +151,38 @@ export const useTelegram = create<TelegramState>((set, get) => {
     generation: 0,
 
     setView: (view) => set({ view, error: null, errorSource: null }),
+    setShellTab: (shellTab) =>
+      set({
+        shellTab,
+        view: shellTab === "settings" ? "settings" : shellTab === "inbox" ? get().view : "list",
+        error: null,
+        errorSource: null,
+      }),
+    ackVisibleChat: async (chatId) => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      try {
+        const { ackVisibleFn } = await import("@/lib/operator/fns");
+        const result = await ackVisibleFn({
+          data: {
+            conversationId: chatId,
+            conversationVisible: true,
+            documentVisible: true,
+            chatListOnly: false,
+          },
+        });
+        if (result.unread !== 0) return;
+        const snapshot = get().snapshot;
+        if (!snapshot) return;
+        set({
+          snapshot: {
+            ...snapshot,
+            chats: snapshot.chats.map((c) => (c.id === chatId ? { ...c, unread: 0 } : c)),
+          },
+        });
+      } catch {
+        /* ack is best-effort; unread stays until a visible conversation ack succeeds */
+      }
+    },
     setProfileOpen: (profileOpen) => set({ profileOpen }),
     setFolder: (folder) => set({ folder }),
     clearError: () => set({ error: null, errorSource: null }),
@@ -151,6 +191,14 @@ export const useTelegram = create<TelegramState>((set, get) => {
       if (value) drafts[chatId] = value;
       else delete drafts[chatId];
       set({ drafts });
+      if (typeof window === "undefined") return;
+      if (draftTimers[chatId]) window.clearTimeout(draftTimers[chatId]);
+      draftTimers[chatId] = window.setTimeout(() => {
+        delete draftTimers[chatId];
+        void import("@/lib/operator/fns")
+          .then((m) => m.saveDraftFn({ data: { conversationId: chatId, body: value } }))
+          .catch(() => undefined);
+      }, 400);
     },
     setNotify: (on) => {
       if (typeof window !== "undefined") {
@@ -193,6 +241,13 @@ export const useTelegram = create<TelegramState>((set, get) => {
           return;
         }
         set({ snapshot, loading: false });
+        void import("@/lib/operator/fns")
+          .then((m) => m.loadOperatorDeskFn())
+          .then((desk) => {
+            if (!shouldApplyTelegram(started, epoch())) return;
+            if (desk.drafts) set({ drafts: { ...get().drafts, ...desk.drafts } });
+          })
+          .catch(() => undefined);
       } catch (err) {
         if (!shouldApplyTelegram(started, epoch())) return;
         if (isAuthError(err)) {
@@ -289,6 +344,7 @@ export const useTelegram = create<TelegramState>((set, get) => {
       set({
         selectedChatId: id,
         view: "chat",
+        shellTab: "inbox",
         messages: cached ?? [],
         messagesLoading: !cached,
         error: null,
@@ -302,15 +358,12 @@ export const useTelegram = create<TelegramState>((set, get) => {
           set({ messageCache: cache });
           return;
         }
-        const chats = (get().snapshot?.chats ?? []).map((chat) =>
-          chat.id === id ? { ...chat, unread: 0 } : chat,
-        );
         const snapshot = get().snapshot;
         set({
           messages,
           messageCache: cache,
           messagesLoading: false,
-          snapshot: snapshot ? { ...snapshot, chats } : snapshot,
+          snapshot,
         });
       } catch (err) {
         if (!shouldApplyTelegram(started, epoch(), { requireSameChat: true })) return;
