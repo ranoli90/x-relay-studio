@@ -140,6 +140,8 @@ async function steel<T>(
       ...init,
       headers: {
         "Content-Type": "application/json",
+        Accept: "application/json",
+        "User-Agent": "x-relay-studio/reddit-onboarding",
         ...(apiKey ? { "steel-api-key": apiKey } : {}),
         ...(init.headers || {}),
       },

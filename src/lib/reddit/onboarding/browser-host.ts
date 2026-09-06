@@ -98,13 +98,16 @@ function aad(userId: string) {
   return { userId, recordId: userId, purpose: "browser_host_key" as const };
 }
 
+const STEEL_HTTP_USER_AGENT = "x-relay-studio/reddit-onboarding";
+
 export async function probeSteelCloud(apiKey: string): Promise<void> {
   let res: Response;
   try {
-    res = await fetch(`${STEEL_CLOUD_BASE}/v1/sessions/x-relay-probe`, {
+    res = await fetch(`${STEEL_CLOUD_BASE}/v1/sessions`, {
       method: "GET",
       headers: {
-        "content-type": "application/json",
+        Accept: "application/json",
+        "User-Agent": STEEL_HTTP_USER_AGENT,
         "steel-api-key": apiKey,
       },
       signal: AbortSignal.timeout(15_000),
@@ -112,7 +115,17 @@ export async function probeSteelCloud(apiKey: string): Promise<void> {
   } catch {
     throw new OnboardingError("STEEL_UNAVAILABLE", "Steel Cloud did not respond. Try again in a moment.");
   }
-  if (res.status === 401 || res.status === 403) {
+  if (res.status === 401) {
+    throw new OnboardingError(
+      "STEEL_KEY_INVALID",
+      "That Steel key was rejected. Create a key at Steel → Settings → API keys.",
+    );
+  }
+  if (res.status === 403) {
+    const body = await res.text().catch(() => "");
+    if (/error code:\s*1010|cloudflare/i.test(body)) {
+      throw new OnboardingError("STEEL_UNAVAILABLE", "Steel Cloud blocked this network. Try again from the hosted worker.");
+    }
     throw new OnboardingError(
       "STEEL_KEY_INVALID",
       "That Steel key was rejected. Create a key at Steel → Settings → API keys.",

@@ -52,10 +52,10 @@ describe("steel host setup", () => {
     assert.throws(() => parseSteelApiKey("https://app.steel.dev/settings/api-keys"), OnboardingError);
   });
 
-  it("treats 404 from the probe path as a valid key", async () => {
-    stubFetch(404);
+  it("treats a session list 200 as a valid key", async () => {
+    stubFetch(200);
     await probeSteelCloud("steel-live-abcdefghijklmnopqrstuvwxyz");
-    assert.equal(calls[0]?.url, `${STEEL_CLOUD_BASE}/v1/sessions/x-relay-probe`);
+    assert.equal(calls[0]?.url, `${STEEL_CLOUD_BASE}/v1/sessions`);
     assert.equal(calls[0]?.headerKey, "steel-live-abcdefghijklmnopqrstuvwxyz");
   });
 
@@ -71,7 +71,7 @@ describe("steel host setup", () => {
     const dir = mkdtempSync(join(tmpdir(), "steel-host-"));
     process.env.STEEL_HOST_PERSIST_PATH = join(dir, "steel.env");
     delete process.env.STEEL_API_KEY;
-    stubFetch(404);
+    stubFetch(200);
     const pg = new PGlite();
     await loadOnboardingSchema(pg);
     const sql = toSql(pg);
