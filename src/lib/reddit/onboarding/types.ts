@@ -205,6 +205,7 @@ export type OnboardingJobPublic = {
   batchId: string | null;
   batchSize: number;
   batchIndex: number;
+  hostedSession: boolean;
 };
 
 export type OnboardingEventPublic = {
@@ -363,4 +364,3 @@ export type EmailBindingPublic = {
   destinationVerified: boolean;
   accountId: string | null;
 };
-
