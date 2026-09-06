@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { OnboardingError } from "./types.ts";
-import { getActiveJob, getJob } from "./store.ts";
+import { getActiveJob, getJob, handoffToManual, toPublicJob } from "./store.ts";
 import {
   cancelOpenBatch,
+  createWaitCopy,
   queueCreateBatch,
   recordBatchJobFinished,
   recoverOpenBatch,
@@ -177,6 +178,40 @@ describe("reddit create batch", () => {
       () => queueCreateBatch(sql, { userId: "user-a", count: 0, idempotencyKey: "none" }),
       OnboardingError,
     );
+    await pg.close();
+  });
+
+  it("uses honest wait copy when no hosted browser is filling the form", () => {
+    assert.equal(createWaitCopy(1, 1, false), "Create this Reddit account.");
+    assert.equal(createWaitCopy(2, 5, false), "Queued 5 accounts. Create 2 of 5 on Reddit.");
+    assert.equal(createWaitCopy(1, 1, true), "Making this Reddit account.");
+  });
+
+  it("hands a queued draft to manual so continue-to-connect is allowed", async () => {
+    const pg = new PGlite();
+    await pg.waitReady;
+    await schema(pg);
+    const sql = toSql(pg);
+    const queued = await queueCreateBatch(sql, {
+      userId: "user-a",
+      count: 1,
+      idempotencyKey: "batch-manual",
+    });
+    assert.equal(queued.job.status, "draft");
+    const handed = await handoffToManual(sql, {
+      userId: "user-a",
+      jobId: queued.job.id,
+      version: Number(queued.job.version),
+      waitReason: createWaitCopy(1, 1, false),
+    });
+    assert.equal(handed.mode, "manual");
+    assert.equal(handed.status, "waiting_external");
+    assert.equal(handed.step, "create_account");
+    assert.equal(handed.wait_reason, "Create this Reddit account.");
+    const pub = toPublicJob(handed, { appConfigured: false });
+    assert.equal(pub.permittedActions.includes("open_signup"), true);
+    assert.equal(pub.permittedActions.includes("continue_manual"), true);
+    assert.equal(pub.waitReason, "Create this Reddit account.");
     await pg.close();
   });
 });

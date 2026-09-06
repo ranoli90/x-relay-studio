@@ -54,6 +54,7 @@ import {
 import {
   cancelOpenBatch,
   countLiveAccounts,
+  createWaitCopy,
   getBatch,
   getOpenBatch,
   hostedBrowserReady,
@@ -137,6 +138,34 @@ async function startQueuedCreateJob(
   return job;
 }
 
+async function startQueuedCreateManualJob(
+  db: SqlLike,
+  opts: { userId: string; jobId: string },
+) {
+  const job = await requireJob(db, opts.userId, opts.jobId);
+  if (job.status !== "draft") return job;
+  const size = Number(job.batch_size ?? 1);
+  const index = Number(job.batch_index ?? 1);
+  return handoffToManual(db, {
+    userId: opts.userId,
+    jobId: job.id,
+    version: Number(job.version),
+    waitReason: createWaitCopy(index, size, false),
+  });
+}
+
+async function ensureQueuedCreateJobLive(
+  db: SqlLike,
+  opts: { userId: string; jobId: string; idempotencyKey: string },
+) {
+  const job = await requireJob(db, opts.userId, opts.jobId);
+  if (job.status !== "draft" || !job.batch_id) return job;
+  if (hostedBrowserReady()) {
+    return startQueuedCreateJob(db, opts);
+  }
+  return startQueuedCreateManualJob(db, { userId: opts.userId, jobId: opts.jobId });
+}
+
 export async function handleGetOnboardingBootstrap({ context }: { context: { userId: string } }) {
     const db = await sql();
     loadPersistedSteelKey();
@@ -153,7 +182,19 @@ export async function handleGetOnboardingBootstrap({ context }: { context: { use
     if (redditOnboardingEnabled()) {
       await recoverOpenBatch(db, context.userId).catch(() => null);
     }
-    const job = redditOnboardingEnabled() ? await getActiveJob(db, context.userId) : null;
+    const jobRow = redditOnboardingEnabled() ? await getActiveJob(db, context.userId) : null;
+    let liveJob = jobRow;
+    if (liveJob?.status === "draft" && liveJob.batch_id) {
+      try {
+        liveJob = await ensureQueuedCreateJobLive(db, {
+          userId: context.userId,
+          jobId: liveJob.id,
+          idempotencyKey: `resume-create:${liveJob.id}`,
+        });
+      } catch {
+        liveJob = (await getJob(db, context.userId, liveJob.id)) || liveJob;
+      }
+    }
     const batch = redditOnboardingEnabled() ? await getOpenBatch(db, context.userId) : null;
     const resume = redditOnboardingEnabled() ? await listResumeCandidates(db, context.userId) : [];
     const previewUsesLocal = redditBrowserProvider() === "local" || onboardingFixtureEnabled();
@@ -168,7 +209,7 @@ export async function handleGetOnboardingBootstrap({ context }: { context: { use
       onboardingEnabled: redditOnboardingEnabled(),
       assistedAvailable: caps.canStartAssistedSignup && redditAssistedSignupEnabled(),
       assistedUnavailableReason: assistedUnavailableReason(caps),
-      currentJob: job ? toPublicJob(job, { appConfigured: Boolean(app) }) : null,
+      currentJob: liveJob ? toPublicJob(liveJob, { appConfigured: Boolean(app) }) : null,
       currentBatch: batch ? toPublicBatch(batch) : null,
       resumeCandidates: resume,
       capabilities: caps,
@@ -228,13 +269,17 @@ export async function handleQueueRedditCreates({
     );
     let job = queued.job;
     let batch = queued.batch;
-    const canStart = hostedBrowserReady();
-    if (canStart) {
-      job = await startQueuedCreateJob(db, {
+    try {
+      job = await ensureQueuedCreateJobLive(db, {
         userId: context.userId,
         jobId: job.id,
         idempotencyKey: data.idempotencyKey,
       });
+    } catch {
+      job = (await getJob(db, context.userId, queued.job.id)) || job;
+    }
+    const started = job.status !== "draft";
+    if (started) {
       const running = await markBatchRunning(db, context.userId, batch.id);
       if (running) batch = running;
     }
@@ -273,7 +318,7 @@ export async function handleQueueRedditCreates({
     return {
       job: toPublicJob(job, { appConfigured: Boolean(app) }),
       batch: toPublicBatch(freshBatch),
-      started: canStart,
+      started,
     };
   } catch (err) {
     throwOnboarding(err);
@@ -342,7 +387,18 @@ export async function handleGetOnboardingJob({ context, data }: { context: { use
     try {
       const db = await sql();
       await drainOwnedPreview(db, context.userId, data.jobId);
-      const job = await requireJob(db, context.userId, data.jobId);
+      let job = await requireJob(db, context.userId, data.jobId);
+      if (job.status === "draft" && job.batch_id) {
+        try {
+          job = await ensureQueuedCreateJobLive(db, {
+            userId: context.userId,
+            jobId: job.id,
+            idempotencyKey: `resume-create:${job.id}`,
+          });
+        } catch {
+          job = (await getJob(db, context.userId, data.jobId)) || job;
+        }
+      }
       const app = await getApp(context.userId);
       return toPublicJob(job, { appConfigured: Boolean(app) });
     } catch (err) {
@@ -609,8 +665,8 @@ export async function handleConfirmConnectedIdentity({ context, data }: { contex
         outcome: "completed",
         idempotencyKey: `batch-advance:${next.id}`,
       });
-      if (advanced.nextJob && hostedBrowserReady()) {
-        await startQueuedCreateJob(db, {
+      if (advanced.nextJob) {
+        await ensureQueuedCreateJobLive(db, {
           userId: context.userId,
           jobId: advanced.nextJob.id,
           idempotencyKey: `batch-start:${advanced.nextJob.id}`,

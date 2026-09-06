@@ -29,7 +29,7 @@ The Grok preview turns Reddit setup **on locally only**:
 - `REDDIT_DRAFTING_ENABLED=true`
 - `REDDIT_EMAIL_BINDING_ENABLED=true`
 
-Create 1–5 / Connect my own run against the local fixture page. Create is one queue: pick a count and we start making them in order. CAPTCHA, terms, and final submit stay owner clicks on live Reddit. No Reddit.com account is created. Isolated signup uses a local `*@fixture.test` address — there is no disposable-mail factory. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
+Create 1–5 / Connect my own run against the local fixture page. Create is one queue: pick a count and we start the first. On production without a hosted browser, Create is **manual** (open Reddit signup, then continue with the username). Isolated signup uses a local `*@fixture.test` address — there is no disposable-mail factory. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
 
 Unattended Reddit signup is **not implemented and is forbidden**: no CAPTCHA solver, no terms auto-accept, no silent OAuth consent.
 

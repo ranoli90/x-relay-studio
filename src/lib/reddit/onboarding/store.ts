@@ -708,11 +708,11 @@ export async function renewLease(
 
 export async function handoffToManual(
   sql: SqlLike,
-  opts: { userId: string; jobId: string; version: number },
+  opts: { userId: string; jobId: string; version: number; waitReason?: string | null },
 ): Promise<JobRow> {
   return withSqlTransaction(sql, async (tx) => {
     const job = await requireJob(tx, opts.userId, opts.jobId, opts.version);
-    if (job.mode === "manual") return job;
+    if (job.mode === "manual" && job.status !== "draft") return job;
     const next = await transitionJob(tx, {
       userId: opts.userId,
       jobId: opts.jobId,
@@ -723,6 +723,10 @@ export async function handoffToManual(
         cleanup_summary: job.provider_session_id
           ? "Hosted browser cleanup pending. History is kept on this setup."
           : "Switched this setup to manual. History is kept.",
+        wait_reason:
+          opts.waitReason ??
+          job.wait_reason ??
+          (job.intent === "create" ? "Create this Reddit account." : job.wait_reason),
       },
       details: { fromMode: job.mode },
     });
