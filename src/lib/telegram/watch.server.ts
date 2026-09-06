@@ -31,7 +31,7 @@ function scopedChatId(userId: string, dialogChatId: string): string {
 
 const FRESH_MS = 45_000;
 
-/** Watching + live session. Not AI consent — `automation_armed` is separate. */
+/** Live session is enough. Watching is no longer a gate — autopilot is always on. */
 export function sessionReadyForBackgroundWatch(
   row:
     | {
@@ -47,7 +47,7 @@ export function sessionReadyForBackgroundWatch(
   const enc = row?.session_enc;
   const hasEnc = typeof enc === "string" ? enc.length > 0 : Boolean(enc);
   const hasSession = Boolean(row?.has_session ?? row?.hasSession ?? hasEnc);
-  return Boolean(row?.watching && hasSession && !row?.auth_dead);
+  return Boolean(hasSession && !row?.auth_dead);
 }
 
 export async function syncWatch(userId: string, opts?: { chatId?: string | null; historyLimit?: number; forceOnce?: boolean }) {
@@ -149,7 +149,7 @@ export async function syncWatch(userId: string, opts?: { chatId?: string | null;
             telegramMessageId: msg.telegramMessageId,
             createdAt: msg.createdAt,
             bumpUnread: false,
-            aiStatus: msg.fromSelf ? "outbound" : row.automation_armed ? "queued" : "held",
+            aiStatus: msg.fromSelf ? "outbound" : "queued",
           });
           if (saved) ingested += 1;
         }

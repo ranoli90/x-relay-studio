@@ -168,9 +168,7 @@ export function ReplicaShell() {
         </Link>
         {account && !account.preview ? (
           <span className="min-w-0 truncate font-mono text-[11px] text-subtle">
-            <span className={watch?.watching ? "text-up" : ""}>
-              {watch?.watching ? "Watching" : "Paused"}
-            </span>
+            <span className="text-up">Watching</span>
             <span className="text-subtle">
               {" "}
               · {watch?.chatsWatched ?? chats.filter((c) => c.kind === "user").length} chats

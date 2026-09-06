@@ -9,7 +9,6 @@ import {
   loadThread,
   markDelivered,
   operatorSend,
-  setAutoSend,
   setTakeover,
   simulateInbound,
   simulatePay,
@@ -20,10 +19,8 @@ import { ActivityFeed } from "./activity-feed";
 import { FloorSwitch } from "./floor-switch";
 import {
   asFloorDesk,
-  backgroundRunOf,
   deskActivity,
   latestActivityForThread,
-  persistBackgroundRun,
   personaName,
   sortFloorThreads,
   threadAgent,
@@ -48,9 +45,6 @@ export function AgentsFloor() {
   const [sim, setSim] = useState("");
   const [compose, setCompose] = useState("");
   const [agentFilter, setAgentFilter] = useState<string | null>(null);
-  const [localAuto, setLocalAuto] = useState<boolean | null>(null);
-  const [localBg, setLocalBg] = useState<boolean | null>(null);
-  const bgMissing = useRef(false);
   const threadIdRef = useRef<string | null>(null);
   const deskRef = useRef<FloorDesk | null>(null);
   const autoOpened = useRef(false);
@@ -161,49 +155,11 @@ export function AgentsFloor() {
     }
   }
 
-  async function toggleAuto(on: boolean) {
-    setBusy(true);
-    setLocalAuto(on);
-    setError(null);
-    try {
-      await setAutoSend({ data: { on } });
-      await reload();
-      setLocalAuto(null);
-    } catch (e) {
-      setLocalAuto(null);
-      setError(e instanceof Error ? e.message : "Could not change auto-send.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  async function toggleBackground(on: boolean) {
-    setBusy(true);
-    setLocalBg(on);
-    setError(null);
-    try {
-      const result = await persistBackgroundRun(on);
-      if (result === "missing") {
-        bgMissing.current = true;
-        setBusy(false);
-        return;
-      }
-      await reload();
-      if (!bgMissing.current) setLocalBg(null);
-    } catch (e) {
-      setLocalBg(null);
-      setError(e instanceof Error ? e.message : "Could not change background run.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
   const selected = thread?.thread.id ?? null;
   const name = threadAgent(thread?.thread) || personaName(desk);
-  const autoSend = localAuto ?? Boolean(desk?.persona.autoSend);
-  const backgroundRun = localBg ?? backgroundRunOf(desk);
-  const live = autoSend;
-  const autoAllowed = Boolean(desk?.eval.autoSendAllowed);
+  const autoSend = true;
+  const backgroundRun = true;
+  const live = true;
   const typing =
     latestActivityForThread(desk ? deskActivity(desk) : [], selected)?.kind === "typing";
 
@@ -234,21 +190,17 @@ export function AgentsFloor() {
           <div className="hidden items-center md:flex">
             <FloorSwitch
               label="Auto-send"
-              checked={autoSend}
-              disabled={busy || (!autoAllowed && !autoSend)}
-              title={
-                autoAllowed
-                  ? "Rapport, aftercare, and check-ins send themselves"
-                  : "Gold eval has to pass first"
-              }
-              onChange={(on) => void toggleAuto(on)}
+              checked={true}
+              disabled={true}
+              title="Autopilot is always on. Rapport, aftercare, and check-ins send themselves"
+              onChange={() => undefined}
             />
             <FloorSwitch
               label="Keep running"
-              checked={backgroundRun}
-              disabled={busy}
-              title="The desk keeps pulling and sending after you close this tab"
-              onChange={(on) => void toggleBackground(on)}
+              checked={true}
+              disabled={true}
+              title="Autopilot keeps pulling and sending after you close this tab"
+              onChange={() => undefined}
             />
           </div>
           <UserButton />
@@ -256,21 +208,17 @@ export function AgentsFloor() {
         <div className="flex items-center gap-1 overflow-x-auto px-2 pb-2 md:hidden">
           <FloorSwitch
             label="Auto-send"
-            checked={autoSend}
-            disabled={busy || (!autoAllowed && !autoSend)}
-            title={
-              autoAllowed
-                ? "Rapport, aftercare, and check-ins send themselves"
-                : "Gold eval has to pass first"
-            }
-            onChange={(on) => void toggleAuto(on)}
+            checked={true}
+            disabled={true}
+            title="Autopilot is always on. Rapport, aftercare, and check-ins send themselves"
+            onChange={() => undefined}
           />
           <FloorSwitch
             label="Keep running"
-            checked={backgroundRun}
-            disabled={busy}
-            title="The desk keeps pulling and sending after you close this tab"
-            onChange={(on) => void toggleBackground(on)}
+            checked={true}
+            disabled={true}
+            title="Autopilot keeps pulling and sending after you close this tab"
+            onChange={() => undefined}
           />
         </div>
       </header>

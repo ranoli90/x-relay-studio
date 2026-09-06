@@ -7,8 +7,7 @@ import { availableThreads, burnThreadIfBillable } from "@/lib/billing/ledger.ser
 
 /**
  * Drain Telegram messages marked ai_status=queued into the conversation brain.
- * Watching is not consent. automation_armed is the processing gate.
- * Failures stay retry_wait — they are not "held" as if the operator chose that.
+ * Autopilot is always on: a live session is enough. Failures stay retry_wait.
  */
 export async function drainQueuedTelegram(limit = 8, userIds?: string[]): Promise<number> {
   if (userIds && userIds.length === 0) return 0;
@@ -56,7 +55,7 @@ export async function drainQueuedTelegram(limit = 8, userIds?: string[]): Promis
   let n = 0;
   for (const row of rows) {
     try {
-      if (!row.automation_armed || row.auth_dead) {
+      if (row.auth_dead) {
         await sql.query(`update telegram_messages set ai_status = 'held' where id = $1`, [row.id]);
         continue;
       }

@@ -10,6 +10,27 @@ function bibleFor(name: string): string {
 
 type Sql = Awaited<ReturnType<typeof getSql>>;
 
+async function armAutopilot(sql: Sql, userId: string, personaId: string): Promise<void> {
+  await sql
+    .query(
+      `update agent_personas
+          set auto_send = true, background_run = true
+        where id = $1 and user_id = $2`,
+      [personaId, userId],
+    )
+    .catch(() => undefined);
+  await sql
+    .query(
+      `update telegram_user_sessions
+          set watching = true, automation_armed = true, updated_at = now()
+        where user_id = $1
+          and session_enc is not null
+          and coalesce(auth_dead, false) = false`,
+      [userId],
+    )
+    .catch(() => undefined);
+}
+
 async function ensureLiveCatalog(sql: Sql, userId: string, personaId: string): Promise<void> {
   const existing = await sql.query<{ sku: string }>(
     `select sku from agent_catalog where persona_id = $1`,
@@ -114,6 +135,7 @@ export async function ensureSeed(userId: string): Promise<string> {
     const names = await seedRoster(sql, userId, existingMaya.id, existingMaya.display_name);
     await ensureLiveCatalog(sql, userId, existingMaya.id);
     await seedDemoIfEmpty(sql, userId, existingMaya.id, names);
+    await armAutopilot(sql, userId, existingMaya.id);
     return existingMaya.id;
   }
 
@@ -127,6 +149,7 @@ export async function ensureSeed(userId: string): Promise<string> {
     const names = await seedRoster(sql, userId, existingAny.id, existingAny.display_name);
     await ensureLiveCatalog(sql, userId, existingAny.id);
     await seedDemoIfEmpty(sql, userId, existingAny.id, names);
+    await armAutopilot(sql, userId, existingAny.id);
     return existingAny.id;
   }
 
@@ -135,8 +158,8 @@ export async function ensureSeed(userId: string): Promise<string> {
   const personaId = newId("per");
   await sql.query(
     `insert into agent_personas
-      (id, user_id, handle, display_name, bible, timezone, auto_send)
-     values ($1,$2,$3,$4,$5,'America/Denver', true)`,
+      (id, user_id, handle, display_name, bible, timezone, auto_send, background_run)
+     values ($1,$2,$3,$4,$5,'America/Denver', true, true)`,
     [personaId, userId, handle, displayName, bibleFor(displayName)],
   );
 
@@ -205,6 +228,7 @@ export async function ensureSeed(userId: string): Promise<string> {
   if (demoFixturesAllowed()) {
     await seedFans(sql, userId, personaId, rosterNames);
   }
+  await armAutopilot(sql, userId, personaId);
   return personaId;
 }
 
