@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "node scripts/with-app-env.mjs vite dev --host 0.0.0.0 --port 8080",
-    "build": "node scripts/with-app-env.mjs vite build && node scripts/copy-pglite-assets.mjs && node scripts/copy-telegram-client.mjs && node scripts/migrate.mjs",
+    "build": "node scripts/with-app-env.mjs vite build && node scripts/copy-pglite-assets.mjs && node scripts/copy-telegram-client.mjs",
     "db:migrate": "node scripts/migrate.mjs",
     "check:migrations": "node scripts/check-migration-unique.mjs",
     "build:dev": "node scripts/with-app-env.mjs vite build --mode development",
@@ -20,7 +20,10 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/telegram/widget-hmac.test.ts src/lib/telegram/onboarding.test.ts src/lib/telegram/hardening.test.ts src/lib/telegram/mtproto-policy.test.ts src/lib/telegram/webhook-secret.test.ts src/lib/telegram/freeze.test.ts src/lib/telegram/photo-peer.test.ts src/lib/telegram/watch-status.test.ts src/lib/telegram/rate.test.ts src/lib/telegram/lease.test.ts src/lib/telegram/send-intent.test.ts src/lib/telegram/agent-send.test.ts src/lib/reddit/health.test.ts src/lib/reddit/reddit.test.ts src/lib/desk/number.test.ts src/lib/flags.test.ts src/lib/flags-webhook.test.ts src/lib/agent/agent.test.ts src/lib/agent/owned.test.ts src/lib/agent/consent.test.ts src/lib/agent/write.test.ts src/lib/agent/auto.test.ts src/lib/agent/pay.test.ts src/lib/jobs/claim.test.ts src/lib/jobs/lock.test.ts src/lib/billing/credits.test.ts src/lib/billing/follows.test.ts src/lib/billing/ledger.test.ts src/lib/billing/verify.test.ts src/lib/runtime.test.ts src/lib/studio/integrity.test.ts src/lib/studio/queue.test.ts src/lib/x/archive.test.ts",
+    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/telegram/widget-hmac.test.ts src/lib/telegram/onboarding.test.ts src/lib/telegram/hardening.test.ts src/lib/telegram/mtproto-policy.test.ts src/lib/telegram/webhook-secret.test.ts src/lib/telegram/freeze.test.ts src/lib/telegram/photo-peer.test.ts src/lib/telegram/watch-status.test.ts src/lib/telegram/rate.test.ts src/lib/telegram/lease.test.ts src/lib/telegram/send-intent.test.ts src/lib/telegram/agent-send.test.ts src/lib/reddit/health.test.ts src/lib/reddit/reddit.test.ts src/lib/reddit/oauth-callback-gate.test.ts src/lib/reddit/onboarding/*.test.ts src/lib/reddit/onboarding/providers/*.test.ts src/lib/desk/number.test.ts src/lib/flags.test.ts src/lib/flags-webhook.test.ts src/lib/agent/agent.test.ts src/lib/agent/owned.test.ts src/lib/agent/consent.test.ts src/lib/agent/write.test.ts src/lib/agent/auto.test.ts src/lib/agent/pay.test.ts src/lib/jobs/claim.test.ts src/lib/jobs/lock.test.ts src/lib/billing/credits.test.ts src/lib/billing/follows.test.ts src/lib/billing/ledger.test.ts src/lib/billing/verify.test.ts src/lib/runtime.test.ts src/lib/studio/integrity.test.ts src/lib/studio/queue.test.ts src/lib/x/archive.test.ts",
+    "test:reddit-onboarding": "node --experimental-strip-types --test src/lib/reddit/onboarding/*.test.ts src/lib/reddit/onboarding/providers/*.test.ts src/lib/reddit/oauth-callback-gate.test.ts",
+    "build:reddit-worker": "node scripts/build-reddit-worker.mjs",
+    "worker:reddit-onboarding": "node --experimental-strip-types src/workers/reddit-onboarding.ts",
     "smoke": "node scripts/deploy-smoke.mjs",
     "lint": "eslint .",
     "format": "prettier --write ."

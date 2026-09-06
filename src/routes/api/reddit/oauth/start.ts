@@ -20,6 +20,11 @@ export const Route = createFileRoute("/api/reddit/oauth/start")({
         await purgeExpiredTickets();
         const row = await getTicket(ticket);
         if (!row) return html("This login link expired. Close this window and click Continue with Reddit again.");
+        if (row.cancelled_at) return html("This login was cancelled. Close this window and start again.");
+        if (row.purpose && row.purpose !== "connect_account") {
+          return html("This login attempt is not valid for connecting an account.");
+        }
+        if (!row.correlation_id) return html("This login is missing its correlation identifier.");
         if (new Date(row.expires_at).getTime() < Date.now()) {
           return html("This login link expired. Close this window and try again.");
         }

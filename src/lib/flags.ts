@@ -43,6 +43,20 @@ export function studioTickEnabled(): boolean {
 }
 
 /**
+ * Coordinator/UI. On in local/preview so the flow is testable; off in production
+ * until flagged. Mirrors src/lib/reddit/onboarding/config.ts.
+ */
+export function redditOnboardingUiEnabled(): boolean {
+  const explicit = readFlag("REDDIT_ONBOARDING_ENABLED");
+  if (explicit !== undefined) return explicit;
+  return !isDeployed();
+}
+
+export function redditAssistedSignupEnabled(): boolean {
+  return readFlag("REDDIT_ASSISTED_SIGNUP_ENABLED") === true;
+}
+
+/**
  * X never auto-posts. Outbox "sent" is operator-acked after a manual draft.
  * Not an env flag — cannot be turned on.
  */
