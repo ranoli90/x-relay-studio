@@ -5,6 +5,7 @@ import { onboardingFixtureEnabled } from "./config.ts";
 import type { SqlLike } from "./sql.ts";
 import { randomBytes } from "node:crypto";
 import { transitionJob, requireJob, getJob } from "./store.ts";
+import { recordOwnerGateReceipt } from "./owner-gates.ts";
 
 import type { HealthReport } from "../types.ts";
 import { encryptSecret } from "../../secrets.ts";
@@ -107,8 +108,8 @@ export async function completeFixtureConnect(
 }
 
 /**
- * Isolated preview only. Completes connect + health + job so Automate does not
- * stop on owner-only Reddit gates that this page is not allowed to click.
+ * Isolated preview only. Completes connect + health + job after the owner
+ * taps the remaining Reddit controls (or via the legacy skip API).
  * Live Reddit still requires the owner for CAPTCHA, terms, and final submit.
  */
 export async function finishIsolatedFixtureSignup(
@@ -154,5 +155,8 @@ export async function finishIsolatedFixtureSignup(
     eventType: "connection_finalized",
   });
   const confirmed = (await getJob(sql, opts.userId, opts.jobId)) || finished;
+  if (current.intent === "create") {
+    await recordOwnerGateReceipt(sql, opts.userId, "fixture");
+  }
   return { job: confirmed, accountId: connected.accountId, name: connected.name };
 }

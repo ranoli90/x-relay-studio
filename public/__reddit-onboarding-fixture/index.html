@@ -5,37 +5,102 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Isolated onboarding fixture</title>
     <style>
-      body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #0b0c0e; color: #e8e6e3; }
-      main { max-width: 32rem; margin: 0 auto; padding: 2rem 1.25rem; }
-      label, p { display: block; margin: 0.75rem 0; line-height: 1.5; }
-      input[type="text"], input[type="email"], input[type="password"] {
-        width: 100%; height: 2.5rem; margin-top: 0.35rem; border-radius: 0.4rem;
-        border: 1px solid #2a2d31; background: #14161a; color: inherit; padding: 0 0.75rem;
+      :root {
+        --bg: #0b1416;
+        --card: #1a282d;
+        --fg: #f2efea;
+        --muted: #a8b0b4;
+        --line: rgb(242 239 234 / 0.14);
+        --reddit: #ff4500;
+        --reddit-fg: #fff7f2;
+        --ok: #8fdf9a;
       }
-      button { margin-right: 0.5rem; margin-top: 0.5rem; padding: 0.55rem 0.9rem; border-radius: 0.4rem; border: 0; cursor: pointer; }
-      button[name="continue"] { background: #2a2d31; color: inherit; }
-      button[name="submit-final"] { background: #e8e6e3; color: #0b0c0e; }
-      button[disabled] { opacity: 0.45; cursor: not-allowed; }
-      .note { color: #9a9690; font-size: 0.9rem; }
-      .ok { color: #8fdf9a; }
+      * { box-sizing: border-box; }
+      html, body { margin: 0; background: var(--bg); color: var(--fg); }
+      body {
+        font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+        min-height: 100%;
+      }
+      main { max-width: 26rem; margin: 0 auto; padding: 1.5rem 1.1rem 2rem; }
+      .banner {
+        margin: 0 0 1rem;
+        font-size: 0.72rem;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+      }
+      h1 { margin: 0 0 1rem; font-size: 1.45rem; font-weight: 600; letter-spacing: -0.03em; }
+      label, p { display: block; margin: 0.7rem 0; line-height: 1.45; }
+      input[type="text"], input[type="email"], input[type="password"] {
+        width: 100%; height: 2.75rem; margin-top: 0.35rem; border-radius: 0.75rem;
+        border: 1px solid var(--line); background: #10191c; color: inherit; padding: 0 0.85rem;
+      }
+      .kick-captcha, .kick-terms, .kick-submit { margin: 1rem 0; }
+      .captcha-box {
+        display: flex; align-items: center; gap: 0.85rem;
+        width: 100%; min-height: 4.5rem; padding: 0.85rem 1rem;
+        border: 1px solid var(--line); border-radius: 0.5rem;
+        background: #fff; color: #1a1a1b; cursor: pointer; text-align: left;
+      }
+      .captcha-tick {
+        width: 1.65rem; height: 1.65rem; border: 2px solid #c4c4c4; border-radius: 0.2rem;
+        background: #fff; flex: 0 0 auto; display: grid; place-items: center;
+      }
+      .captcha-box[aria-checked="true"] .captcha-tick {
+        border-color: #1a73e8; background: #1a73e8; color: #fff;
+      }
+      .captcha-copy { display: flex; flex-direction: column; gap: 0.15rem; }
+      .captcha-copy strong { font-size: 0.95rem; font-weight: 500; }
+      .captcha-copy span { font-size: 0.72rem; color: #5c5c5c; }
+      .terms-row {
+        display: flex; align-items: flex-start; gap: 0.7rem;
+        padding: 0.85rem 0.2rem; cursor: pointer; font-size: 0.92rem; line-height: 1.45;
+      }
+      .terms-row input { width: 1.15rem; height: 1.15rem; margin-top: 0.15rem; accent-color: var(--reddit); }
+      .terms-row a { color: inherit; }
+      .signup {
+        width: 100%; height: 2.85rem; margin-top: 0.35rem; border: 0; border-radius: 999px;
+        background: var(--reddit); color: var(--reddit-fg); font-size: 0.98rem; font-weight: 600;
+        cursor: pointer;
+      }
+      .signup:disabled { opacity: 0.45; cursor: not-allowed; }
+      .continue { display: none; }
+      .note { color: var(--muted); font-size: 0.88rem; }
+      .ok { color: var(--ok); }
+      body[data-kick] .only-full { display: none !important; }
+      body[data-kick] main { padding: 1.15rem; }
+      body[data-kick] h1 { display: none; }
+      body[data-kick="captcha"] .kick-terms,
+      body[data-kick="captcha"] .kick-submit { display: none; }
+      body[data-kick="terms"] .kick-captcha,
+      body[data-kick="terms"] .kick-submit { display: none; }
+      body[data-kick="final_submit"] .kick-captcha,
+      body[data-kick="final_submit"] .kick-terms { display: none; }
+      body[data-kick="final_submit"] .signup { height: 3.15rem; font-size: 1.05rem; }
     </style>
   </head>
   <body>
+    <script>
+      (function () {
+        var kick = new URLSearchParams(window.location.search).get("kick");
+        if (kick) document.body.dataset.kick = kick;
+      })();
+    </script>
     <main data-testid="fixture-email-v1" data-fixture="email-v1">
-      <p>TEST environment. This page is not Reddit and creates no real accounts.</p>
-      <h1>Create a test account</h1>
+      <p class="banner only-full">Test environment. This page is not Reddit.</p>
+      <h1 class="only-full">Create a test account</h1>
       <form id="signup" action="#" method="post">
-        <p>
+        <p class="only-full">
           <label for="username">Username
             <input id="username" name="username" data-testid="reg-username" autocomplete="username" />
           </label>
         </p>
-        <p>
+        <p class="only-full">
           <label for="email">Email
             <input id="email" name="email" type="email" data-testid="reg-email" autocomplete="email" />
           </label>
         </p>
-        <p>
+        <p class="only-full">
           <label for="password">Password (owner only)
             <input
               id="password"
@@ -47,39 +112,101 @@
             />
           </label>
         </p>
-        <div data-testid="captcha" data-owner-required="captcha">
-          CAPTCHA checkpoint — the owner must complete this.
-          <button type="button" id="captcha-pass">I completed the check</button>
-        </div>
-        <p>
-          <label>
-            <input type="checkbox" name="terms" data-testid="accept-terms" data-owner-required="terms" />
-            I accept the terms (owner only)
-          </label>
-        </p>
-        <p>
-          <button type="button" name="continue" data-testid="continue">Continue</button>
-          <button type="submit" name="submit-final" data-testid="final-submit" data-owner-required="final_submit">
-            Create account
+        <div class="kick-captcha" data-testid="captcha" data-owner-required="captcha">
+          <button
+            type="button"
+            class="captcha-box"
+            id="captcha-pass"
+            role="checkbox"
+            aria-checked="false"
+            aria-label="I'm not a robot"
+          >
+            <span class="captcha-tick" aria-hidden="true"></span>
+            <span class="captcha-copy">
+              <strong>I'm not a robot</strong>
+              <span>Reddit security check</span>
+            </span>
           </button>
-        </p>
+        </div>
+        <div class="kick-terms">
+          <label class="terms-row">
+            <input type="checkbox" name="terms" data-testid="accept-terms" data-owner-required="terms" />
+            <span>
+              I agree to the Reddit User Agreement and Privacy Policy
+            </span>
+          </label>
+        </div>
+        <div class="kick-submit">
+          <button type="button" name="continue" class="continue" data-testid="continue">Continue</button>
+          <button type="submit" name="submit-final" class="signup" data-testid="final-submit" data-owner-required="final_submit">
+            Sign Up
+          </button>
+        </div>
         <p id="status" class="note" aria-live="polite"></p>
       </form>
     </main>
     <script>
+      const PARENT = "reddit-onboarding-parent";
+      const SELF = "reddit-onboarding-fixture";
       const form = document.getElementById("signup");
       const status = document.getElementById("status");
       const captcha = document.getElementById("captcha-pass");
+      const terms = form.querySelector('[data-testid="accept-terms"]');
+      const usernameInput = document.getElementById("username");
+      const emailInput = document.getElementById("email");
       let captchaDone = false;
+      const params = new URLSearchParams(window.location.search);
+
+      function post(payload) {
+        try {
+          const message = { type: SELF, ...payload };
+          if (window.parent && window.parent !== window) {
+            window.parent.postMessage(message, window.location.origin);
+          }
+        } catch (e) {}
+      }
+
+      function applyUsername(name) {
+        if (!name) return;
+        const clean = String(name).replace(/^u\//i, "").trim();
+        if (clean.length < 3) return;
+        usernameInput.value = clean;
+        if (!emailInput.value) emailInput.value = clean + "@fixture.test";
+      }
+
+      function setKick(step, completed) {
+        if (step) document.body.dataset.kick = step;
+        else delete document.body.dataset.kick;
+        if (Array.isArray(completed) && completed.includes("captcha")) {
+          captchaDone = true;
+          captcha.setAttribute("aria-checked", "true");
+          captcha.querySelector(".captcha-tick").textContent = "✓";
+        }
+        if (Array.isArray(completed) && completed.includes("terms")) {
+          terms.checked = true;
+        }
+      }
+
+      applyUsername(params.get("username"));
+      setKick(params.get("kick") || "", []);
+
       captcha.addEventListener("click", () => {
         captchaDone = true;
-        status.textContent = "Security check marked complete. Accept terms, then create the account yourself.";
+        captcha.setAttribute("aria-checked", "true");
+        captcha.querySelector(".captcha-tick").textContent = "✓";
+        status.textContent = "Security check marked complete.";
         status.className = "ok";
+        post({ event: "kick", step: "captcha" });
       });
+
+      terms.addEventListener("change", () => {
+        if (!terms.checked) return;
+        post({ event: "kick", step: "terms" });
+      });
+
       form.addEventListener("submit", (event) => {
         event.preventDefault();
-        const terms = form.querySelector('[data-testid="accept-terms"]');
-        const username = document.getElementById("username").value.trim();
+        const username = usernameInput.value.trim();
         if (!captchaDone) {
           status.textContent = "Complete the security check yourself. Automation will not do it.";
           status.className = "note";
@@ -95,15 +222,21 @@
           status.className = "note";
           return;
         }
-        status.textContent = "Fixture account recorded locally as created. Return to setup and continue to connect.";
+        status.textContent = "Fixture account recorded locally as created.";
         status.className = "ok";
-        try {
-          window.parent.postMessage(
-            { type: "reddit-onboarding-fixture", ok: true, username, human: ["captcha", "terms", "final_submit"] },
-            window.location.origin,
-          );
-        } catch (e) {}
+        post({ event: "kick", step: "final_submit" });
+        post({ event: "created", ok: true, username, human: ["captcha", "terms", "final_submit"] });
       });
+
+      window.addEventListener("message", (event) => {
+        if (event.origin !== window.location.origin) return;
+        const data = event.data;
+        if (!data || data.type !== PARENT) return;
+        applyUsername(data.username);
+        setKick(data.show, data.completed || []);
+      });
+
+      post({ event: "ready" });
     </script>
   </body>
 </html>
