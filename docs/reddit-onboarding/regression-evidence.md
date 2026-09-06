@@ -2,7 +2,7 @@
 
 Source matrix: `handoff/REGRESSION_TESTS.md`. None of these is live Reddit, live Browserbase, or production Postgres.
 
-Head recorded after isolated-preview + review repairs on `feat/reddit-onboarding`.
+Head recorded after isolated-preview + review repairs on `feat/reddit-onboarding` @ `daa7dc4`.
 
 Command: `npm run test:reddit-onboarding`  
 Result: **122 passed, 0 failed, 3 skipped** (PGlite / fake pool / HTTP stubs). `RC-001` live Postgres skipped (`REDDIT_TEST_DATABASE_URL` unset). Typecheck: clean.

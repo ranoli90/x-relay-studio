@@ -1,7 +1,7 @@
 # Reddit onboarding implementation ledger
 
 Reviewed baseline: `main` at `beeab5c7ca76ccac3cfa25eabf371f573561519d` (2026-09-05).
-Working branch: `feat/reddit-onboarding` @ `8ac6fdd`.
+Working branch: `feat/reddit-onboarding` @ `daa7dc4`.
 Draft PR: https://github.com/ranoli90/x-relay-studio/pull/21
 This work is additive on that SHA. The repository was not reset.
 
@@ -93,7 +93,7 @@ Preserved `feat/reddit-onboarding` (did not reset).
 
 Live Reddit, live Browserbase, production migrate, and merge/deploy were **not** done.
 
-## Continuation — isolated preview + remaining review repairs
+## Continuation — isolated preview + remaining review repairs (`daa7dc4`)
 
 Preserved `feat/reddit-onboarding` (did not reset). Unattended Reddit signup remains forbidden.
 
