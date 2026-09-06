@@ -1,5 +1,5 @@
 import { getSql } from "@/lib/db";
-import { decryptSecret, encryptSecret } from "@/lib/secrets";
+import { decryptSecret, encryptSecret, SecretOpenError } from "@/lib/secrets";
 import type { HealthReport, RedditAccountPublic, RedditAppPublic } from "./types";
 
 type AppRow = {
@@ -11,6 +11,7 @@ type AppRow = {
   app_label: string | null;
   app_id: string | null;
   terms_at: string | Date | null;
+  credential_version?: number | null;
 };
 
 type AccountRow = {
@@ -34,6 +35,7 @@ type AccountRow = {
   health_json: string | null;
   health_ok: boolean;
   onboarded_at: string | Date | null;
+  disabled_at?: string | Date | null;
 };
 
 type TicketRow = {
@@ -50,22 +52,18 @@ function seal(value: string): string {
 
 function open(value: string | null | undefined): string {
   if (!value) return "";
-  try {
-    return decryptSecret(value);
-  } catch {
-    return value;
-  }
+  return decryptSecret(value);
 }
 
 function decodeApp(row: AppRow): AppRow {
-  return { ...row, client_secret: open(row.client_secret) || row.client_secret };
+  return { ...row, client_secret: open(row.client_secret) };
 }
 
 function decodeAccount(row: AccountRow): AccountRow {
   return {
     ...row,
-    refresh_token: open(row.refresh_token) || row.refresh_token,
-    access_token: row.access_token ? open(row.access_token) || row.access_token : row.access_token,
+    refresh_token: open(row.refresh_token),
+    access_token: row.access_token ? open(row.access_token) : row.access_token,
   };
 }
 
@@ -136,6 +134,7 @@ export async function upsertApp(opts: {
   appLabel: string;
   appId: string;
   termsAt?: Date | null;
+  rotateCredentials?: boolean;
 }) {
   const sql = await getSql();
   const terms = (opts.termsAt ?? new Date()).toISOString();
@@ -157,6 +156,10 @@ export async function upsertApp(opts: {
       app_label = excluded.app_label,
       app_id = excluded.app_id,
       terms_at = excluded.terms_at,
+      credential_version = case
+        when ${Boolean(opts.rotateCredentials)} then coalesce(reddit_apps.credential_version, 1) + 1
+        else coalesce(reddit_apps.credential_version, 1)
+      end,
       updated_at = now()
   `;
 }
@@ -166,6 +169,7 @@ export async function listAccounts(userId: string) {
   const rows = await sql<AccountRow>`
     select * from reddit_accounts
     where user_id = ${userId}
+      and disabled_at is null
     order by created_at asc
   `;
   return rows.map(decodeAccount);
@@ -174,7 +178,8 @@ export async function listAccounts(userId: string) {
 export async function countAccounts(userId: string) {
   const sql = await getSql();
   const rows = await sql<{ n: number }>`
-    select count(*)::int as n from reddit_accounts where user_id = ${userId}
+    select count(*)::int as n from reddit_accounts
+    where user_id = ${userId} and disabled_at is null
   `;
   return Number(rows[0]?.n ?? 0);
 }
@@ -233,7 +238,7 @@ export async function upsertAccount(opts: {
   const healthJson = JSON.stringify(opts.health);
   const sealedRefresh = seal(opts.refreshToken);
   const sealedAccess = seal(opts.accessToken);
-  await sql`
+  const rows = await sql<AccountRow>`
     insert into reddit_accounts (
       id, user_id, reddit_id, name, icon_img, created_utc, has_verified_email,
       is_gold, is_mod, is_suspended, link_karma, comment_karma, total_karma,
@@ -263,7 +268,10 @@ export async function upsertAccount(opts: {
       health_json = excluded.health_json,
       health_ok = excluded.health_ok,
       updated_at = now()
+    returning *
   `;
+  if (!rows[0]) throw new Error("Account upsert did not return a row.");
+  return decodeAccount(rows[0]);
 }
 
 export async function saveTokens(opts: {
@@ -349,28 +357,104 @@ export async function deleteAccount(userId: string, accountId: string) {
   return rows[0] ? decodeAccount(rows[0]) : null;
 }
 
-export async function insertTicket(opts: {
-  ticket: string;
-  userId: string;
-  state: string;
-  redirectUri: string;
-  expiresAt: Date;
-}) {
+export async function disableAccount(userId: string, accountId: string) {
   const sql = await getSql();
-  await sql`
-    insert into reddit_oauth_tickets (ticket, user_id, state, redirect_uri, expires_at)
-    values (${opts.ticket}, ${opts.userId}, ${opts.state}, ${opts.redirectUri}, ${opts.expiresAt.toISOString()})
+  const rows = await sql<AccountRow>`
+    update reddit_accounts
+       set disabled_at = coalesce(disabled_at, now()),
+           disconnected_at = coalesce(disconnected_at, now()),
+           connection_state = 'disabled',
+           cleanup_pending = true,
+           health_ok = false,
+           updated_at = now()
+     where user_id = ${userId} and id = ${accountId}
+     returning *
   `;
+  return rows[0] ? decodeAccount(rows[0]) : null;
+}
+
+export async function insertTicket(
+  opts: {
+    ticket: string;
+    userId: string;
+    state: string;
+    redirectUri: string;
+    expiresAt: Date;
+    jobId?: string | null;
+    expectedUsername?: string | null;
+    expectedRedditId?: string | null;
+    credentialVersion?: number | null;
+    correlationId?: string | null;
+    transport?: string;
+    purpose?: string;
+    allowedOrigin?: string | null;
+  },
+  exec?: { query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> },
+) {
+  const sql = exec ?? (await getSql());
+  const rows = await sql.query<{ ticket: string }>(
+    `insert into reddit_oauth_tickets (
+       ticket, user_id, state, redirect_uri, expires_at,
+       job_id, expected_username, expected_reddit_id, credential_version,
+       transport, correlation_id, processing_state, app_credential_version,
+       purpose, allowed_origin
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open',$9,$12,$13)
+     returning ticket`,
+    [
+      opts.ticket,
+      opts.userId,
+      opts.state,
+      opts.redirectUri,
+      opts.expiresAt.toISOString(),
+      opts.jobId ?? null,
+      opts.expectedUsername ?? null,
+      opts.expectedRedditId ?? null,
+      opts.credentialVersion ?? null,
+      opts.transport ?? "local",
+      opts.correlationId ?? null,
+      opts.purpose ?? "connect_account",
+      opts.allowedOrigin ?? null,
+    ],
+  );
+  if (!rows[0]) throw new Error("Could not bind this Reddit login attempt.");
+  return rows[0];
+}
+
+export async function cancelTicketsForJob(
+  userId: string,
+  jobId: string,
+  exec?: { query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]> },
+) {
+  const sql = exec ?? (await getSql());
+  await sql.query(
+    `update reddit_oauth_tickets
+        set cancelled_at = coalesce(cancelled_at, now())
+      where user_id = $1 and job_id = $2 and cancelled_at is null`,
+    [userId, jobId],
+  );
 }
 
 export async function getTicket(ticket: string) {
   const sql = await getSql();
-  const rows = await sql<TicketRow>`
-    select ticket, user_id, state, redirect_uri, expires_at
-    from reddit_oauth_tickets
-    where ticket = ${ticket}
-    limit 1
-  `;
+  const rows = await sql.query<{
+    ticket: string;
+    user_id: string;
+    state: string;
+    redirect_uri: string;
+    expires_at: string | Date;
+    job_id: string | null;
+    correlation_id: string | null;
+    purpose: string | null;
+    cancelled_at: string | Date | null;
+    allowed_origin: string | null;
+  }>(
+    `select ticket, user_id, state, redirect_uri, expires_at, job_id, correlation_id,
+            purpose, cancelled_at, allowed_origin
+       from reddit_oauth_tickets
+      where ticket = $1
+      limit 1`,
+    [ticket],
+  );
   return rows[0] ?? null;
 }
 

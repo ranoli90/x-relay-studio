@@ -1,0 +1,30 @@
+{
+  "id": "email-signup",
+  "version": "email-signup.v1",
+  "sourceCommit": "beeab5c7ca76ccac3cfa25eabf371f573561519d",
+  "signupMethod": "email",
+  "reviewedSignupUrl": "https://www.reddit.com/register/",
+  "privacy": {
+    "recordSession": false,
+    "logSession": false,
+    "captchaSolving": false,
+    "advancedStealth": false,
+    "validateCertificates": true
+  },
+  "allowedActions": ["navigate", "fill", "click", "wait", "observe", "read_identity"],
+  "forbiddenActions": [
+    "evaluate",
+    "cdp",
+    "unrestricted_prompt",
+    "accept_terms",
+    "grant_oauth",
+    "solve_captcha",
+    "post",
+    "vote",
+    "send_message",
+    "rotate_proxy",
+    "create_mailbox"
+  ],
+  "liveRedditValidated": false,
+  "assistedRuntimeEnabled": false
+}

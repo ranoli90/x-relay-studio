@@ -30,8 +30,14 @@ import {
   toPublicAccount,
   toPublicApp,
   upsertApp,
+  disableAccount,
 } from "./store";
-import { getSql } from "@/lib/db";
+import { z } from "zod";
+import { accountIdSchema, confirmOnboardingSchema, originSchema, saveRedditAppSchema } from "./onboarding/schemas";
+import { getSql, withTransaction } from "@/lib/db";
+import { queueDisconnectCleanup } from "./onboarding/cleanup";
+import { onboardingFixtureEnabled } from "./onboarding/config";
+import { fixtureHealthReport } from "./onboarding/fixture-connect";
 import { appIdForDesk, appNameForDesk, appDescriptionForDesk, apiSignupBlurb, assertSafeAppName, userAgentFor } from "./naming";
 
 function ua(app: { user_agent_name: string; app_id: string | null }, accountName?: string) {
@@ -75,13 +81,7 @@ export const getBootstrap = createServerFn({ method: "GET" })
 
 export const saveRedditApp = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: {
-    clientId: string;
-    clientSecret: string;
-    userAgentName: string;
-    origin: string;
-    acceptedTerms: boolean;
-  }) => d)
+  .validator((d: unknown) => saveRedditAppSchema.parse(d))
   .handler(async ({ context, data }) => {
     if (!data.acceptedTerms) {
       throw new Error("Read the Data API terms and submit Reddit’s request form first.");
@@ -124,13 +124,14 @@ export const saveRedditApp = createServerFn({ method: "POST" })
       appLabel: id.appLabel,
       appId: id.appId,
       termsAt: new Date(),
+      rotateCredentials: true,
     });
     return { ok: true as const, redirectUri, clientId, appLabel: id.appLabel };
   });
 
 export const getSetupCopy = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { origin: string }) => d)
+  .validator((d: unknown) => originSchema.parse(d))
   .handler(async ({ context, data }) => {
     if (!isPlausibleOrigin(data.origin)) throw new Error("Bad origin");
     const id = await identityForUser(context.userId);
@@ -142,7 +143,7 @@ export const getSetupCopy = createServerFn({ method: "POST" })
 
 export const startRedditOAuth = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { origin: string }) => d)
+  .validator((d: unknown) => originSchema.parse(d))
   .handler(async ({ context, data }) => {
     const app = await getApp(context.userId);
     if (!app) throw new Error("Save the Reddit app credentials first.");
@@ -167,12 +168,16 @@ export const startRedditOAuth = createServerFn({ method: "POST" })
     const { authorizeUrl } = await import("./oauth");
     const ticket = crypto.randomUUID();
     const state = crypto.randomUUID();
+    const correlationId = crypto.randomUUID();
     await insertTicket({
       ticket,
       userId: context.userId,
       state,
       redirectUri,
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      correlationId,
+      purpose: "connect_account",
+      allowedOrigin: data.origin,
     });
     const url = authorizeUrl({
       clientId: app.client_id,
@@ -180,7 +185,7 @@ export const startRedditOAuth = createServerFn({ method: "POST" })
       state,
     });
     const start = `/api/reddit/oauth/start?ticket=${encodeURIComponent(ticket)}`;
-    return { start, url, ticket };
+    return { start, url, ticket, correlationId };
   });
 
 async function liveToken(userId: string, accountId: string) {
@@ -214,8 +219,29 @@ async function liveToken(userId: string, accountId: string) {
 
 export const runHealthCheck = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { accountId: string }) => d)
+  .validator((d: unknown) => accountIdSchema.parse(d))
   .handler(async ({ context, data }) => {
+    if (onboardingFixtureEnabled()) {
+      const account = await getAccount(context.userId, data.accountId);
+      if (!account) throw new Error("Account not found.");
+      const health = fixtureHealthReport(account.name);
+      await saveHealth({
+        userId: context.userId,
+        accountId: data.accountId,
+        health,
+        me: {
+          hasVerifiedEmail: true,
+          isGold: false,
+          isMod: false,
+          isSuspended: false,
+          linkKarma: account.link_karma ?? 0,
+          commentKarma: account.comment_karma ?? 0,
+          totalKarma: account.total_karma ?? 0,
+        },
+      });
+      const next = await getAccount(context.userId, data.accountId);
+      return next ? toPublicAccount(next) : null;
+    }
     const live = await liveToken(context.userId, data.accountId);
     let me = null;
     let apiError: string | null = null;
@@ -264,18 +290,24 @@ export const runHealthCheck = createServerFn({ method: "POST" })
 
 export const confirmOnboarding = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { accountId: string; phrase: string }) => d)
+  .validator((d: unknown) => confirmOnboardingSchema.parse(d))
   .handler(async ({ context, data }) => {
     const account = await getAccount(context.userId, data.accountId);
     if (!account) throw new Error("Account not found.");
+    if (account.disabled_at) {
+      throw new Error("This connection is disabled. Reconnect the same account first.");
+    }
     const health = account.health_json
       ? (JSON.parse(account.health_json) as { okToUse?: boolean })
       : null;
-    if (!health?.okToUse) {
+    if (!health?.okToUse || !account.health_ok) {
       throw new Error("Reddit did not give us a working session for this account. Connect again.");
     }
-    if (data.phrase.trim().toUpperCase() !== "I WILL NOT POST YET") {
-      throw new Error("Type I WILL NOT POST YET exactly to continue.");
+    if (
+      data.phrase.trim() !== "I confirm this is my Reddit account and authorize the displayed connection." &&
+      data.phrase.trim().toUpperCase() !== "I WILL NOT POST YET"
+    ) {
+      throw new Error("Type the confirmation sentence exactly to continue.");
     }
     await markOnboarded(context.userId, data.accountId);
     const next = await getAccount(context.userId, data.accountId);
@@ -284,11 +316,19 @@ export const confirmOnboarding = createServerFn({ method: "POST" })
 
 export const loadInbox = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { accountId: string }) => d)
+  .validator((d: unknown) => accountIdSchema.parse(d))
   .handler(async ({ context, data }) => {
     const account = await getAccount(context.userId, data.accountId);
     if (!account?.onboarded_at) {
       throw new Error("Finish the health screen for this account first.");
+    }
+    if (onboardingFixtureEnabled()) {
+      return {
+        threads: [],
+        unreadCount: 0,
+        fetchedAt: new Date().toISOString(),
+        truncated: false,
+      };
     }
     const live = await liveToken(context.userId, data.accountId);
     return fetchInbox({
@@ -299,10 +339,20 @@ export const loadInbox = createServerFn({ method: "POST" })
 
 export const disconnectAccount = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
-  .validator((d: { accountId: string }) => d)
+  .validator((d: unknown) => accountIdSchema.parse(d))
   .handler(async ({ context, data }) => {
     const app = await getApp(context.userId);
-    const removed = await deleteAccount(context.userId, data.accountId);
+    const removed = await withTransaction(async () => {
+      const row = await disableAccount(context.userId, data.accountId);
+      if (!row) return null;
+      const db = await getSql();
+      await queueDisconnectCleanup(db, {
+        userId: context.userId,
+        accountId: data.accountId,
+        refreshToken: row.refresh_token,
+      });
+      return row;
+    });
     if (removed && app) {
       try {
         await revokeToken({
@@ -312,8 +362,8 @@ export const disconnectAccount = createServerFn({ method: "POST" })
           token: removed.refresh_token,
         });
       } catch {
-        // already disconnected locally
+        // Local access stays disabled; cleanup retries revocation.
       }
     }
-    return { ok: true as const };
+    return { ok: true as const, cleanup: "pending" as const };
   });

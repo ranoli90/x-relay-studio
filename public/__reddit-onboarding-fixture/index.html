@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Isolated onboarding fixture</title>
+    <style>
+      body { margin: 0; font-family: ui-sans-serif, system-ui, sans-serif; background: #0b0c0e; color: #e8e6e3; }
+      main { max-width: 32rem; margin: 0 auto; padding: 2rem 1.25rem; }
+      label, p { display: block; margin: 0.75rem 0; line-height: 1.5; }
+      input[type="text"], input[type="email"], input[type="password"] {
+        width: 100%; height: 2.5rem; margin-top: 0.35rem; border-radius: 0.4rem;
+        border: 1px solid #2a2d31; background: #14161a; color: inherit; padding: 0 0.75rem;
+      }
+      button { margin-right: 0.5rem; margin-top: 0.5rem; padding: 0.55rem 0.9rem; border-radius: 0.4rem; border: 0; cursor: pointer; }
+      button[name="continue"] { background: #2a2d31; color: inherit; }
+      button[name="submit-final"] { background: #e8e6e3; color: #0b0c0e; }
+      button[disabled] { opacity: 0.45; cursor: not-allowed; }
+      .note { color: #9a9690; font-size: 0.9rem; }
+      .ok { color: #8fdf9a; }
+    </style>
+  </head>
+  <body>
+    <main data-testid="fixture-email-v1" data-fixture="email-v1">
+      <p>TEST environment. This page is not Reddit and creates no real accounts.</p>
+      <h1>Create a test account</h1>
+      <form id="signup" action="#" method="post">
+        <p>
+          <label for="username">Username
+            <input id="username" name="username" data-testid="reg-username" autocomplete="username" />
+          </label>
+        </p>
+        <p>
+          <label for="email">Email
+            <input id="email" name="email" type="email" data-testid="reg-email" autocomplete="email" />
+          </label>
+        </p>
+        <p>
+          <label for="password">Password (owner only)
+            <input
+              id="password"
+              name="password"
+              type="password"
+              data-testid="reg-password"
+              autocomplete="new-password"
+              data-owner-only="true"
+            />
+          </label>
+        </p>
+        <div data-testid="captcha" data-owner-required="captcha">
+          CAPTCHA checkpoint — the owner must complete this.
+          <button type="button" id="captcha-pass">I completed the check</button>
+        </div>
+        <p>
+          <label>
+            <input type="checkbox" name="terms" data-testid="accept-terms" data-owner-required="terms" />
+            I accept the terms (owner only)
+          </label>
+        </p>
+        <p>
+          <button type="button" name="continue" data-testid="continue">Continue</button>
+          <button type="submit" name="submit-final" data-testid="final-submit" data-owner-required="final_submit">
+            Create account
+          </button>
+        </p>
+        <p id="status" class="note" aria-live="polite"></p>
+      </form>
+    </main>
+    <script>
+      const form = document.getElementById("signup");
+      const status = document.getElementById("status");
+      const captcha = document.getElementById("captcha-pass");
+      let captchaDone = false;
+      captcha.addEventListener("click", () => {
+        captchaDone = true;
+        status.textContent = "Security check marked complete. Accept terms, then create the account yourself.";
+        status.className = "ok";
+      });
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        const terms = form.querySelector('[data-testid="accept-terms"]');
+        const username = document.getElementById("username").value.trim();
+        if (!captchaDone) {
+          status.textContent = "Complete the security check yourself. Automation will not do it.";
+          status.className = "note";
+          return;
+        }
+        if (!terms.checked) {
+          status.textContent = "Accept the terms yourself. Automation will not tick this.";
+          status.className = "note";
+          return;
+        }
+        if (username.length < 3) {
+          status.textContent = "Enter a username. We will not guess.";
+          status.className = "note";
+          return;
+        }
+        status.textContent = "Fixture account recorded locally as created. Return to setup and continue to connect.";
+        status.className = "ok";
+        try {
+          window.parent.postMessage(
+            { type: "reddit-onboarding-fixture", ok: true, username, human: ["captcha", "terms", "final_submit"] },
+            window.location.origin,
+          );
+        } catch (e) {}
+      });
+    </script>
+  </body>
+</html>

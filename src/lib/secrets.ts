@@ -45,16 +45,40 @@ export function encryptSecret(plain: string): string {
   );
 }
 
+export class SecretOpenError extends Error {
+  constructor(message = "Stored secret could not be opened.") {
+    super(message);
+    this.name = "SecretOpenError";
+  }
+}
+
+function allowLegacyPlaintext(): boolean {
+  if (isProduction()) return false;
+  const raw = process.env.SECRETS_ALLOW_LEGACY_PLAINTEXT?.trim().toLowerCase();
+  return raw === "true" || raw === "1" || raw === "on";
+}
+
+/**
+ * Fail closed. A bad key or damaged ciphertext is never treated as plaintext.
+ * Legacy non-envelope values are only readable when explicitly allowed outside production.
+ */
 export function decryptSecret(blob: string): string {
   if (!blob) return blob;
-  if (!isEnvelope(blob)) return blob;
+  if (!isEnvelope(blob)) {
+    if (allowLegacyPlaintext()) return blob;
+    throw new SecretOpenError("Plaintext secret fallback is disabled.");
+  }
   const parts = blob.split(".");
-  const iv = Buffer.from(parts[1], "base64url");
-  const tag = Buffer.from(parts[2], "base64url");
-  const ct = Buffer.from(parts[3], "base64url");
-  const decipher = createDecipheriv("aes-256-gcm", key(), iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
+  try {
+    const iv = Buffer.from(parts[1], "base64url");
+    const tag = Buffer.from(parts[2], "base64url");
+    const ct = Buffer.from(parts[3], "base64url");
+    const decipher = createDecipheriv("aes-256-gcm", key(), iv);
+    decipher.setAuthTag(tag);
+    return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
+  } catch {
+    throw new SecretOpenError();
+  }
 }
 
 export function isEnvelope(blob: string): boolean {

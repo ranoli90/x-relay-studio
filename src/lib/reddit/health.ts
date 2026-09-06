@@ -42,7 +42,7 @@ export function buildHealthReport(input: {
       label: "Reddit API",
       status: "pass",
       severity: "hard",
-      detail: "Signed in. Token works. We only requested read scopes — no posting, no voting.",
+      detail: "Signed in. Token works. X Relay only uses this connection for identity, classic inbox, and health — it does not send, post, or vote, even though Reddit’s privatemessages scope can also cover composing mail.",
     });
   }
 
@@ -79,8 +79,8 @@ export function buildHealthReport(input: {
       status: "fail",
       severity: "hard",
       detail:
-        "Logged-out Reddit does not see this profile. That is a sitewide shadowban (or the account was removed).",
-      fix: "Do not post. Check r/ShadowBan. Appeal at reddit.com/appeal. Do not open a new account to dodge this.",
+        "Logged-out Reddit did not return this profile. That is evidence of a restriction or a removed account — not a complete sitewide verdict.",
+      fix: "Do not post. Check Reddit’s own tools. Appeal if needed. Do not open a new account to dodge this.",
     });
   } else if (input.publicProfile === "unknown") {
     checks.push({
@@ -89,9 +89,9 @@ export function buildHealthReport(input: {
       status: "unknown",
       severity: "soft",
       detail:
-        "We could not prove this profile is public (Reddit sometimes blocks logged-out reads). Open reddit.com/user/" +
+        "We could not prove this profile is public. Open reddit.com/user/" +
         (me?.name ?? "username") +
-        " in a private window.",
+        " in a private window. Age and karma are observations, not eligibility guarantees.",
       fix: "If the private window says nobody goes by that name, this account is shadowbanned. Do not post. Do not create a new account.",
     });
   } else {
@@ -100,7 +100,7 @@ export function buildHealthReport(input: {
       label: "Visible logged out",
       status: "pass",
       severity: "hard",
-      detail: "Public profile loads. Not a sitewide shadowban.",
+      detail: "Public profile loaded in this check. That is not a guarantee there is no restriction.",
     });
   }
 
@@ -198,7 +198,7 @@ export function buildHealthReport(input: {
     status: "pass",
     severity: "info",
     detail:
-      "This app asked Reddit only for identity, inbox, and read. It cannot post, vote, or send bulk messages.",
+      "This app asked Reddit for identity, inbox, and read. X Relay still will not post, vote, or send. The token itself is not proof that sending is impossible.",
   });
 
   const apiOk = checks.some((c) => c.id === "api" && c.status === "pass");
@@ -217,43 +217,7 @@ export async function probePublicProfile(
   name: string,
   userAgent: string,
 ): Promise<"visible" | "hidden" | "unknown"> {
-  const url = `https://www.reddit.com/user/${encodeURIComponent(name)}/about.json`;
-  try {
-    const res = await fetch(url, {
-      headers: {
-        "User-Agent": userAgent,
-        Accept: "application/json",
-      },
-      redirect: "follow",
-    });
-    if (res.status === 404) return "hidden";
-    if (res.status === 200) {
-      const json = (await res.json()) as {
-        data?: { is_suspended?: boolean; name?: string };
-      };
-      if (json?.data?.name) return "visible";
-      return "unknown";
-    }
-    if (res.status === 403 || res.status === 401) {
-      const htmlRes = await fetch(
-        `https://www.reddit.com/user/${encodeURIComponent(name)}`,
-        {
-          headers: { "User-Agent": userAgent, Accept: "text/html" },
-          redirect: "follow",
-        },
-      );
-      const html = (await htmlRes.text()).toLowerCase();
-      if (
-        html.includes("nobody on reddit goes by that name") ||
-        html.includes("page not found")
-      ) {
-        return "hidden";
-      }
-      if (htmlRes.ok && html.includes(name.toLowerCase())) return "visible";
-      return "unknown";
-    }
-    return "unknown";
-  } catch {
-    return "unknown";
-  }
+  void name;
+  void userAgent;
+  return "unknown";
 }

@@ -8,10 +8,12 @@ export function HealthConfirm({
   account,
   onDone,
   onRefresh,
+  embedded,
 }: {
   account: RedditAccountPublic;
   onDone: () => void;
   onRefresh: (next: RedditAccountPublic) => void;
+  embedded?: boolean;
 }) {
   const [phrase, setPhrase] = useState("");
   const [checks, setChecks] = useState({
@@ -68,7 +70,7 @@ export function HealthConfirm({
 
   return (
     <div className="min-h-dvh bg-bg">
-      <AppHeader />
+      {embedded ? null : <AppHeader />}
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">
         Step 4 of 4 · Health
@@ -136,7 +138,7 @@ export function HealthConfirm({
         <input
           className="mt-2 h-11 w-full rounded-md border border-line bg-lift px-3 font-mono text-sm text-fg outline-none placeholder:text-subtle focus:border-muted"
           value={phrase}
-          placeholder="I WILL NOT POST YET"
+          placeholder="I confirm this is my Reddit account and authorize the displayed connection."
           onChange={(e) => setPhrase(e.target.value)}
         />
       </label>

@@ -5,7 +5,7 @@
 **Working branch:** `repair/conversation-kernel`  
 **Mode:** Implementation against the isolated sandbox copy of the audited baseline. No live Telegram sends, invoices, production migrations, private-data model tests, or paid probes.
 
-Open GitHub PRs were inventoried and **not merged**: [#14](https://github.com/ranoli90/x-relay-studio/pull/14), [#17](https://github.com/ranoli90/x-relay-studio/pull/17), [#18](https://github.com/ranoli90/x-relay-studio/pull/18), [#21](https://github.com/ranoli90/x-relay-studio/pull/21) plus Dependabot. Migration **0031** is reserved because main ends at 0027 and Reddit #21 uses 0027–0030.
+Open GitHub PRs were inventoried and **not merged**: [#14](https://github.com/ranoli90/x-relay-studio/pull/14), [#17](https://github.com/ranoli90/x-relay-studio/pull/17), [#18](https://github.com/ranoli90/x-relay-studio/pull/18) plus Dependabot. **[#21](https://github.com/ranoli90/x-relay-studio/pull/21) landed on GitHub `main` after the audit** (`2683ca9`). This repair merges that Reddit onboarding line in. Migration **0031** stays the conversation-kernel additive migration (Reddit used 0027–0030; the duplicate `0027_reddit_onboarding.sql` vs `0027_autopilot_always_on.sql` pair is grandfathered, not renamed).
 
 Phone-login retry policy in this baseline (auth five attempts, ordinary writes one) is preserved.
 
@@ -23,7 +23,7 @@ Phone-login retry policy in this baseline (auth five attempts, ordinary writes o
 |---|---|---|
 | Workspace SHA | `b68f737` | Matches the audit baseline. GitHub `main` may have moved (Dependabot PRs targeting a later SHA); this repair is against the audited tree. |
 | Next migration | `0031_conversation_repair.sql` | Additive. Existing autopilot rows are held in `draft`. |
-| Unrelated PRs | not merged | #14 containment, #17 rapport, #18 memory, #21 Reddit |
+| Unrelated PRs | #14 #17 #18 not merged | #21 already on GitHub main; merged into this branch. Duplicate 0027 filenames grandfathered. |
 
 ## Findings
 
