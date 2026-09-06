@@ -12,6 +12,7 @@ import {
   createOnboardingSchema,
   deleteBindingSchema,
   eventsQuerySchema,
+  queueCreateAccountsSchema,
   generateDraftSchema,
   jobIdQuerySchema,
   liveInputSchema,
@@ -40,6 +41,14 @@ export const createOnboarding = createServerFn({ method: "POST" })
   .handler(async (opts) => {
     const m = await impl();
     return m.handleCreateOnboarding(opts as never);
+  });
+
+export const queueRedditCreates = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => queueCreateAccountsSchema.parse(d))
+  .handler(async (opts) => {
+    const m = await impl();
+    return m.handleQueueRedditCreates(opts as never);
   });
 
 export const saveOnboardingDetails = createServerFn({ method: "POST" })

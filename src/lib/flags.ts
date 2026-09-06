@@ -43,13 +43,13 @@ export function studioTickEnabled(): boolean {
 }
 
 /**
- * Coordinator/UI. On in local/preview so the flow is testable; off in production
- * until flagged. Mirrors src/lib/reddit/onboarding/config.ts.
+ * Coordinator/UI. On unless the operator sets `false`.
+ * Mirrors src/lib/reddit/onboarding/config.ts.
  */
 export function redditOnboardingUiEnabled(): boolean {
   const explicit = readFlag("REDDIT_ONBOARDING_ENABLED");
   if (explicit !== undefined) return explicit;
-  return !isDeployed();
+  return true;
 }
 
 export function redditAssistedSignupEnabled(): boolean {

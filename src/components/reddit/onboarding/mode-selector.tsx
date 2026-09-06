@@ -1,93 +1,132 @@
+import { useState } from "react";
+import { Link2, UserPlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
 export function ModeSelector({
-  assistedAvailable,
-  assistedReason,
-  ownerKicksCompleted: _ownerKicksCompleted,
-  selected,
-  onSelect,
-  onExisting,
+  remainingSlots,
+  accountCount,
+  accountCap,
+  createMax,
+  busy,
+  error,
+  onCreate,
+  onConnect,
 }: {
-  assistedAvailable: boolean;
-  assistedReason: string | null;
-  ownerKicksCompleted?: boolean;
-  selected: "assisted" | "manual" | null;
-  onSelect: (mode: "assisted" | "manual") => void;
-  onExisting: () => void;
+  remainingSlots: number;
+  accountCount: number;
+  accountCap: number;
+  createMax: number;
+  busy: boolean;
+  error: string | null;
+  onCreate: (count: number) => void;
+  onConnect: () => void;
 }) {
+  const maxPick = Math.max(0, Math.min(createMax, remainingSlots));
+  const [count, setCount] = useState(1);
+  const canCreate = maxPick > 0;
+  const pick = Math.min(count, Math.max(1, maxPick));
+
   return (
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
-      <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Account → App access → Connect</p>
-      <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">Add a Reddit account</h1>
+      <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Reddit</p>
+      <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">How do you want in?</h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        Create an account with guided help, or complete signup yourself. You can connect an existing
-        account instead.
+        Two ways. We make new accounts for you, or you connect one you already have.
       </p>
 
-      <div role="radiogroup" aria-label="How do you want to add a Reddit account?" className="mt-8 grid gap-3">
-        <ModeCard
-          id="mode-assisted"
-          title="Automate account creation"
-          description="One click. We fill the form and finish the practice account. Live Reddit still needs you for the security check, terms, and Sign Up."
-          selected={selected === "assisted"}
-          disabled={!assistedAvailable}
-          disabledReason={assistedReason}
-          onSelect={() => onSelect("assisted")}
-        />
-        <ModeCard
-          id="mode-manual"
-          title="Manual"
-          description="Open Reddit, create your account, then return to connect it."
-          selected={selected === "manual"}
-          onSelect={() => onSelect("manual")}
-        />
+      <div className="mt-8 grid gap-3">
+        <article className="rounded-xl border border-reddit/50 bg-surface p-5">
+          <div className="flex items-start gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-reddit text-reddit-fg">
+              <UserPlus className="size-5" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-xl font-medium tracking-tight">Create accounts</h2>
+              <p className="mt-1 text-sm leading-relaxed text-muted">
+                Pick 1–{createMax}. {createMax} queues all of them and starts making them in order.
+              </p>
+            </div>
+          </div>
+
+          <div
+            role="radiogroup"
+            aria-label="How many Reddit accounts to create"
+            className="mt-5 grid grid-cols-5 gap-2"
+          >
+            {Array.from({ length: createMax }, (_, i) => i + 1).map((n) => {
+              const allowed = n <= maxPick;
+              return (
+                <button
+                  key={n}
+                  type="button"
+                  role="radio"
+                  aria-checked={pick === n}
+                  aria-label={`${n} ${n === 1 ? "account" : "accounts"}`}
+                  disabled={!allowed || busy}
+                  onClick={() => setCount(n)}
+                  className={cn(
+                    "flex min-h-12 items-center justify-center rounded-lg border text-lg font-medium tabular-nums",
+                    pick === n && allowed
+                      ? "border-reddit bg-reddit text-reddit-fg"
+                      : "border-border bg-surface-2 text-fg",
+                    !allowed && "cursor-not-allowed opacity-40",
+                  )}
+                >
+                  {n}
+                </button>
+              );
+            })}
+          </div>
+
+          <p className="mt-3 font-mono text-[11px] tracking-widest text-subtle uppercase">
+            {accountCount} of {accountCap} used · {remainingSlots} open
+          </p>
+
+          <Button
+            type="button"
+            className="mt-4 min-h-12 w-full"
+            disabled={!canCreate || busy}
+            onClick={() => onCreate(pick)}
+          >
+            {busy
+              ? "Queuing…"
+              : pick <= 1
+                ? "Make 1 account"
+                : `Queue ${pick} and start making them`}
+          </Button>
+          {!canCreate ? (
+            <p className="mt-3 text-sm text-warn">
+              This desk is full. Disconnect one first, or connect an account you already use.
+            </p>
+          ) : null}
+        </article>
+
+        <article className="rounded-xl border border-border bg-surface p-5">
+          <div className="flex items-start gap-3">
+            <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-surface-2 text-fg">
+              <Link2 className="size-5" aria-hidden="true" />
+            </span>
+            <div className="min-w-0 flex-1">
+              <h2 className="text-xl font-medium tracking-tight">Connect my own</h2>
+              <p className="mt-1 text-sm leading-relaxed text-muted">
+                Use a Reddit account you already have. You log in on Reddit. We never see that password.
+              </p>
+            </div>
+          </div>
+          <Button
+            type="button"
+            variant="secondary"
+            className="mt-5 min-h-12 w-full"
+            disabled={busy}
+            onClick={onConnect}
+          >
+            Connect with Reddit
+          </Button>
+        </article>
       </div>
 
-      <Button type="button" variant="ghost" className="mt-6 w-full" onClick={onExisting}>
-        I already have a Reddit account
-      </Button>
+      {error ? <p className="mt-4 text-sm text-bad">{error}</p> : null}
     </section>
-  );
-}
-
-function ModeCard({
-  id,
-  title,
-  description,
-  selected,
-  disabled,
-  disabledReason,
-  onSelect,
-}: {
-  id: string;
-  title: string;
-  description: string;
-  selected: boolean;
-  disabled?: boolean;
-  disabledReason?: string | null;
-  onSelect: () => void;
-}) {
-  return (
-    <button
-      id={id}
-      type="button"
-      role="radio"
-      aria-checked={selected}
-      aria-disabled={disabled}
-      disabled={disabled}
-      onClick={onSelect}
-      className={cn(
-        "w-full rounded-xl border p-4 text-left transition-colors",
-        selected ? "border-accent bg-accent/10" : "border-border bg-surface hover:bg-surface-2",
-        disabled && "cursor-not-allowed opacity-60",
-      )}
-    >
-      <p className="text-base font-medium tracking-tight">{title}</p>
-      <p className="mt-1 text-sm leading-relaxed text-muted">{description}</p>
-      {disabled && disabledReason ? (
-        <p className="mt-2 text-xs leading-relaxed text-warn">{disabledReason}</p>
-      ) : null}
-    </button>
   );
 }

@@ -24,6 +24,8 @@ export function safeError(code: string, summary: string) {
 
 export const SAFE_EVENT_TYPES = [
   "job_created",
+  "batch_queued",
+  "batch_advanced",
   "details_saved",
   "started",
   "session_allocation_requested",

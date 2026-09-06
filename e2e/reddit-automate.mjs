@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Real Chromium proof that Automate is one click on the isolated Reddit page.
+ * Real Chromium proof that Create is one click on the isolated Reddit page.
  * Spins a dedicated Vite with auth off (dev-user). Does not hit reddit.com.
  * Fails if the owner kick board appears, if connection is not verified, or if
  * a second account still asks the owner to tap anything.
@@ -81,24 +81,24 @@ async function assertNoOwnerKicks(page) {
       if (await loc.isVisible().catch(() => false)) visible.push(await loc.getAttribute("id") || await loc.getAttribute("data-testid"));
     }
     if (visible.length) {
-      throw new Error(`Owner kick controls were shown; Automate must finish without them. Saw: ${visible.join(", ")}`);
+      throw new Error(`Owner kick controls were shown; Create must finish without them. Saw: ${visible.join(", ")}`);
     }
   }
   const overlay = await page.locator("body").innerText();
   if (/async_hooks|AsyncLocalStorage|Something went wrong/i.test(overlay) && !/What is actually done/i.test(overlay)) {
-    throw new Error(`Page crashed before Automate could run.\n${overlay.slice(0, 1500)}`);
+    throw new Error(`Page crashed before Create could run.\n${overlay.slice(0, 1500)}`);
   }
 }
 
-async function clickAutomateAndWait(page) {
-  const automate = page.locator("#mode-assisted");
+async function clickCreateAndWait(page) {
+  const create = page.getByRole("button", { name: /Make 1 account/i });
   try {
-    await automate.waitFor({ state: "visible", timeout: 30_000 });
+    await create.waitFor({ state: "visible", timeout: 30_000 });
   } catch (err) {
     throw new Error(await dump(page, err));
   }
   await assertNoOwnerKicks(page);
-  await automate.click();
+  await create.click();
   const result = page.locator("[data-testid='onboarding-result']");
   try {
     await result.waitFor({ state: "visible", timeout: 45_000 });
@@ -140,18 +140,18 @@ async function main() {
     const pageErrors = [];
     page.on("pageerror", (e) => pageErrors.push(String(e)));
     await page.goto(`${BASE}/reddit`, { waitUntil: "domcontentloaded" });
-    const first = await clickAutomateAndWait(page);
+    const first = await clickCreateAndWait(page);
     await page.getByRole("button", { name: /Open Reddit dashboard/i }).click();
     await page.getByRole("button", { name: /^Add$/i }).waitFor({ state: "visible", timeout: 20_000 });
     await page.getByRole("button", { name: /^Add$/i }).click();
-    const second = await clickAutomateAndWait(page);
+    const second = await clickCreateAndWait(page);
     if (pageErrors.some((e) => /async_hooks|AsyncLocalStorage/i.test(e))) {
       throw new Error(`Client bundle still pulled Node async_hooks:\n${pageErrors.join("\n")}`);
     }
     if (first.toLowerCase() === second.toLowerCase()) {
-      throw new Error(`Second Automate reused ${first} instead of creating another practice account.`);
+      throw new Error(`Second Create reused ${first} instead of creating another practice account.`);
     }
-    console.log("ok: automate created", first, "then", second);
+    console.log("ok: create queued", first, "then", second);
   } finally {
     await browser.close().catch(() => undefined);
     preview.kill("SIGTERM");

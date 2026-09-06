@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import type { OnboardingJobPublic } from "@/lib/reddit/onboarding/types";
+import type { OnboardingBatchPublic, OnboardingJobPublic } from "@/lib/reddit/onboarding/types";
 
 function formatExpiry(value: string | null): string | null {
   if (!value) return null;
@@ -12,11 +12,13 @@ function formatExpiry(value: string | null): string | null {
 
 export function OnboardingResult({
   job,
+  batch,
   onDashboard,
   onManage,
   onLater,
 }: {
   job: OnboardingJobPublic;
+  batch?: OnboardingBatchPublic | null;
   onDashboard: () => void;
   onManage: () => void;
   onLater: () => void;
@@ -27,6 +29,11 @@ export function OnboardingResult({
   return (
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16" data-testid="onboarding-result">
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Result</p>
+      {batch && batch.size > 1 ? (
+        <p className="mt-2 font-mono text-xs tracking-[0.18em] text-reddit uppercase">
+          {batch.completedCount} of {batch.size} made
+        </p>
+      ) : null}
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">What is actually done</h1>
       <ul className="mt-8 space-y-3">
         <ResultCard

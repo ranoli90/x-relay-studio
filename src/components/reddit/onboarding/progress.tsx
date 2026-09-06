@@ -1,5 +1,5 @@
 import { Button } from "@/components/ui/button";
-import type { OnboardingEventPublic, OnboardingJobPublic } from "@/lib/reddit/onboarding/types";
+import type { OnboardingBatchPublic, OnboardingEventPublic, OnboardingJobPublic } from "@/lib/reddit/onboarding/types";
 
 const STAGES = [
   { id: "account", label: "Account" },
@@ -15,6 +15,7 @@ function stageOf(job: OnboardingJobPublic): (typeof STAGES)[number]["id"] {
 
 export function OnboardingProgress({
   job,
+  batch,
   events,
   onTakeControl,
   onCancel,
@@ -27,6 +28,7 @@ export function OnboardingProgress({
   fixture,
 }: {
   job: OnboardingJobPublic;
+  batch?: OnboardingBatchPublic | null;
   events: OnboardingEventPublic[];
   onTakeControl: () => void;
   onCancel: () => void;
@@ -50,6 +52,11 @@ export function OnboardingProgress({
           </li>
         ))}
       </ol>
+      {batch && batch.size > 1 ? (
+        <p className="mt-4 font-mono text-xs tracking-[0.18em] text-reddit uppercase">
+          Account {batch.currentIndex} of {batch.size}
+        </p>
+      ) : null}
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">
         {job.waitReason || statusTitle(job)}
       </h1>
