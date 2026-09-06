@@ -94,7 +94,9 @@ describe("phone and app numbers", () => {
   it("normalizes E.164", () => {
     assert.equal(normalizePhone("+1 (555) 123-4567"), "+15551234567");
     assert.equal(normalizePhone("15551234567"), "+15551234567");
+    assert.equal(normalizePhone("+1 303 555 0100"), "+13035550100");
     assert.equal(normalizePhone("123"), null);
+    assert.equal(normalizePhone("3035550100"), null);
   });
 
   it("parses api id and hash", () => {

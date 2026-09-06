@@ -7,6 +7,7 @@ import {
   isDcConnectFailure,
   isPeerFlood,
   mtprotoClientOpts,
+  type MtprotoPurpose,
   type MtprotoTransport,
 } from "./mtproto-policy.server";
 import {
@@ -36,8 +37,8 @@ function loadLib(): Promise<Teleproto> {
   return libPromise;
 }
 
-function clientOpts(transport: MtprotoTransport) {
-  return mtprotoClientOpts(transport);
+function clientOpts(transport: MtprotoTransport, purpose: MtprotoPurpose) {
+  return mtprotoClientOpts(transport, purpose);
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -88,14 +89,14 @@ type Opened = {
   save: () => string;
 };
 
-async function openClient(creds: Creds): Promise<Opened> {
+async function openClient(creds: Creds, purpose: MtprotoPurpose = "write"): Promise<Opened> {
   const lib = await loadLib();
   const transports = connectTransports();
   let last: unknown;
   for (let i = 0; i < transports.length; i++) {
     const transport = transports[i];
     const session = new lib.sessions.StringSession(creds.session ?? "");
-    const client = new lib.TelegramClient(session, creds.apiId, creds.apiHash, clientOpts(transport));
+    const client = new lib.TelegramClient(session, creds.apiId, creds.apiHash, clientOpts(transport, purpose));
     try {
       await withTimeout(client.connect(), 22_000, "connect");
       return { lib, client, save: () => String(client.session.save() ?? creds.session ?? "") };
@@ -118,8 +119,12 @@ async function openClient(creds: Creds): Promise<Opened> {
   throw mapRpc(last);
 }
 
-async function withClient<T>(creds: Creds, work: (opened: Opened) => Promise<T>): Promise<T> {
-  const opened = await openClient(creds);
+async function withClient<T>(
+  creds: Creds,
+  work: (opened: Opened) => Promise<T>,
+  purpose: MtprotoPurpose = "write",
+): Promise<T> {
+  const opened = await openClient(creds, purpose);
   try {
     return await work(opened);
   } catch (err) {
@@ -195,22 +200,26 @@ export async function sendLoginCode(opts: {
   apiHash: string;
   phone: string;
 }): Promise<{ phoneCodeHash: string; session: string }> {
-  return withClient(opts, async ({ client, save }) => {
-    const sent = await withTimeout(
-      client.sendCode({ apiId: opts.apiId, apiHash: opts.apiHash }, opts.phone),
-      20_000,
-      "send code",
-    );
-    const phoneCodeHash = String(
-      (sent as { phoneCodeHash?: string; phone_code_hash?: string }).phoneCodeHash ??
-        (sent as { phone_code_hash?: string }).phone_code_hash ??
-        "",
-    );
-    if (!phoneCodeHash) {
-      throw new TelegramError("invalid", "Telegram did not send a login code.", 400);
-    }
-    return { phoneCodeHash, session: save() };
-  });
+  return withClient(
+    opts,
+    async ({ client, save }) => {
+      const sent = await withTimeout(
+        client.sendCode({ apiId: opts.apiId, apiHash: opts.apiHash }, opts.phone),
+        20_000,
+        "send code",
+      );
+      const phoneCodeHash = String(
+        (sent as { phoneCodeHash?: string; phone_code_hash?: string }).phoneCodeHash ??
+          (sent as { phone_code_hash?: string }).phone_code_hash ??
+          "",
+      );
+      if (!phoneCodeHash) {
+        throw new TelegramError("invalid", "Telegram did not send a login code.", 400);
+      }
+      return { phoneCodeHash, session: save() };
+    },
+    "auth",
+  );
 }
 
 export async function signInWithCode(opts: {
@@ -225,29 +234,33 @@ export async function signInWithCode(opts: {
   session: string;
   me: ReturnType<typeof readMe> | null;
 }> {
-  return withClient(opts, async ({ lib, client, save }) => {
-    try {
-      await withTimeout(
-        client.invoke(
-          new lib.Api.auth.SignIn({
-            phoneNumber: opts.phone,
-            phoneCodeHash: opts.phoneCodeHash,
-            phoneCode: opts.code,
-          }),
-        ),
-        15_000,
-        "sign in",
-      );
-    } catch (err) {
-      const mapped = mapRpc(err);
-      if (mapped.code === "password" || /SESSION_PASSWORD_NEEDED/i.test(String(err))) {
-        return { needsPassword: true, session: save(), me: null };
+  return withClient(
+    opts,
+    async ({ lib, client, save }) => {
+      try {
+        await withTimeout(
+          client.invoke(
+            new lib.Api.auth.SignIn({
+              phoneNumber: opts.phone,
+              phoneCodeHash: opts.phoneCodeHash,
+              phoneCode: opts.code,
+            }),
+          ),
+          15_000,
+          "sign in",
+        );
+      } catch (err) {
+        const mapped = mapRpc(err);
+        if (mapped.code === "password" || /SESSION_PASSWORD_NEEDED/i.test(String(err))) {
+          return { needsPassword: true, session: save(), me: null };
+        }
+        throw mapped;
       }
-      throw mapped;
-    }
-    const me = readMe(await withTimeout(client.getMe(), 12_000, "me"));
-    return { needsPassword: false, session: save(), me };
-  });
+      const me = readMe(await withTimeout(client.getMe(), 12_000, "me"));
+      return { needsPassword: false, session: save(), me };
+    },
+    "auth",
+  );
 }
 
 export async function signInCloudPassword(opts: {
@@ -256,21 +269,25 @@ export async function signInCloudPassword(opts: {
   session: string;
   password: string;
 }): Promise<{ session: string; me: ReturnType<typeof readMe> }> {
-  return withClient(opts, async ({ client, save }) => {
-    await withTimeout(
-      client.signInWithPassword(
-        { apiId: opts.apiId, apiHash: opts.apiHash },
-        {
-          password: async () => opts.password,
-          onError: async () => false,
-        },
-      ),
-      20_000,
-      "cloud password",
-    );
-    const me = readMe(await withTimeout(client.getMe(), 12_000, "me"));
-    return { session: save(), me };
-  });
+  return withClient(
+    opts,
+    async ({ client, save }) => {
+      await withTimeout(
+        client.signInWithPassword(
+          { apiId: opts.apiId, apiHash: opts.apiHash },
+          {
+            password: async () => opts.password,
+            onError: async () => false,
+          },
+        ),
+        20_000,
+        "cloud password",
+      );
+      const me = readMe(await withTimeout(client.getMe(), 12_000, "me"));
+      return { session: save(), me };
+    },
+    "auth",
+  );
 }
 
 export async function fetchMe(opts: Creds): Promise<{
