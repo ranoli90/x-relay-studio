@@ -44,7 +44,7 @@ Copy `.env.example` and set at least:
 | `CRON_SECRET` | `Authorization: Bearer` on `/api/cron/studio`. |
 | `PAYMENTS_WEBHOOK_SECRET` | Payment rails. Screenshot is never PAID. |
 
-Run migrations as a release step, not during `vite build`:
+Neon applies pending `migrations/*.sql` on first connect (same advisory lock as `scripts/migrate.mjs`). `vite build` still does not migrate (F09). Laptop/release path:
 
 ```
 npm run db:migrate

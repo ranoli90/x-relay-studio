@@ -15,7 +15,7 @@
 | `REDDIT_BROWSER_PROVIDER` | `fake` | must be `browserbase` before assisted signup |
 | Reddit onboarding worker | no-op without `DATABASE_URL`; preview drains fake commands in-process | `npm run worker:reddit-onboarding` with Postgres |
 | `CRON_ENABLED` | default on | set `false` to no-op `/api/cron/studio` |
-| Migrations | `npm run db:migrate` from a laptop or a release job | never from `vite build`. `0031_conversation_repair.sql` is additive and holds existing autopilot in `draft` until an operator reviews Auto-send. |
+| Migrations | Neon applies pending files on first connect (advisory lock). `npm run db:migrate` remains the laptop/release path. Never from `vite build`. `0031_conversation_repair.sql` is additive and holds existing autopilot in `draft` until an operator reviews Auto-send. Set `XRELAY_MIGRATE_ON_START=0` to fail-closed instead of applying. |
 
 Telegram conversation work is synthetic-only until the Telegram-to-external-AI permission gate (XR-048) is reviewed. Live partner sends, invoices, and paid provider probes are not authorized by the conversation-repair wave.
 

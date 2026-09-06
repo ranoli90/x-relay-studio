@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { authClient } from "@/lib/auth/client";
 import { openDesk } from "@/lib/desk/server";
+import { publicDeskError } from "@/lib/desk/public-error";
 import {
   deskEmail,
   formatDeskNumber,
@@ -52,7 +53,7 @@ export function AnonymousDesk({
         setNumber(deskNumber);
         setMode("created");
       }
-      setError(e instanceof Error ? e.message : "Could not open a desk.");
+      setError(publicDeskError(e, "Could not open a desk."));
     } finally {
       setBusy(false);
     }
@@ -76,7 +77,7 @@ export function AnonymousDesk({
       const desk = await openDesk({ data: { deskNumber } });
       onReady(desk.deskNumber);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not return.");
+      setError(publicDeskError(e, "Could not return."));
     } finally {
       setBusy(false);
     }
@@ -299,7 +300,7 @@ export function BindDesk({
             void openDesk({ data: {} })
               .then((d) => setNumber(d.deskNumber))
               .catch((e) => {
-                setError(e instanceof Error ? e.message : "Could not open a desk.");
+                setError(publicDeskError(e, "Could not open a desk."));
                 setBusy(false);
               });
           }}

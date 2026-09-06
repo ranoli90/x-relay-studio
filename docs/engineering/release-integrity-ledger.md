@@ -56,10 +56,11 @@ Phone-login retry policy in this baseline (auth five attempts, ordinary writes o
 | XR-048 | P0 | RELEASE-GATE | blocked | Telegram-to-external-AI permission not authorized by this handoff. Do not enable the live flow. |
 | XR-049 | P2 | PR-00 | source-fixed | Baseline/delta recorded here. |
 | XR-050 | P2 | PR-08/09 | source-fixed | README and environments.md document draft-hold, emergency stop, two ledgers, and that reads do not rearm. |
+| XR-051 | P0 | prod-boot | source-fixed | Production BindDesk failed closed on `0027_reddit_onboarding.sql` after F09 removed migrate-from-build. Neon now applies pending files on first connect. BindDesk no longer prints `db:migrate`. Production apply NOT RUN from this sandbox (no `DATABASE_URL`). |
 
 ## What was not tested
 
-- Live Telegram, live OpenRouter/xAI, real invoices, production Neon migrations
+- Live Telegram, live OpenRouter/xAI, real invoices, production Neon apply of 0027–0031 (sandbox has no `DATABASE_URL`)
 - Two-worker PostgreSQL races
 - Independent naturalness review of full synthetic conversations
 - Browser E2E of FloorSwitch against a logged-in desk (preview smoke covers render; `/agents` unauthenticated redirects to the landing desk)
