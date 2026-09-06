@@ -343,6 +343,16 @@ export const getOnboardingControlView = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const db = await sql();
     const job = await requireJob(db, context.userId, data.jobId);
+    if (onboardingFixtureEnabled()) {
+      return {
+        available: true,
+        url: "/__reddit-onboarding-fixture/index.html",
+        sessionId: job.provider_session_id,
+        kind: "fixture" as const,
+        reason: null,
+        fixture: true,
+      };
+    }
     if (job.control_owner !== "user") {
       throw new Error("Take control first. A live view is not issued while automation is running.");
     }
@@ -362,18 +372,8 @@ export const getOnboardingControlView = createServerFn({ method: "POST" })
           fixture: false,
         };
       } catch {
-        /* fall through to fixture or owner-browser */
+        /* fall through to owner-browser */
       }
-    }
-    if (onboardingFixtureEnabled()) {
-      return {
-        available: true,
-        url: "/__reddit-onboarding-fixture/index.html",
-        sessionId: job.provider_session_id,
-        kind: "fixture",
-        reason: null,
-        fixture: true,
-      };
     }
     return {
       available: false,
@@ -623,6 +623,88 @@ export const completeFixtureOnboarding = createServerFn({ method: "POST" })
     }
   });
 
+async function runIsolatedStart(
+  userId: string,
+  data: { mode: "assisted" | "manual"; intent: "create" | "connect_existing"; idempotencyKey: string },
+) {
+  const db = await sql();
+  await seedFixtureApp(userId, "http://127.0.0.1:8080/api/reddit/oauth/callback");
+  const existing = await getActiveJob(db, userId);
+  if (existing && existing.status !== "draft") {
+    return existing;
+  }
+  const username = existing?.expected_username || generateFixtureUsername();
+  const { job: draft } = await runOnboardingTx((tx) =>
+    createOrReuseDraft(tx, {
+      userId,
+      mode: data.mode,
+      intent: data.intent,
+      expectedUsername: username,
+      idempotencyKey: data.idempotencyKey,
+      body: data,
+    }),
+  );
+  let job = draft;
+  if (job.status === "draft") {
+    job = await saveDetails(db, {
+      userId,
+      jobId: job.id,
+      version: Number(job.version),
+      expectedUsername: username,
+      retainContext: false,
+      retainPassword: false,
+      assistanceConsent: data.mode === "assisted",
+    });
+    if (job.mode === "assisted") {
+      const caps = capabilities({
+        assistanceConsent: true,
+        approvalStatus: assistedApprovalStatus(),
+      });
+      if (!caps.canStartAssistedSignup) {
+        throw new OnboardingError("ASSISTED_DISABLED", assistedUnavailableReason(caps) || "Guided setup is unavailable.");
+      }
+    }
+    const { job: queued } = await enqueueCommand(db, {
+      userId,
+      jobId: job.id,
+      version: Number(job.version),
+      kind: "start",
+      idempotencyKey: `${data.idempotencyKey}:start`,
+      payload: { consentVersion: ASSISTANCE_CONSENT_VERSION },
+      operation: "startOnboarding",
+    });
+    job = await transitionJob(db, {
+      userId,
+      jobId: job.id,
+      expectedVersion: Number(queued.version),
+      event: { type: "OWNER_STARTS" },
+      eventType: "started",
+      patch: { reserved_browser_seconds: job.mode === "assisted" ? sessionBudgetSeconds() : 0 },
+    });
+    await drainOwnedPreview(db, userId, job.id);
+    job = (await getJob(db, userId, job.id)) || job;
+  }
+  return job;
+}
+
+export const startIsolatedOnboarding = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => autoIsolatedOnboardingSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    if (!redditOnboardingEnabled()) throw new Error("Reddit onboarding is not enabled.");
+    if (!onboardingFixtureEnabled()) {
+      throw new OnboardingError("FIXTURE_DISABLED", "Isolated setup is only for this practice preview.");
+    }
+    try {
+      const job = await runIsolatedStart(context.userId, data);
+      const db = await sql();
+      const app = await getApp(context.userId);
+      return toPublicJob(job, { appConfigured: Boolean(app) });
+    } catch (err) {
+      throwOnboarding(err);
+    }
+  });
+
 export const autoRunIsolatedOnboarding = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((d: unknown) => autoIsolatedOnboardingSchema.parse(d))
@@ -632,75 +714,13 @@ export const autoRunIsolatedOnboarding = createServerFn({ method: "POST" })
       throw new OnboardingError("FIXTURE_DISABLED", "One-click setup is only for this isolated practice preview.");
     }
     try {
+      const job = await runIsolatedStart(context.userId, data);
       const db = await sql();
-      await seedFixtureApp(context.userId, "http://127.0.0.1:8080/api/reddit/oauth/callback");
-      const existing = await getActiveJob(db, context.userId);
-      if (existing && existing.status !== "draft") {
-        const finished = await finishIsolatedFixtureSignup(db, {
-          userId: context.userId,
-          jobId: existing.id,
-          version: Number(existing.version),
-          username: existing.expected_username,
-        });
-        const app = await getApp(context.userId);
-        return toPublicJob(finished.job, { appConfigured: Boolean(app) });
-      }
-      const username = existing?.expected_username || generateFixtureUsername();
-      const { job: draft } = await runOnboardingTx((tx) =>
-        createOrReuseDraft(tx, {
-          userId: context.userId,
-          mode: data.mode,
-          intent: data.intent,
-          expectedUsername: username,
-          idempotencyKey: data.idempotencyKey,
-          body: data,
-        }),
-      );
-      let job = draft;
-      if (job.status === "draft") {
-        job = await saveDetails(db, {
-          userId: context.userId,
-          jobId: job.id,
-          version: Number(job.version),
-          expectedUsername: username,
-          retainContext: false,
-          retainPassword: false,
-          assistanceConsent: data.mode === "assisted",
-        });
-        if (job.mode === "assisted") {
-          const caps = capabilities({
-            assistanceConsent: true,
-            approvalStatus: assistedApprovalStatus(),
-          });
-          if (!caps.canStartAssistedSignup) {
-            throw new OnboardingError("ASSISTED_DISABLED", assistedUnavailableReason(caps) || "Guided setup is unavailable.");
-          }
-        }
-        const { job: queued } = await enqueueCommand(db, {
-          userId: context.userId,
-          jobId: job.id,
-          version: Number(job.version),
-          kind: "start",
-          idempotencyKey: `${data.idempotencyKey}:start`,
-          payload: { consentVersion: ASSISTANCE_CONSENT_VERSION },
-          operation: "startOnboarding",
-        });
-        job = await transitionJob(db, {
-          userId: context.userId,
-          jobId: job.id,
-          expectedVersion: Number(queued.version),
-          event: { type: "OWNER_STARTS" },
-          eventType: "started",
-          patch: { reserved_browser_seconds: job.mode === "assisted" ? sessionBudgetSeconds() : 0 },
-        });
-        await drainOwnedPreview(db, context.userId, job.id);
-        job = (await getJob(db, context.userId, job.id)) || job;
-      }
       const finished = await finishIsolatedFixtureSignup(db, {
         userId: context.userId,
         jobId: job.id,
         version: Number(job.version),
-        username: job.expected_username || username,
+        username: job.expected_username,
       });
       const app = await getApp(context.userId);
       return toPublicJob(finished.job, { appConfigured: Boolean(app) });

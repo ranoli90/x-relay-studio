@@ -107,8 +107,8 @@ export async function completeFixtureConnect(
 }
 
 /**
- * Isolated preview only. Completes connect + health + job so Automate does not
- * stop on owner-only Reddit gates that this page is not allowed to click.
+ * Isolated preview only. Completes connect + health + job after the owner
+ * taps the remaining Reddit controls (or via the legacy skip API).
  * Live Reddit still requires the owner for CAPTCHA, terms, and final submit.
  */
 export async function finishIsolatedFixtureSignup(

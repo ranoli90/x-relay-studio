@@ -29,7 +29,7 @@ import {
   completeFixtureOnboarding,
   confirmSignupSubmission,
   getOnboardingControlView,
-  autoRunIsolatedOnboarding,
+  startIsolatedOnboarding,
 } from "@/lib/reddit/onboarding/server";
 import type {
   OnboardingBootstrap,
@@ -91,7 +91,6 @@ export function OnboardingCoordinator({
   const opKeys = useRef(new Map<string, KeyPair>());
   const onFinishedRef = useRef(onFinished);
   onFinishedRef.current = onFinished;
-  const autoFinishTried = useRef(false);
 
   const loadPendingAccount = useCallback(async (accountId?: string | null) => {
     const reddit = await getBootstrap();
@@ -105,33 +104,9 @@ export function OnboardingCoordinator({
   const loadBoot = useCallback(async () => {
     const next = await getOnboardingBootstrap();
     setBoot(next);
-    if (
-      next.fixtureEnabled &&
-      next.currentJob &&
-      !autoFinishTried.current &&
-      !["completed", "cancelled", "failed", "blocked", "expired"].includes(next.currentJob.status)
-    ) {
-      autoFinishTried.current = true;
-      try {
-        const finished = await autoRunIsolatedOnboarding({
-          data: {
-            mode: next.currentJob.mode,
-            intent: next.currentJob.intent,
-            idempotencyKey: `resume-${next.currentJob.id}`,
-            correlationId: `resume-${next.currentJob.id}`,
-          },
-        });
-        setJob(finished);
-        setScreen("result");
-        onFinishedRef.current();
-        return;
-      } catch {
-        /* fall through to the ordinary resume screens */
-      }
-    }
     if (next.currentJob) {
       setJob(next.currentJob);
-      const nextScreen = screenFor(next.currentJob, next.appConfigured);
+      const nextScreen = screenFor(next.currentJob, next.appConfigured, next.fixtureEnabled);
       setScreen(nextScreen);
       if (nextScreen === "health") {
         const acc = await loadPendingAccount(next.currentJob.accountId);
@@ -148,29 +123,64 @@ export function OnboardingCoordinator({
 
   useEffect(() => {
     if (screen !== "control" || !job) return;
-    void getOnboardingControlView({
-      data: {
-        jobId: job.id,
-        version: job.version,
-        correlationId: rememberKey(opKeys.current, `view:${job.id}`).correlationId,
-      },
-    })
-      .then(setControlView)
-      .catch(() =>
-        setControlView({
-          available: Boolean(boot?.fixtureEnabled),
-          url: boot?.fixtureEnabled ? "/__reddit-onboarding-fixture/index.html" : null,
-          kind: boot?.fixtureEnabled ? "fixture" : "none",
-        }),
-      );
-  }, [screen, job, boot]);
+    if (boot?.fixtureEnabled) {
+      setControlView({
+        available: true,
+        url: "/__reddit-onboarding-fixture/index.html",
+        kind: "fixture",
+        fixture: true,
+      });
+      return;
+    }
+    let cancelled = false;
+    const current = job;
+    void (async () => {
+      let next = current;
+      if (next.controlOwner !== "user" && next.permittedActions.includes("request_takeover")) {
+        try {
+          next = await requestOnboardingTakeover({
+            data: {
+              jobId: next.id,
+              version: next.version,
+              correlationId: rememberKey(opKeys.current, `takeover:${next.id}`).correlationId,
+            },
+          });
+          if (!cancelled) setJob(next);
+        } catch {
+          /* still try to load a view */
+        }
+      }
+      try {
+        const view = await getOnboardingControlView({
+          data: {
+            jobId: next.id,
+            version: next.version,
+            correlationId: rememberKey(opKeys.current, `view:${next.id}`).correlationId,
+          },
+        });
+        if (!cancelled) setControlView(view);
+      } catch {
+        if (!cancelled) {
+          setControlView({
+            available: false,
+            url: null,
+            kind: "none",
+            reason: "Open Reddit and tap this same control on the real page.",
+          });
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [screen, job?.id, boot?.fixtureEnabled]);
 
   const refreshJob = useCallback(async (id: string) => {
     const next = await getOnboardingJob({ data: { jobId: id } });
     setJob(next);
     const ev = await getOnboardingEvents({ data: { jobId: id, afterSequence: 0 } });
     setEvents(ev.events);
-    if (boot) setScreen(screenFor(next, boot.appConfigured || Boolean(boot.fixtureEnabled)));
+    if (boot) setScreen(screenFor(next, boot.appConfigured || Boolean(boot.fixtureEnabled), boot.fixtureEnabled));
     return next;
   }, [boot]);
 
@@ -207,7 +217,31 @@ export function OnboardingCoordinator({
     const keys = rememberKey(opKeys.current, op);
     try {
       if (boot?.fixtureEnabled) {
-        const finished = await autoRunIsolatedOnboarding({
+        if (intent === "connect_existing") {
+          const started = await startIsolatedOnboarding({
+            data: {
+              mode,
+              intent,
+              idempotencyKey: keys.idempotencyKey,
+              correlationId: keys.correlationId,
+            },
+          });
+          const finished = await completeFixtureOnboarding({
+            data: {
+              jobId: started.id,
+              version: started.version,
+              username: started.expectedUsername || undefined,
+              correlationId: keys.correlationId,
+            },
+          });
+          opKeys.current.delete(op);
+          setJob(finished);
+          if (finished.expectedUsername) setUsername(finished.expectedUsername);
+          setScreen("result");
+          onFinishedRef.current();
+          return;
+        }
+        const started = await startIsolatedOnboarding({
           data: {
             mode,
             intent,
@@ -216,10 +250,9 @@ export function OnboardingCoordinator({
           },
         });
         opKeys.current.delete(op);
-        setJob(finished);
-        if (finished.expectedUsername) setUsername(finished.expectedUsername);
-        setScreen("result");
-        onFinished();
+        setJob(started);
+        if (started.expectedUsername) setUsername(started.expectedUsername);
+        setScreen("control");
         return;
       }
       const created = await createOnboarding({
@@ -430,7 +463,7 @@ export function OnboardingCoordinator({
                     className="w-full justify-start"
                     onClick={() => {
                       if (c.kind === "job") {
-                        void refreshJob(c.id).then((j) => setScreen(screenFor(j, boot.appConfigured)));
+                        void refreshJob(c.id).then((j) => setScreen(screenFor(j, boot.appConfigured, boot.fixtureEnabled)));
                       } else {
                         void loadPendingAccount(c.id).then((acc) => {
                           if (acc) setScreen("health");
@@ -581,19 +614,60 @@ export function OnboardingCoordinator({
     return frame(
       <HumanControl
         job={job}
+        fixture={Boolean(boot.fixtureEnabled)}
+        signupUrl={boot.reviewedSignupUrl}
         view={
           controlView ||
           (boot.fixtureEnabled
-            ? { available: true, url: "/__reddit-onboarding-fixture/index.html", kind: "fixture" }
+            ? { available: true, url: "/__reddit-onboarding-fixture/index.html", kind: "fixture", fixture: true }
             : { available: false, kind: "none" })
         }
         onFinish={() => {
-          void finishOnboardingTakeover({
-            data: { jobId: job.id, version: job.version, correlationId: rememberKey(opKeys.current, `end-takeover:${job.id}`).correlationId },
-          }).then((j) => {
-            setJob(j);
-            setScreen("manual-return");
-          }).catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not return control."));
+          if (boot.fixtureEnabled) {
+            setBusy(true);
+            void completeFixtureOnboarding({
+              data: {
+                jobId: job.id,
+                version: job.version,
+                username: username || job.expectedUsername || undefined,
+                correlationId: rememberKey(opKeys.current, `fixture:${job.id}`).correlationId,
+              },
+            })
+              .then((j) => {
+                setJob(j);
+                setScreen("result");
+                onFinishedRef.current();
+              })
+              .catch((e: unknown) =>
+                setError(e instanceof Error ? e.message : "Could not finish the practice account."),
+              )
+              .finally(() => setBusy(false));
+            return;
+          }
+          const keys = rememberKey(opKeys.current, `submit:${job.id}`);
+          void confirmSignupSubmission({
+            data: {
+              jobId: job.id,
+              version: job.version,
+              confirmation: "owner-submitted-form",
+              correlationId: keys.correlationId,
+            },
+          })
+            .then(async (j) => {
+              let next = j;
+              if (j.controlOwner === "user") {
+                next = await finishOnboardingTakeover({
+                  data: {
+                    jobId: j.id,
+                    version: j.version,
+                    correlationId: rememberKey(opKeys.current, `end-takeover:${j.id}`).correlationId,
+                  },
+                });
+              }
+              setJob(next);
+              setScreen("manual-return");
+            })
+            .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not record that."));
         }}
         onManual={() => void handoffManual()}
       />,
@@ -747,15 +821,22 @@ export function OnboardingCoordinator({
   );
 }
 
-function screenFor(job: OnboardingJobPublic, appConfigured: boolean): Screen {
+function screenFor(job: OnboardingJobPublic, appConfigured: boolean, fixture = false): Screen {
   if (job.status === "completed" || job.status === "cancelled" || job.status === "failed" || job.status === "blocked" || job.status === "expired") {
     return "result";
   }
   if (job.step === "health" || job.step === "confirm") return "health";
   if (job.step === "oauth") return appConfigured ? "oauth" : "app";
   if (job.step === "app_access" || job.step === "app_credentials") return appConfigured ? "oauth" : "app";
+  if (
+    job.intent === "create" &&
+    job.status === "needs_user" &&
+    (job.step === "verify_account" || job.step === "create_account")
+  ) {
+    return "control";
+  }
   if (job.controlOwner === "user") return "control";
-  if (job.status === "draft") return job.intent === "connect_existing" ? (appConfigured ? "oauth" : "app") : "details";
+  if (job.status === "draft") return job.intent === "connect_existing" ? (appConfigured || fixture ? "oauth" : "app") : "details";
   return "progress";
 }
 

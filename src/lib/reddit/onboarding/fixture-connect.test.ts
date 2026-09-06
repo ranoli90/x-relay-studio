@@ -132,6 +132,8 @@ describe("isolated fixture connect", () => {
     });
     await drainOwnedPreview(sql, "user-auto", saved.id);
     const afterDrain = await getJob(sql, "user-auto", saved.id);
+    assert.equal(afterDrain?.status, "needs_user");
+    assert.match(afterDrain?.wait_reason || "", /security check/i);
     const done = await finishIsolatedFixtureSignup(sql, {
       userId: "user-auto",
       jobId: saved.id,
