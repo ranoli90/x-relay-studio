@@ -21,6 +21,7 @@ import {
   generateDraftSchema,
   liveSessionQuerySchema,
   liveInputSchema,
+  saveSteelHostSchema,
 } from "./schemas.ts";
 import {
   createOrReuseDraft,
@@ -63,6 +64,14 @@ import {
   deleteRetainedSignIn,
   confirmDeleteRetainedSignIn,
 } from "./account-actions.ts";
+import {
+  disconnectSteelHost,
+  emptySteelHost,
+  hydrateSteelFromStore,
+  loadPersistedSteelKey,
+  publicSteelHost,
+  saveSteelHost,
+} from "./browser-host.ts";
 
 async function sql(): Promise<SqlLike> {
   return getSql();
@@ -102,6 +111,8 @@ export const getOnboardingBootstrap = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async ({ context }) => {
     const db = await sql();
+    loadPersistedSteelKey();
+    await hydrateSteelFromStore(db, context.userId).catch(() => false);
     let app = await getApp(context.userId);
     if (!app && onboardingFixtureEnabled()) {
       await seedFixtureApp(context.userId, "http://127.0.0.1:8080/api/reddit/oauth/callback");
@@ -113,6 +124,10 @@ export const getOnboardingBootstrap = createServerFn({ method: "GET" })
     });
     const job = redditOnboardingEnabled() ? await import("./store.ts").then((m) => m.getActiveJob(db, context.userId)) : null;
     const resume = redditOnboardingEnabled() ? await listResumeCandidates(db, context.userId) : [];
+    const previewUsesLocal = redditBrowserProvider() === "local" || onboardingFixtureEnabled();
+    const steelHost = await publicSteelHost(db, context.userId, previewUsesLocal).catch(() =>
+      emptySteelHost(previewUsesLocal),
+    );
     return {
       onboardingEnabled: redditOnboardingEnabled(),
       assistedAvailable: caps.canStartAssistedSignup && redditAssistedSignupEnabled(),
@@ -125,6 +140,7 @@ export const getOnboardingBootstrap = createServerFn({ method: "GET" })
       appConfigured: Boolean(app),
       fixtureEnabled: onboardingFixtureEnabled(),
       provider: redditBrowserProvider(),
+      steelHost,
     };
   });
 
@@ -705,6 +721,33 @@ export const sendOnboardingLiveInput = createServerFn({ method: "POST" })
       key: data.key,
     });
     return { ok: true };
+  });
+
+export const saveOnboardingSteelHost = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => saveSteelHostSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    try {
+      const db = await sql();
+      const saved = await saveSteelHost(db, context.userId, data.apiKey);
+      return {
+        ...saved,
+        previewUsesLocal: redditBrowserProvider() === "local" || onboardingFixtureEnabled(),
+      };
+    } catch (err) {
+      throwOnboarding(err);
+    }
+  });
+
+export const disconnectOnboardingSteelHost = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .handler(async ({ context }) => {
+    const db = await sql();
+    const next = await disconnectSteelHost(db, context.userId);
+    return {
+      ...next,
+      previewUsesLocal: redditBrowserProvider() === "local" || onboardingFixtureEnabled(),
+    };
   });
 
 

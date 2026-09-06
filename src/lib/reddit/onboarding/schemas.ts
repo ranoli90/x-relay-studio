@@ -283,3 +283,9 @@ export const liveInputSchema = z
   })
   .strict();
 
+export const saveSteelHostSchema = z
+  .object({
+    apiKey: z.string().trim().min(16).max(200),
+  })
+  .strict();
+

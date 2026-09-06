@@ -142,7 +142,8 @@ export function purposeAllowed(purpose: string): purpose is SecretPurpose {
     purpose === "signup_email" ||
     purpose === "temporary_signup_password" ||
     purpose === "retained_reddit_password" ||
-    purpose === "oauth_revocation_material"
+    purpose === "oauth_revocation_material" ||
+    purpose === "browser_host_key"
   );
 }
 

@@ -105,6 +105,7 @@ export const SECRET_PURPOSES = [
   "temporary_signup_password",
   "retained_reddit_password",
   "oauth_revocation_material",
+  "browser_host_key",
 ] as const;
 export type SecretPurpose = (typeof SECRET_PURPOSES)[number];
 
@@ -233,6 +234,17 @@ export type OnboardingBootstrap = {
   appConfigured: boolean;
   fixtureEnabled: boolean;
   provider: BrowserProviderName;
+  steelHost: SteelHostPublic;
+};
+
+export type SteelHostPublic = {
+  connected: boolean;
+  source: "env" | "saved" | "none";
+  hint: string | null;
+  lastVerifiedAt: string | null;
+  signupUrl: string;
+  keysUrl: string;
+  previewUsesLocal: boolean;
 };
 
 export type SignupObservation = {

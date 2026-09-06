@@ -9,17 +9,20 @@ import { OnboardingProgress } from "./progress";
 import { OnboardingResult } from "./result";
 import { HumanControl, type ControlViewState } from "./human-control";
 import { SavedAccess } from "./saved-access";
+import { SteelHostCard } from "./steel-host";
 import {
   cancelOnboarding,
   confirmConnectedIdentity,
   continueManualOnboarding,
   createOnboarding,
+  disconnectOnboardingSteelHost,
   finishOnboardingTakeover,
   getOnboardingBootstrap,
   getOnboardingEvents,
   getOnboardingJob,
   requestOnboardingTakeover,
   saveOnboardingDetails,
+  saveOnboardingSteelHost,
   startJobBoundRedditOAuth,
   startOnboarding,
   handoffOnboardingToManual,
@@ -81,6 +84,8 @@ export function OnboardingCoordinator({
   const [selected, setSelected] = useState<"assisted" | "manual" | null>(null);
   const [pendingAccount, setPendingAccount] = useState<RedditAccountPublic | null>(null);
   const [controlView, setControlView] = useState<ControlViewState | null>(null);
+  const [steelBusy, setSteelBusy] = useState(false);
+  const [steelError, setSteelError] = useState<string | null>(null);
   const hidden = useRef(typeof document !== "undefined" ? document.hidden : false);
   const opKeys = useRef(new Map<string, KeyPair>());
 
@@ -389,6 +394,39 @@ export function OnboardingCoordinator({
           }}
           onExisting={() => void begin("manual", "connect_existing")}
         />
+        {boot.steelHost ? (
+        <SteelHostCard
+          host={boot.steelHost}
+          busy={steelBusy}
+          error={steelError}
+          onSave={async (apiKey) => {
+            setSteelBusy(true);
+            setSteelError(null);
+            try {
+              const next = await saveOnboardingSteelHost({ data: { apiKey } });
+              setBoot({ ...boot, steelHost: next });
+            } catch (e) {
+              const message = e instanceof Error ? e.message : "Could not connect Steel.";
+              setSteelError(message);
+              throw e;
+            } finally {
+              setSteelBusy(false);
+            }
+          }}
+          onDisconnect={async () => {
+            setSteelBusy(true);
+            setSteelError(null);
+            try {
+              const next = await disconnectOnboardingSteelHost();
+              setBoot({ ...boot, steelHost: next });
+            } catch (e) {
+              setSteelError(e instanceof Error ? e.message : "Could not disconnect Steel.");
+            } finally {
+              setSteelBusy(false);
+            }
+          }}
+        />
+        ) : null}
       </>,
     );
   }

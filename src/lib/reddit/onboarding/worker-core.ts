@@ -32,6 +32,7 @@ import {
   assistedApprovalStatus,
 } from "./config.ts";
 import { claimCleanup, runCleanupTask, expireRetainedProfiles, type OauthRevoker } from "./cleanup.ts";
+import { hydrateSteelFromStore } from "./browser-host.ts";
 
 export function selectProvider(): BrowserProvider {
   switch (redditBrowserProvider()) {
@@ -494,6 +495,9 @@ async function handleCommand(
   });
 
   let contextId = allocation.contextId;
+  if (provider.name === "steel") {
+    await hydrateSteelFromStore(sql, job.user_id).catch(() => false);
+  }
   if (!contextId) {
     try {
       const ctx = await provider.createContext({

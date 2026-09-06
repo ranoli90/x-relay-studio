@@ -17,7 +17,7 @@ export function toSql(pg: PGlite): SqlLike {
   };
 }
 
-/** Stub tables 0027/0028/0029 alter, then apply those migrations from disk. */
+/** Stub tables 0027–0030 alter, then apply those migrations from disk. */
 export async function loadOnboardingSchema(pg: PGlite): Promise<void> {
   await pg.exec(`
     create table reddit_apps (
@@ -62,6 +62,7 @@ export async function loadOnboardingSchema(pg: PGlite): Promise<void> {
   await pg.exec(migrationSql("0027_reddit_onboarding.sql"));
   await pg.exec(migrationSql("0028_reddit_onboarding_backfill.sql"));
   await pg.exec(migrationSql("0029_reddit_onboarding_lifecycle.sql"));
+  await pg.exec(migrationSql("0030_reddit_browser_host.sql"));
 }
 
 export async function schema(pg: PGlite): Promise<void> {

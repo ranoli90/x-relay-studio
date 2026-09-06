@@ -116,7 +116,7 @@ export function assistedUnavailableReason(caps: CapabilityMap): string | null {
       return "Permission review is pending. Manual setup still works.";
     case "PROVIDER_NOT_CONFIGURED":
     case "BROWSERBASE_NOT_CONFIGURED":
-      return "The hosted browser is not configured. Self-host Steel, run local Chromium on a worker, or set Browserbase.";
+      return "The hosted browser is not configured. Connect Steel Cloud (free), self-host Steel, run local Chromium on a worker, or set Browserbase.";
     case "BUDGET_EXHAUSTED":
       return "The browser allowance for this desk is used up.";
     case "KILL_SWITCH":

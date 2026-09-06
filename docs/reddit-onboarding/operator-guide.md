@@ -37,7 +37,7 @@ Unattended Reddit signup is **not implemented and is forbidden**: no CAPTCHA sol
 
 Vercel is fail-closed. `VERCEL` is set there, so onboarding, assisted signup, and the fixture default **off**. To turn the coordinator on for a named preview or production:
 
-1. Apply migrations `0027`, `0028`, and `0029` on the Postgres that `DATABASE_URL` points at.
+1. Apply migrations `0027`, `0028`, `0029`, and `0030` on the Postgres that `DATABASE_URL` points at.
 2. Set **server** env (never `VITE_`):
    - `REDDIT_ONBOARDING_ENABLED=true` — coordinator only
    - `REDDIT_ASSISTED_SIGNUP_ENABLED=true` only with Steel/local/Browserbase on a worker host
@@ -46,7 +46,8 @@ Vercel is fail-closed. `VERCEL` is set there, so onboarding, assisted signup, an
    - `OPENROUTER_API_KEY` for drafting; `SECRETS_ENCRYPTION_KEY` or `BETTER_AUTH_SECRET` for envelopes
 3. Run a **long-lived worker** (`npm run worker:reddit-onboarding`) against the same `DATABASE_URL`. Vercel serverless is not that worker.
 4. Assisted live signup needs a **browser host that is not Vercel serverless**:
-   - **Steel (self-hosted Browserbase replacement):** run Steel on a VM, then `REDDIT_BROWSER_PROVIDER=steel` and `STEEL_API_URL=https://your-steel-host`. No Browserbase account.
+   - **Steel Cloud (free):** sign up at [app.steel.dev](https://app.steel.dev) (no card, ~300 browser hours). Paste the API key in Reddit setup → Steel Cloud, or set `STEEL_API_KEY` on the worker. Then `REDDIT_BROWSER_PROVIDER=steel`.
+   - **Steel (self-hosted):** run Steel on a VM, then `REDDIT_BROWSER_PROVIDER=steel` and `STEEL_API_URL=https://your-steel-host`. No Browserbase account.
    - **Local Chromium:** `REDDIT_BROWSER_PROVIDER=local` on the same long-lived Node worker that can launch Playwright. Not Vercel.
    - **Browserbase:** `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` if you want their managed cloud.
 
@@ -56,7 +57,22 @@ Do not merge or deploy solely because continuation was requested. Do not claim l
 
 Browserbase is managed-only. There is no official self-host of their API.
 
-Use **Steel Browser** (open source, Apache-2.0) as the drop-in session + live-view host:
+Use **Steel Browser** (open source, Apache-2.0) as the drop-in session + live-view host.
+
+### Steel Cloud (free — this is the hosted path)
+
+Steel Cloud is the free hosted Steel. No Docker, no card:
+
+1. Create an account at [app.steel.dev](https://app.steel.dev).
+2. Open [Settings → API keys](https://app.steel.dev/settings/api-keys) and create a key.
+3. Paste it in Reddit setup → Steel Cloud, or set `STEEL_API_KEY` on the worker.
+4. On a **long-lived worker** (not this isolated preview): `REDDIT_BROWSER_PROVIDER=steel`.
+
+Launch credits are about 300 browser hours and expire. CAPTCHA solving on Steel requires a paid deposit — we never turn that on. The owner still completes CAPTCHA, terms, final submit, and OAuth.
+
+This isolated preview keeps `REDDIT_BROWSER_PROVIDER=local` plus the fixture page. Steel Cloud cannot open that practice page. A pasted key is stored encrypted for hosted use.
+
+### Self-host Steel (optional)
 
 ```
 docker run --rm -p 3000:3000 -p 9223:9223 ghcr.io/steel-dev/steel-browser:latest
