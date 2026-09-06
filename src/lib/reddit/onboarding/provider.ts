@@ -1,4 +1,4 @@
-import type { BrowserProviderErrorCode } from "./types.ts";
+import type { BrowserProviderErrorCode, BrowserProviderName } from "./types.ts";
 
 export type SessionPolicy = {
   timeoutSeconds: number;
@@ -69,7 +69,7 @@ export class BrowserProviderError extends Error {
 }
 
 export interface BrowserProvider {
-  readonly name: "fake" | "browserbase";
+  readonly name: BrowserProviderName;
   createContext(opts: { jobId: string; userId: string; environmentId: string }): Promise<{ contextId: string }>;
   createSession(input: CreateSessionInput): Promise<BrowserSession>;
   getSession(sessionId: string): Promise<BrowserSession | null>;

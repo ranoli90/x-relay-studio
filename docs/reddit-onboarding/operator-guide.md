@@ -9,7 +9,7 @@ Safety cleanup can run while new onboarding is disabled. Missing production depe
 | Flag | Default | Notes |
 |---|---|---|
 | `REDDIT_ONBOARDING_ENABLED` | local on; **off on every Vercel host** | Hosted preview is not automatically on. `VERCEL` is set there. Set explicit `true` on a named preview if you want the coordinator. |
-| `REDDIT_ASSISTED_SIGNUP_ENABLED` | off | Live browser signup. Fake provider cannot run this in production. |
+| `REDDIT_ASSISTED_SIGNUP_ENABLED` | off | Live browser signup. Fake provider cannot run this in production. Steel or local Chromium can. |
 | `REDDIT_REMOTE_OAUTH_ENABLED` | off | Ordinary OAuth stays in the owner’s browser. |
 | `REDDIT_DRAFTING_ENABLED` | off | OpenRouter draft composer. Never triggered by signup. |
 | `REDDIT_PUBLISH_ENABLED` | off | Direct submit. Copy/open-in-Reddit is the default. |
@@ -23,8 +23,8 @@ Do not prefix provider, model, or encryption secrets with `VITE_`.
 The Grok preview turns Reddit setup **on locally only**:
 
 - `REDDIT_ONBOARDING_ENABLED=true`
-- `REDDIT_ASSISTED_SIGNUP_ENABLED=true` (fixture + fake provider, not live Reddit)
-- `REDDIT_BROWSER_PROVIDER=fake`
+- `REDDIT_ASSISTED_SIGNUP_ENABLED=true` (fixture + local Chromium, not live Reddit)
+- `REDDIT_BROWSER_PROVIDER=local`
 - `REDDIT_ONBOARDING_FIXTURE=true`
 - `REDDIT_DRAFTING_ENABLED=true`
 - `REDDIT_EMAIL_BINDING_ENABLED=true`
@@ -40,14 +40,41 @@ Vercel is fail-closed. `VERCEL` is set there, so onboarding, assisted signup, an
 1. Apply migrations `0027`, `0028`, and `0029` on the Postgres that `DATABASE_URL` points at.
 2. Set **server** env (never `VITE_`):
    - `REDDIT_ONBOARDING_ENABLED=true` — coordinator only
-   - leave `REDDIT_ASSISTED_SIGNUP_ENABLED` unset unless Browserbase is separately authorized
+   - `REDDIT_ASSISTED_SIGNUP_ENABLED=true` only with Steel/local/Browserbase on a worker host
    - leave `REDDIT_ONBOARDING_FIXTURE` unset (forced off when `VERCEL` is set)
    - `REDDIT_DRAFTING_ENABLED=true` only if OpenRouter is configured
    - `OPENROUTER_API_KEY` for drafting; `SECRETS_ENCRYPTION_KEY` or `BETTER_AUTH_SECRET` for envelopes
 3. Run a **long-lived worker** (`npm run worker:reddit-onboarding`) against the same `DATABASE_URL`. Vercel serverless is not that worker.
-4. Assisted live signup additionally needs `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, and an approved Reddit app. That is a separate authorization, not this PR.
+4. Assisted live signup needs a **browser host that is not Vercel serverless**:
+   - **Steel (self-hosted Browserbase replacement):** run Steel on a VM, then `REDDIT_BROWSER_PROVIDER=steel` and `STEEL_API_URL=https://your-steel-host`. No Browserbase account.
+   - **Local Chromium:** `REDDIT_BROWSER_PROVIDER=local` on the same long-lived Node worker that can launch Playwright. Not Vercel.
+   - **Browserbase:** `BROWSERBASE_API_KEY` + `BROWSERBASE_PROJECT_ID` if you want their managed cloud.
 
 Do not merge or deploy solely because continuation was requested. Do not claim live Reddit success from the isolated fixture.
+
+## Self-hosted browser (instead of Browserbase)
+
+Browserbase is managed-only. There is no official self-host of their API.
+
+Use **Steel Browser** (open source, Apache-2.0) as the drop-in session + live-view host:
+
+```
+docker run --rm -p 3000:3000 -p 9223:9223 ghcr.io/steel-dev/steel-browser:latest
+```
+
+Then on the worker:
+
+```
+REDDIT_BROWSER_PROVIDER=steel
+STEEL_API_URL=http://127.0.0.1:3000
+REDDIT_ASSISTED_SIGNUP_ENABLED=true
+```
+
+Leave `STEEL_API_KEY` empty for self-host. CAPTCHA solving and stealth stay off in our adapter. The owner still completes CAPTCHA, terms, final submit, and OAuth.
+
+`REDDIT_BROWSER_PROVIDER=local` launches Chromium inside the worker process. That is what this isolated preview uses. It cannot run on Vercel.
+
+Do not enable `REDDIT_PUBLISH_ENABLED` or `REDDIT_REMOTE_OAUTH_ENABLED` as part of “turn everything on.” Those remain separate gates.
 
 
 ## Resume an incomplete job

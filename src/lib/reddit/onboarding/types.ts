@@ -218,6 +218,9 @@ export type ResumeCandidate = {
   status: string;
 };
 
+export const BROWSER_PROVIDERS = ["fake", "browserbase", "steel", "local"] as const;
+export type BrowserProviderName = (typeof BROWSER_PROVIDERS)[number];
+
 export type OnboardingBootstrap = {
   onboardingEnabled: boolean;
   assistedAvailable: boolean;
@@ -229,7 +232,7 @@ export type OnboardingBootstrap = {
   reviewedSignupUrl: string;
   appConfigured: boolean;
   fixtureEnabled: boolean;
-  provider: "fake" | "browserbase";
+  provider: BrowserProviderName;
 };
 
 export type SignupObservation = {

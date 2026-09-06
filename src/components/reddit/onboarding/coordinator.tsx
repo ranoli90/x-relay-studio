@@ -7,7 +7,7 @@ import { ModeSelector } from "./mode-selector";
 import { OnboardingDetails } from "./details";
 import { OnboardingProgress } from "./progress";
 import { OnboardingResult } from "./result";
-import { HumanControl } from "./human-control";
+import { HumanControl, type ControlViewState } from "./human-control";
 import { SavedAccess } from "./saved-access";
 import {
   cancelOnboarding,
@@ -25,6 +25,7 @@ import {
   handoffOnboardingToManual,
   completeFixtureOnboarding,
   confirmSignupSubmission,
+  getOnboardingControlView,
 } from "@/lib/reddit/onboarding/server";
 import type {
   OnboardingBootstrap,
@@ -79,6 +80,7 @@ export function OnboardingCoordinator({
   const [username, setUsername] = useState("");
   const [selected, setSelected] = useState<"assisted" | "manual" | null>(null);
   const [pendingAccount, setPendingAccount] = useState<RedditAccountPublic | null>(null);
+  const [controlView, setControlView] = useState<ControlViewState | null>(null);
   const hidden = useRef(typeof document !== "undefined" ? document.hidden : false);
   const opKeys = useRef(new Map<string, KeyPair>());
 
@@ -110,6 +112,25 @@ export function OnboardingCoordinator({
       setError(e instanceof Error ? e.message : "Could not load Reddit setup."),
     );
   }, [loadBoot]);
+
+  useEffect(() => {
+    if (screen !== "control" || !job) return;
+    void getOnboardingControlView({
+      data: {
+        jobId: job.id,
+        version: job.version,
+        correlationId: rememberKey(opKeys.current, `view:${job.id}`).correlationId,
+      },
+    })
+      .then(setControlView)
+      .catch(() =>
+        setControlView({
+          available: Boolean(boot?.fixtureEnabled),
+          url: boot?.fixtureEnabled ? "/__reddit-onboarding-fixture/index.html" : null,
+          kind: boot?.fixtureEnabled ? "fixture" : "none",
+        }),
+      );
+  }, [screen, job, boot]);
 
   const refreshJob = useCallback(async (id: string) => {
     const next = await getOnboardingJob({ data: { jobId: id } });
@@ -460,7 +481,12 @@ export function OnboardingCoordinator({
     return frame(
       <HumanControl
         job={job}
-        fixtureUrl={boot.fixtureEnabled ? "/__reddit-onboarding-fixture/index.html" : null}
+        view={
+          controlView ||
+          (boot.fixtureEnabled
+            ? { available: true, url: "/__reddit-onboarding-fixture/index.html", kind: "fixture" }
+            : { available: false, kind: "none" })
+        }
         onFinish={() => {
           void finishOnboardingTakeover({
             data: { jobId: job.id, version: job.version, correlationId: rememberKey(opKeys.current, `end-takeover:${job.id}`).correlationId },

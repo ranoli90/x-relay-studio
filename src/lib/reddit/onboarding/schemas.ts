@@ -263,3 +263,23 @@ export function fingerprintRequest(body: unknown): string {
 export function normalizeUsername(raw: string): string {
   return raw.replace(/^u\//i, "").trim();
 }
+
+export const liveSessionQuerySchema = z
+  .object({
+    sessionId: z.string().trim().min(8).max(120),
+    jobId: jobIdSchema,
+  })
+  .strict();
+
+export const liveInputSchema = z
+  .object({
+    sessionId: z.string().trim().min(8).max(120),
+    jobId: jobIdSchema,
+    action: z.enum(["click", "type", "key"]),
+    x: z.number().min(0).max(4000).optional(),
+    y: z.number().min(0).max(4000).optional(),
+    text: z.string().max(200).optional(),
+    key: z.string().max(40).optional(),
+  })
+  .strict();
+

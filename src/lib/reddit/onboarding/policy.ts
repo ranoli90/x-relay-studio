@@ -1,6 +1,7 @@
 import { redditConnectorEnabled } from "../../flags.ts";
 import {
   browserbaseConfigured,
+  browserProviderConfigured,
   environmentId,
   fixtureOriginAllowlist,
   onboardingFixtureEnabled,
@@ -11,7 +12,7 @@ import {
   redditRemoteOauthEnabled,
   assistedApprovalStatus,
 } from "./config.ts";
-import type { CapabilityMap, CapabilityKey } from "./types.ts";
+import type { BrowserProviderName, CapabilityMap, CapabilityKey } from "./types.ts";
 
 const ALWAYS_FALSE: CapabilityKey[] = ["canPost", "canVote", "canSendMessages"];
 
@@ -20,7 +21,7 @@ export type PolicyInput = {
   assistedFlag?: boolean;
   connectorEnabled?: boolean;
   approvalStatus?: string;
-  provider?: "fake" | "browserbase";
+  provider?: BrowserProviderName;
   providerConfigured?: boolean;
   assistanceConsent?: boolean;
   accountOwned?: boolean;
@@ -35,7 +36,7 @@ export function capabilities(input: PolicyInput = {}): CapabilityMap {
   const assistedFlag = input.assistedFlag ?? redditAssistedSignupEnabled();
   const connector = input.connectorEnabled ?? redditConnectorEnabled();
   const provider = input.provider ?? redditBrowserProvider();
-  const configured = input.providerConfigured ?? (provider === "fake" || browserbaseConfigured());
+  const configured = input.providerConfigured ?? browserProviderConfigured(provider);
   const approval = input.approvalStatus ?? assistedApprovalStatus();
   const budget = input.budgetAvailable ?? true;
   const kill = input.killAssisted ?? false;
@@ -63,6 +64,10 @@ export function capabilities(input: PolicyInput = {}): CapabilityMap {
     canStartAssistedSignup = deny("canStartAssistedSignup", "FAKE_PROVIDER_FORBIDDEN");
   } else if (provider === "browserbase" && !browserbaseConfigured() && input.providerConfigured !== true) {
     canStartAssistedSignup = deny("canStartAssistedSignup", "BROWSERBASE_NOT_CONFIGURED");
+  } else if (provider === "steel" && input.providerConfigured !== true && !browserProviderConfigured("steel")) {
+    canStartAssistedSignup = deny("canStartAssistedSignup", "PROVIDER_NOT_CONFIGURED");
+  } else if (provider === "local" && input.providerConfigured !== true && !browserProviderConfigured("local")) {
+    canStartAssistedSignup = deny("canStartAssistedSignup", "PROVIDER_NOT_CONFIGURED");
   } else if (!budget) canStartAssistedSignup = deny("canStartAssistedSignup", "BUDGET_EXHAUSTED");
   else if (input.assistanceConsent === false) {
     canStartAssistedSignup = deny("canStartAssistedSignup", "CONSENT_REQUIRED");
@@ -111,7 +116,7 @@ export function assistedUnavailableReason(caps: CapabilityMap): string | null {
       return "Permission review is pending. Manual setup still works.";
     case "PROVIDER_NOT_CONFIGURED":
     case "BROWSERBASE_NOT_CONFIGURED":
-      return "The hosted browser is not configured.";
+      return "The hosted browser is not configured. Self-host Steel, run local Chromium on a worker, or set Browserbase.";
     case "BUDGET_EXHAUSTED":
       return "The browser allowance for this desk is used up.";
     case "KILL_SWITCH":

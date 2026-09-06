@@ -86,6 +86,38 @@ describe("capabilities", () => {
     assert.equal(hosted.canStartAssistedSignup, false);
   });
 
+  it("allows Steel or local Chromium when configured, never on Vercel for local", () => {
+    delete process.env.VERCEL;
+    process.env.NODE_ENV = "test";
+    const steel = capabilities({
+      onboardingEnabled: true,
+      assistedFlag: true,
+      approvalStatus: "approved",
+      provider: "steel",
+      providerConfigured: true,
+      assistanceConsent: true,
+    });
+    assert.equal(steel.canStartAssistedSignup, true);
+    const localOk = capabilities({
+      onboardingEnabled: true,
+      assistedFlag: true,
+      approvalStatus: "approved",
+      provider: "local",
+      providerConfigured: true,
+      assistanceConsent: true,
+    });
+    assert.equal(localOk.canStartAssistedSignup, true);
+    process.env.VERCEL = "1";
+    const localHosted = capabilities({
+      onboardingEnabled: true,
+      assistedFlag: true,
+      approvalStatus: "approved",
+      provider: "local",
+      assistanceConsent: true,
+    });
+    assert.equal(localHosted.canStartAssistedSignup, false);
+  });
+
   it("rejects lookalike navigation and forbidden methods", () => {
     assert.equal(navigationAllowed("https://reddlt.com/register"), false);
     assert.equal(navigationAllowed("javascript:alert(1)"), false);

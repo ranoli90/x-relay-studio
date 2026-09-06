@@ -15,8 +15,16 @@ if (!databaseUrl) {
   process.exit(0);
 }
 
-if (environmentId() === "production" && redditAssistedSignupEnabled() && redditBrowserProvider() === "fake") {
+if (
+  redditAssistedSignupEnabled() &&
+  redditBrowserProvider() === "fake" &&
+  (environmentId() === "production" || Boolean(process.env.VERCEL))
+) {
   console.error("[reddit-onboarding-worker] fake provider cannot run assisted signup in production.");
+  process.exit(1);
+}
+if (redditAssistedSignupEnabled() && redditBrowserProvider() === "local" && process.env.VERCEL) {
+  console.error("[reddit-onboarding-worker] local Chromium cannot run on Vercel. Use Steel on a worker host.");
   process.exit(1);
 }
 

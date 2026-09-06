@@ -23,6 +23,8 @@ import { FakePageDriver, fixtureSignupUrl, runBoundedSignup } from "./controller
 import { decryptV2 } from "./vault.ts";
 import { fakeProvider } from "./providers/fake.ts";
 import { browserbaseProvider } from "./providers/browserbase.ts";
+import { steelProvider } from "./providers/steel.ts";
+import { localProvider } from "./providers/local.ts";
 import {
   onboardingFixtureEnabled,
   redditAssistedSignupEnabled,
@@ -32,7 +34,16 @@ import {
 import { claimCleanup, runCleanupTask, expireRetainedProfiles, type OauthRevoker } from "./cleanup.ts";
 
 export function selectProvider(): BrowserProvider {
-  return redditBrowserProvider() === "browserbase" ? browserbaseProvider : fakeProvider;
+  switch (redditBrowserProvider()) {
+    case "browserbase":
+      return browserbaseProvider;
+    case "steel":
+      return steelProvider;
+    case "local":
+      return localProvider;
+    default:
+      return fakeProvider;
+  }
 }
 
 export const redditOauthRevoker: OauthRevoker = async (material, meta) => {
@@ -705,9 +716,11 @@ async function handleCommand(
 /** Owner-scoped preview drain. Never impersonates the global dispatcher. */
 export async function drainOwnedPreview(sql: SqlLike, userId: string, jobId: string) {
   if (!userId || !jobId) return;
-  if (redditBrowserProvider() !== "fake") return;
+  const name = redditBrowserProvider();
+  if (name !== "fake" && name !== "local") return;
+  const provider = name === "local" ? localProvider : fakeProvider;
   for (let i = 0; i < 3; i += 1) {
-    const { didWork } = await drainOnce(sql, `preview-drain:${userId.slice(0, 12)}`, fakeProvider, {
+    const { didWork } = await drainOnce(sql, `preview-drain:${userId.slice(0, 12)}`, provider, {
       userId,
       jobId,
     });

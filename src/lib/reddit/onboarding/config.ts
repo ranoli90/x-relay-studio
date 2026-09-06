@@ -2,6 +2,7 @@ import {
   DEFAULT_CONTEXT_RETENTION_DAYS,
   DEFAULT_GLOBAL_CONCURRENCY,
   DEFAULT_SESSION_SECONDS,
+  type BrowserProviderName,
 } from "./types.ts";
 
 /**
@@ -70,9 +71,9 @@ export function redditRemoteOauthEnabled(): boolean {
   return readFlag("REDDIT_REMOTE_OAUTH_ENABLED") === true;
 }
 
-export function redditBrowserProvider(): "fake" | "browserbase" {
+export function redditBrowserProvider(): BrowserProviderName {
   const raw = (process.env.REDDIT_BROWSER_PROVIDER || "").trim().toLowerCase();
-  if (raw === "browserbase") return "browserbase";
+  if (raw === "browserbase" || raw === "steel" || raw === "local") return raw;
   return "fake";
 }
 
@@ -100,6 +101,35 @@ export function browserbaseConfigured(): boolean {
   return Boolean(
     process.env.BROWSERBASE_API_KEY?.trim() && process.env.BROWSERBASE_PROJECT_ID?.trim(),
   );
+}
+
+/** Self-hosted Steel (`STEEL_API_URL`) or Steel Cloud (`STEEL_API_KEY`). */
+export function steelApiBaseUrl(): string {
+  const explicit = (process.env.STEEL_API_URL || "").trim().replace(/\/$/, "");
+  if (explicit) return explicit;
+  if (process.env.STEEL_API_KEY?.trim()) return "https://api.steel.dev";
+  return "";
+}
+
+export function steelApiKey(): string {
+  return (process.env.STEEL_API_KEY || "").trim();
+}
+
+export function steelConfigured(): boolean {
+  return Boolean(steelApiBaseUrl());
+}
+
+/** Chromium in this process. Not Vercel serverless. Production worker VMs are fine. */
+export function localChromiumAllowed(): boolean {
+  return !process.env.VERCEL;
+}
+
+export function browserProviderConfigured(provider: BrowserProviderName = redditBrowserProvider()): boolean {
+  if (provider === "fake") return true;
+  if (provider === "browserbase") return browserbaseConfigured();
+  if (provider === "steel") return steelConfigured();
+  if (provider === "local") return localChromiumAllowed();
+  return false;
 }
 
 export function environmentId(): string {

@@ -19,6 +19,8 @@ import {
   bindEmailSchema,
   deleteBindingSchema,
   generateDraftSchema,
+  liveSessionQuerySchema,
+  liveInputSchema,
 } from "./schemas.ts";
 import {
   createOrReuseDraft,
@@ -44,7 +46,7 @@ import {
   redditDraftingEnabled,
 } from "./config.ts";
 import { ASSISTANCE_CONSENT_VERSION, OnboardingError, REVIEWED_SIGNUP_URL } from "./types.ts";
-import { drainOwnedPreview } from "./worker-core.ts";
+import { drainOwnedPreview, selectProvider } from "./worker-core.ts";
 import { isPlausibleOrigin, redirectUriFromOrigin } from "../origin.ts";
 import { getApp, insertTicket, purgeExpiredTickets, toPublicApp, countAccounts, listAccounts, cancelTicketsForJob, getAccount, upsertApp } from "../store.ts";
 import { authorizeUrl } from "../oauth.ts";
@@ -326,15 +328,43 @@ export const getOnboardingControlView = createServerFn({ method: "POST" })
     if (job.control_owner !== "user") {
       throw new Error("Take control first. A live view is not issued while automation is running.");
     }
+    const provider = redditBrowserProvider();
+    if (job.provider_session_id && (provider === "steel" || provider === "browserbase" || provider === "local")) {
+      try {
+        const view = await selectProvider().issueControlView(
+          job.provider_session_id,
+          Number(job.session_generation || 1),
+        );
+        return {
+          available: true,
+          url: view.url.startsWith("local://") ? null : view.url,
+          sessionId: job.provider_session_id,
+          kind: provider === "local" ? "local" : "embed",
+          reason: null,
+          fixture: false,
+        };
+      } catch {
+        /* fall through to fixture or owner-browser */
+      }
+    }
     if (onboardingFixtureEnabled()) {
       return {
         available: true,
         url: "/__reddit-onboarding-fixture/index.html",
+        sessionId: job.provider_session_id,
+        kind: "fixture",
         reason: null,
         fixture: true,
       };
     }
-    return { available: false, reason: "Use Reddit in your own browser. Embedded typing is not assumed to work on phones." };
+    return {
+      available: false,
+      url: null,
+      sessionId: null,
+      kind: "none",
+      reason: "Use Reddit in your own browser. Embedded typing is not assumed to work on phones.",
+      fixture: false,
+    };
   });
 
 export const confirmSignupSubmission = createServerFn({ method: "POST" })
@@ -634,4 +664,47 @@ export const deleteRedditRetainedSignIn = createServerFn({ method: "POST" })
     await deleteRetainedSignIn(db, context.userId, data.accountId);
     return confirmDeleteRetainedSignIn(db, context.userId, data.accountId);
   });
+
+async function requireOwnedLiveSession(userId: string, jobId: string, sessionId: string) {
+  const db = await sql();
+  const job = await getJob(db, userId, jobId);
+  if (!job) throw new Error("Setup not found.");
+  if (job.control_owner !== "user") {
+    throw new Error("Take control first. The live view is not writable while automation is running.");
+  }
+  if (!job.provider_session_id || job.provider_session_id !== sessionId) {
+    throw new Error("This live view does not belong to this setup.");
+  }
+  return job;
+}
+
+export const captureOnboardingLiveFrame = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => liveSessionQuerySchema.parse(d))
+  .handler(async ({ context, data }) => {
+    await requireOwnedLiveSession(context.userId, data.jobId, data.sessionId);
+    const { localProvider } = await import("./providers/local.ts");
+    const frame = await localProvider.screenshot(data.sessionId);
+    return {
+      jpeg: frame.jpeg.toString("base64"),
+      pageUrl: frame.pageUrl,
+    };
+  });
+
+export const sendOnboardingLiveInput = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => liveInputSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    await requireOwnedLiveSession(context.userId, data.jobId, data.sessionId);
+    const { localProvider } = await import("./providers/local.ts");
+    await localProvider.input(data.sessionId, {
+      action: data.action,
+      x: data.x,
+      y: data.y,
+      text: data.text,
+      key: data.key,
+    });
+    return { ok: true };
+  });
+
 

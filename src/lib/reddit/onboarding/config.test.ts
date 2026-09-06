@@ -3,11 +3,14 @@ import { afterEach, describe, it } from "node:test";
 import {
   onboardingFixtureEnabled,
   redditAssistedSignupEnabled,
+  redditBrowserProvider,
   redditDraftingEnabled,
   redditEmailBindingEnabled,
   redditOnboardingEnabled,
   redditPublishEnabled,
   redditRuntimeClass,
+  steelConfigured,
+  localChromiumAllowed,
 } from "./config.ts";
 
 const KEYS = [
@@ -17,6 +20,9 @@ const KEYS = [
   "REDDIT_PUBLISH_ENABLED",
   "REDDIT_EMAIL_BINDING_ENABLED",
   "REDDIT_ONBOARDING_FIXTURE",
+  "REDDIT_BROWSER_PROVIDER",
+  "STEEL_API_URL",
+  "STEEL_API_KEY",
   "VERCEL",
   "VERCEL_ENV",
   "NODE_ENV",
@@ -82,5 +88,18 @@ describe("reddit onboarding environment defaults", () => {
     process.env.VERCEL_ENV = "preview";
     process.env.REDDIT_ONBOARDING_FIXTURE = "true";
     assert.equal(onboardingFixtureEnabled(), false);
+  });
+
+  it("selects steel or local providers and refuses local Chromium on Vercel", () => {
+    delete process.env.VERCEL;
+    process.env.REDDIT_BROWSER_PROVIDER = "steel";
+    process.env.STEEL_API_URL = "http://127.0.0.1:3000";
+    assert.equal(redditBrowserProvider(), "steel");
+    assert.equal(steelConfigured(), true);
+    process.env.REDDIT_BROWSER_PROVIDER = "local";
+    assert.equal(redditBrowserProvider(), "local");
+    assert.equal(localChromiumAllowed(), true);
+    process.env.VERCEL = "1";
+    assert.equal(localChromiumAllowed(), false);
   });
 });
