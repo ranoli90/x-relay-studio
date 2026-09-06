@@ -2,6 +2,8 @@ import { redditConnectorEnabled } from "../../flags.ts";
 import {
   browserbaseConfigured,
   environmentId,
+  fixtureOriginAllowlist,
+  onboardingFixtureEnabled,
   productionForbidsFakeProvider,
   redditAssistedSignupEnabled,
   redditBrowserProvider,
@@ -120,24 +122,47 @@ export function assistedUnavailableReason(caps: CapabilityMap): string | null {
   }
 }
 
-const ALLOWED_ORIGINS = new Set([
+const REDDIT_ORIGINS = new Set([
   "https://www.reddit.com",
   "https://reddit.com",
   "https://old.reddit.com",
 ]);
 
 const ALLOWED_PATH_PREFIXES = ["/", "/register", "/account", "/login", "/verification"];
+const FIXTURE_PATH_PREFIX = "/__reddit-onboarding-fixture";
 
-export function navigationAllowed(url: string): boolean {
+const ALLOWED_CLICK_TARGETS = new Set(["username", "email", "continue", "next"]);
+const FORBIDDEN_CLICK_TARGETS = new Set([
+  "terms",
+  "oauth",
+  "captcha",
+  "submit-final",
+  "submit",
+  "accept_terms",
+  "grant_oauth",
+  "solve_captcha",
+  "password",
+]);
+
+export type ActionPolicyContext = {
+  frameOrigin?: string;
+  pageOrigin?: string;
+  fixtureMode?: boolean;
+};
+
+export function navigationAllowed(url: string, opts?: { fixtureMode?: boolean }): boolean {
   try {
     const parsed = new URL(url);
-    if (parsed.protocol !== "https:" && parsed.hostname !== "localhost" && parsed.hostname !== "127.0.0.1") {
-      return false;
+    const host = parsed.hostname;
+    const isLoopback = host === "localhost" || host === "127.0.0.1";
+    if (parsed.protocol !== "https:" && !isLoopback) return false;
+    if (isLoopback) {
+      if (!onboardingFixtureEnabled()) return false;
+      if (opts?.fixtureMode === false) return false;
+      if (!parsed.pathname.startsWith(FIXTURE_PATH_PREFIX)) return false;
+      return fixtureOriginAllowlist().includes(parsed.origin);
     }
-    if (parsed.hostname === "localhost" || parsed.hostname === "127.0.0.1") {
-      return parsed.pathname.startsWith("/__reddit-onboarding-fixture");
-    }
-    if (!ALLOWED_ORIGINS.has(`${parsed.protocol}//${parsed.hostname}`)) return false;
+    if (!REDDIT_ORIGINS.has(parsed.origin)) return false;
     return ALLOWED_PATH_PREFIXES.some((p) => parsed.pathname === p || parsed.pathname.startsWith(`${p}/`));
   } catch {
     return false;
@@ -164,22 +189,66 @@ export type ObservedAction = {
   selector?: string;
   url?: string;
   fieldLabel?: string;
+  name?: string;
+  allowedTarget?: string;
   origin?: string;
 };
 
-export function actionAllowed(action: ObservedAction, step: string): { ok: true } | { ok: false; code: string } {
+function clickTarget(action: ObservedAction): string {
+  return (action.allowedTarget || action.fieldLabel || action.name || "").toLowerCase().trim();
+}
+
+function sensitiveFill(action: ObservedAction): boolean {
+  const blob = `${action.fieldLabel || ""} ${action.name || ""} ${action.selector || ""} ${action.allowedTarget || ""}`.toLowerCase();
+  return /(password|otp|\bcode\b|token|cookie)/.test(blob);
+}
+
+function originOf(value: string | undefined): string | null {
+  if (!value) return null;
+  try {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return new URL(value).origin;
+    return new URL(value.endsWith("/") ? value : `${value}/`).origin;
+  } catch {
+    return null;
+  }
+}
+
+export function actionAllowed(
+  action: ObservedAction,
+  step: string,
+  ctx: ActionPolicyContext = {},
+): { ok: true } | { ok: false; code: string } {
   const method = action.method.toLowerCase();
   if (FORBIDDEN_ACTIONS.has(method)) return { ok: false, code: "ACTION_FORBIDDEN" };
   const allowedMethods = new Set(["navigate", "fill", "click", "wait", "observe", "read_identity"]);
   if (!allowedMethods.has(method)) return { ok: false, code: "ACTION_FORBIDDEN" };
-  if (method === "navigate" && action.url && !navigationAllowed(action.url)) {
+
+  if (ctx.frameOrigin && ctx.pageOrigin && ctx.frameOrigin !== ctx.pageOrigin) {
+    return { ok: false, code: "FRAME_ORIGIN_DENIED" };
+  }
+
+  if (method === "navigate" && action.url && !navigationAllowed(action.url, { fixtureMode: ctx.fixtureMode })) {
     return { ok: false, code: "NAVIGATION_DENIED" };
   }
-  if (method === "fill") {
-    const label = (action.fieldLabel || "").toLowerCase();
-    if (/(password|otp|code|token|cookie)/.test(label) && step !== "create_account") {
-      return { ok: false, code: "SENSITIVE_FIELD" };
+
+  if (method === "fill" && sensitiveFill(action)) {
+    return { ok: false, code: "SENSITIVE_FIELD" };
+  }
+
+  if (method === "click") {
+    const target = clickTarget(action);
+    const selector = (action.selector || "").toLowerCase();
+    if (!target || FORBIDDEN_CLICK_TARGETS.has(target) || !ALLOWED_CLICK_TARGETS.has(target)) {
+      return { ok: false, code: "CLICK_TARGET_DENIED" };
     }
+    if (/(captcha|terms|oauth|submit-final|password|otp)/.test(selector)) {
+      return { ok: false, code: "CLICK_TARGET_DENIED" };
+    }
+  }
+
+  const pageOrigin = ctx.pageOrigin || originOf(action.origin);
+  if (ctx.frameOrigin && pageOrigin && ctx.frameOrigin !== pageOrigin) {
+    return { ok: false, code: "FRAME_ORIGIN_DENIED" };
   }
   if (action.origin && action.url) {
     try {
@@ -190,6 +259,16 @@ export function actionAllowed(action: ObservedAction, step: string): { ok: true 
       return { ok: false, code: "NAVIGATION_DENIED" };
     }
   }
+  if (pageOrigin && action.url && method !== "navigate") {
+    try {
+      if (new URL(action.url).origin !== pageOrigin) {
+        return { ok: false, code: "ORIGIN_MISMATCH" };
+      }
+    } catch {
+      return { ok: false, code: "NAVIGATION_DENIED" };
+    }
+  }
+  void step;
   return { ok: true };
 }
 

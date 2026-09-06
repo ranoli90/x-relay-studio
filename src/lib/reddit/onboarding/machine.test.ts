@@ -81,6 +81,29 @@ describe("onboarding machine", () => {
     assert.equal(canExecuteCommand(job, "cancel"), true);
   });
 
+  it("hands an assisted job to manual without opening a second job", () => {
+    const next = applyEvent(draft({ mode: "assisted", status: "queued", step: "session" }), {
+      type: "HANDOFF_TO_MANUAL",
+    });
+    assert.equal(next.mode, "manual");
+    assert.equal(next.status, "waiting_external");
+    assert.equal(canExecuteCommand(draft({ mode: "assisted", status: "running" }), "handoff_manual"), true);
+    const actions = permittedActions(draft({ mode: "assisted", status: "running", step: "create_account" }), {
+      assisted: true,
+      oauth: false,
+      appReady: false,
+    });
+    assert.equal(actions.includes("handoff_manual"), true);
+  });
+
+  it("queued allocation loss goes to reconciling", () => {
+    const lost = applyEvent(draft({ mode: "assisted", status: "queued", step: "session" }), {
+      type: "SUBMIT_LOST",
+    });
+    assert.equal(lost.status, "reconciling");
+    assert.equal(lost.creationOutcome, "unknown");
+  });
+
   it("permits cancel and finish-later while waiting", () => {
     const actions = permittedActions(draft({ status: "waiting_external", step: "app_access" }), {
       assisted: false,

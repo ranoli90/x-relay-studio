@@ -21,6 +21,9 @@ if (environmentId() === "production" && redditAssistedSignupEnabled() && redditB
 }
 
 const pool = new pg.Pool({ connectionString: databaseUrl, max: 2 });
+pool.on("error", (err) => {
+  console.error("[reddit-onboarding-worker] pool error", err.message);
+});
 const sql = {
   query: async <T>(text: string, params: unknown[] = []) => {
     const res = await pool.query(text, params);
@@ -29,22 +32,33 @@ const sql = {
 };
 
 let draining = false;
-async function shutdown() {
+let inFlight: Promise<unknown> | null = null;
+async function shutdown(signal: string) {
+  if (draining) return;
   draining = true;
+  console.log(`[reddit-onboarding-worker] ${signal} — draining`);
+  try {
+    if (inFlight) await inFlight;
+  } catch {
+    /* finish anyway */
+  }
   await pool.end().catch(() => undefined);
   process.exit(0);
 }
-process.on("SIGTERM", () => void shutdown());
-process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown("SIGTERM"));
+process.on("SIGINT", () => void shutdown("SIGINT"));
 
 const provider = selectProvider();
 console.log(`[reddit-onboarding-worker] ${workerId} provider=${provider.name}`);
 
 while (!draining) {
   try {
-    const { didWork } = await drainOnce(sql, workerId, provider);
+    inFlight = drainOnce(sql, workerId, provider);
+    const { didWork } = (await inFlight) as { didWork: boolean };
+    inFlight = null;
     await new Promise((r) => setTimeout(r, didWork ? 250 : 1500));
   } catch (err) {
+    inFlight = null;
     const message = err instanceof Error ? err.message : String(err);
     console.error("[reddit-onboarding-worker]", message);
     await new Promise((r) => setTimeout(r, 3000));

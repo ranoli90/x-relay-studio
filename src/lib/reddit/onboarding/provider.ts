@@ -26,6 +26,8 @@ export type CreateSessionInput = {
   contextId?: string;
   generation: number;
   policy: SessionPolicy;
+  /** Persist context state on session close. Default false; send true only when the caller asks. */
+  persist?: boolean;
 };
 
 export type BrowserSession = {
@@ -43,6 +45,16 @@ export type ControlView = {
   writable: boolean;
   generation: number;
   expiresAt: string;
+};
+
+export type UsageReport = {
+  seconds: number | null;
+  unknown: boolean;
+};
+
+export type RevokeControlResult = {
+  revoked: boolean;
+  verified: boolean;
 };
 
 export class BrowserProviderError extends Error {
@@ -65,8 +77,8 @@ export interface BrowserProvider {
   deleteContext(contextId: string): Promise<{ deleted: boolean }>;
   attachConnection(sessionId: string): Promise<{ connectUrl: string }>;
   issueControlView(sessionId: string, generation: number): Promise<ControlView>;
-  revokeControlView(sessionId: string, generation: number): Promise<{ revoked: boolean }>;
-  usage(sessionId: string): Promise<{ seconds: number }>;
+  revokeControlView(sessionId: string, generation: number): Promise<RevokeControlResult>;
+  usage(sessionId: string): Promise<UsageReport>;
 }
 
 export function assertPolicySupported(policy: SessionPolicy) {

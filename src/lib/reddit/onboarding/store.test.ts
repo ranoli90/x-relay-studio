@@ -1,55 +1,23 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
-import { createOrReuseDraft, enqueueCommand, getActiveJob, requireJob } from "./store.ts";
+import {
+  createOrReuseDraft,
+  enqueueCommand,
+  getActiveJob,
+  getJob,
+  handoffToManual,
+  requireJob,
+  saveDetails,
+  transitionJob,
+} from "./store.ts";
 import { applyEvent } from "./machine.ts";
 import { FakeBrowserProvider, resetFakeProvider } from "./providers/fake.ts";
 import { drainOnce } from "./worker-core.ts";
 import { DEFAULT_SESSION_POLICY } from "./provider.ts";
 import { classifyPage, plannedSteps, validatePlannedAction } from "./workflows/email-signup.ts";
 import { OnboardingError } from "./types.ts";
-
-function toSql(pg: PGlite) {
-  return {
-    query: async <T>(text: string, params: unknown[] = []) => {
-      const res = await pg.query<T>(text, params);
-      return res.rows;
-    },
-  };
-}
-
-async function schema(pg: PGlite) {
-  const sql027 = readFileSync(new URL("../../../../migrations/0027_reddit_onboarding.sql", import.meta.url), "utf8");
-  const sql028 = readFileSync(new URL("../../../../migrations/0028_reddit_onboarding_backfill.sql", import.meta.url), "utf8");
-  await pg.exec(`
-    create table reddit_apps (
-      user_id text primary key,
-      client_id text not null,
-      client_secret text not null,
-      user_agent_name text not null,
-      redirect_uri text not null
-    );
-    create table reddit_accounts (
-      id text primary key,
-      user_id text not null,
-      reddit_id text not null,
-      name text not null,
-      onboarded_at timestamptz,
-      created_at timestamptz not null default now(),
-      unique (user_id, reddit_id)
-    );
-    create table reddit_oauth_tickets (
-      ticket text primary key,
-      user_id text not null,
-      state text not null,
-      redirect_uri text not null,
-      expires_at timestamptz not null
-    );
-  `);
-  await pg.exec(sql027);
-  await pg.exec(sql028);
-}
+import { schema, toSql } from "./test-schema.ts";
 
 describe("onboarding store + fake worker", () => {
   it("enforces one active job and idempotent starts", async () => {
@@ -167,6 +135,127 @@ describe("onboarding store + fake worker", () => {
       body: {},
     });
     await assert.rejects(() => requireJob(sql, "user-a", created.job.id, 99), OnboardingError);
+    await pg.close();
+  });
+
+  it("handoffToManual works while an assisted job is active and queues session cleanup", async () => {
+    const pg = new PGlite();
+    await pg.waitReady;
+    await schema(pg);
+    const sql = toSql(pg);
+    const created = await createOrReuseDraft(sql, {
+      userId: "user-a",
+      mode: "assisted",
+      intent: "create",
+      idempotencyKey: "handoff-1",
+      body: { mode: "assisted" },
+    });
+    const started = await transitionJob(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      expectedVersion: created.job.version,
+      event: { type: "OWNER_STARTS" },
+      eventType: "started",
+    });
+    assert.equal(started.status, "queued");
+    assert.equal(started.mode, "assisted");
+    await sql.query(
+      `update reddit_onboarding_jobs
+          set provider_session_id = $1, provider_context_id = $2
+        where id = $3 and user_id = $4`,
+      ["ses-handoff", "ctx-handoff", created.job.id, "user-a"],
+    );
+    const handed = await handoffToManual(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: started.version,
+    });
+    assert.equal(handed.mode, "manual");
+    assert.equal(handed.status, "waiting_external");
+    assert.equal(handed.handoff_from_mode, "assisted");
+    assert.match(String(handed.cleanup_summary), /cleanup pending/i);
+    const active = await getActiveJob(sql, "user-a");
+    assert.ok(active);
+    assert.equal(active.id, created.job.id);
+    assert.equal(active.mode, "manual");
+    const tasks = await sql.query<{ kind: string; target_reference: string }>(
+      `select kind, target_reference from reddit_cleanup_tasks where job_id = $1 order by kind`,
+      [created.job.id],
+    );
+    assert.ok(tasks.some((t) => t.kind === "release_session" && t.target_reference === "ses-handoff"));
+    assert.ok(tasks.some((t) => t.kind === "delete_context" && t.target_reference === "ctx-handoff"));
+    const again = await handoffToManual(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: handed.version,
+    });
+    assert.equal(again.id, handed.id);
+    assert.equal(again.mode, "manual");
+    await pg.close();
+  });
+
+  it("enqueueCommand retry after version change returns the original command", async () => {
+    const pg = new PGlite();
+    await pg.waitReady;
+    await schema(pg);
+    const sql = toSql(pg);
+    const created = await createOrReuseDraft(sql, {
+      userId: "user-a",
+      mode: "manual",
+      intent: "create",
+      idempotencyKey: "retry-draft",
+      body: { mode: "manual" },
+    });
+    const first = await enqueueCommand(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: created.job.version,
+      kind: "cancel",
+      idempotencyKey: "cancel-retry",
+      payload: { reason: "owner" },
+      operation: "cancelOnboarding",
+    });
+    assert.equal(first.duplicate, false);
+    const saved = await saveDetails(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: created.job.version,
+      retainContext: false,
+      retainPassword: false,
+      assistanceConsent: false,
+    });
+    assert.ok(Number(saved.version) > Number(created.job.version));
+    const retry = await enqueueCommand(sql, {
+      userId: "user-a",
+      jobId: created.job.id,
+      version: saved.version,
+      kind: "cancel",
+      idempotencyKey: "cancel-retry",
+      payload: { reason: "owner" },
+      operation: "cancelOnboarding",
+    });
+    assert.equal(retry.duplicate, true);
+    assert.equal(retry.command.id, first.command.id);
+    const job = await getJob(sql, "user-a", created.job.id);
+    assert.ok(job);
+    assert.equal(Number(job.version), Number(saved.version));
+    await assert.rejects(
+      () =>
+        enqueueCommand(sql, {
+          userId: "user-a",
+          jobId: created.job.id,
+          version: saved.version,
+          kind: "cancel",
+          idempotencyKey: "cancel-retry",
+          payload: { reason: "different" },
+          operation: "cancelOnboarding",
+        }),
+      (err: unknown) => {
+        assert.ok(err instanceof OnboardingError);
+        assert.equal(err.code, "IDEMPOTENCY_CONFLICT");
+        return true;
+      },
+    );
     await pg.close();
   });
 });

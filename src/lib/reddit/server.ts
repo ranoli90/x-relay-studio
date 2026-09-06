@@ -34,7 +34,7 @@ import {
 } from "./store";
 import { z } from "zod";
 import { accountIdSchema, confirmOnboardingSchema, originSchema, saveRedditAppSchema } from "./onboarding/schemas";
-import { getSql } from "@/lib/db";
+import { getSql, withTransaction } from "@/lib/db";
 import { queueDisconnectCleanup } from "./onboarding/cleanup";
 import { appIdForDesk, appNameForDesk, appDescriptionForDesk, apiSignupBlurb, assertSafeAppName, userAgentFor } from "./naming";
 
@@ -172,6 +172,9 @@ export const startRedditOAuth = createServerFn({ method: "POST" })
       state,
       redirectUri,
       expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+      correlationId,
+      purpose: "connect_account",
+      allowedOrigin: data.origin,
     });
     const url = authorizeUrl({
       clientId: app.client_id,
@@ -304,25 +307,27 @@ export const disconnectAccount = createServerFn({ method: "POST" })
   .validator((d: unknown) => accountIdSchema.parse(d))
   .handler(async ({ context, data }) => {
     const app = await getApp(context.userId);
-    const removed = await disableAccount(context.userId, data.accountId);
-    if (removed) {
+    const removed = await withTransaction(async () => {
+      const row = await disableAccount(context.userId, data.accountId);
+      if (!row) return null;
       const db = await getSql();
       await queueDisconnectCleanup(db, {
         userId: context.userId,
         accountId: data.accountId,
-        refreshToken: removed.refresh_token,
+        refreshToken: row.refresh_token,
       });
-      if (app) {
-        try {
-          await revokeToken({
-            clientId: app.client_id,
-            clientSecret: app.client_secret,
-            userAgent: ua(app),
-            token: removed.refresh_token,
-          });
-        } catch {
-          // Local access stays disabled; cleanup retries revocation.
-        }
+      return row;
+    });
+    if (removed && app) {
+      try {
+        await revokeToken({
+          clientId: app.client_id,
+          clientSecret: app.client_secret,
+          userAgent: ua(app),
+          token: removed.refresh_token,
+        });
+      } catch {
+        // Local access stays disabled; cleanup retries revocation.
       }
     }
     return { ok: true as const, cleanup: "pending" as const };

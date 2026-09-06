@@ -4,11 +4,20 @@ import {
   type BrowserSession,
   type ControlView,
   type CreateSessionInput,
+  type RevokeControlResult,
+  type UsageReport,
   BrowserProviderError,
 } from "../provider.ts";
 
+type FakeSession = BrowserSession & {
+  released?: boolean;
+  controlGen?: number;
+  createdAtMs?: number;
+  persist?: boolean;
+};
+
 type FakeState = {
-  sessions: Map<string, BrowserSession & { released?: boolean; controlGen?: number }>;
+  sessions: Map<string, FakeSession>;
   contexts: Map<string, { userId: string; deleted?: boolean }>;
   allocations: Map<string, string>;
 };
@@ -31,7 +40,7 @@ export class FakeBrowserProvider implements BrowserProvider {
   releaseDoesNotEnd = false;
 
   async createContext(opts: { jobId: string; userId: string; environmentId: string }) {
-    const contextId = `fake-ctx-${opts.jobId.slice(0, 8)}`;
+    const contextId = `fake-ctx-${opts.jobId}`;
     state().contexts.set(contextId, { userId: opts.userId });
     return { contextId };
   }
@@ -47,8 +56,8 @@ export class FakeBrowserProvider implements BrowserProvider {
       if (session) return publicSession(session);
     }
     if (this.delayCreateMs) await new Promise((r) => setTimeout(r, this.delayCreateMs));
-    const sessionId = `fake-ses-${input.allocationIntentId.slice(0, 12)}`;
-    const session: BrowserSession = {
+    const sessionId = `fake-ses-${input.allocationIntentId}`;
+    const session: FakeSession = {
       sessionId,
       contextId: input.contextId ?? null,
       connectUrl: `fake://session/${sessionId}`,
@@ -56,6 +65,8 @@ export class FakeBrowserProvider implements BrowserProvider {
       projectId: "fake-project",
       region: "local",
       status: "running",
+      createdAtMs: Date.now(),
+      persist: input.persist === true,
     };
     state().sessions.set(sessionId, session);
     state().allocations.set(input.allocationIntentId, sessionId);
@@ -110,19 +121,22 @@ export class FakeBrowserProvider implements BrowserProvider {
     };
   }
 
-  async revokeControlView(sessionId: string, generation: number) {
+  async revokeControlView(sessionId: string, generation: number): Promise<RevokeControlResult> {
     const s = state().sessions.get(sessionId);
-    if (!s) return { revoked: true };
+    if (!s) return { revoked: false, verified: false };
     if (s.controlGen === generation) s.controlGen = generation + 1;
-    return { revoked: true };
+    return { revoked: true, verified: true };
   }
 
-  async usage() {
-    return { seconds: 1 };
+  async usage(sessionId: string): Promise<UsageReport> {
+    const s = state().sessions.get(sessionId);
+    if (!s?.createdAtMs) return { seconds: null, unknown: true };
+    const seconds = Math.max(0, Math.floor((Date.now() - s.createdAtMs) / 1000));
+    return { seconds, unknown: false };
   }
 }
 
-function publicSession(s: BrowserSession): BrowserSession {
+function publicSession(s: FakeSession): BrowserSession {
   return {
     sessionId: s.sessionId,
     contextId: s.contextId,

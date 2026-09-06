@@ -1,6 +1,15 @@
 import { Button } from "@/components/ui/button";
 import type { OnboardingJobPublic } from "@/lib/reddit/onboarding/types";
 
+function formatExpiry(value: string | null): string | null {
+  if (!value) return null;
+  try {
+    return new Date(value).toLocaleString();
+  } catch {
+    return value;
+  }
+}
+
 export function OnboardingResult({
   job,
   onDashboard,
@@ -12,6 +21,9 @@ export function OnboardingResult({
   onManage: () => void;
   onLater: () => void;
 }) {
+  const identified = Boolean(job.verifiedUsername);
+  const retained = job.retentionStatus === "retained";
+  const expiry = retained ? formatExpiry(job.retentionExpiresAt) : null;
   return (
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Result</p>
@@ -19,13 +31,13 @@ export function OnboardingResult({
       <ul className="mt-8 space-y-3">
         <ResultCard
           title="Account identified"
-          ok={Boolean(job.verifiedUsername) || job.creationOutcome === "confirmed" || job.creationOutcome === "preexisting"}
+          ok={identified}
           detail={
             job.verifiedUsername
               ? `u/${job.verifiedUsername}`
               : job.expectedUsername
                 ? `Owner-reported u/${job.expectedUsername} — not verified until Reddit login.`
-                : "No account identity yet."
+                : "No account identity yet. A creation outcome is not identity."
           }
         />
         <ResultCard
@@ -39,8 +51,16 @@ export function OnboardingResult({
         />
         <ResultCard
           title="Browser sign-in saved"
-          ok={job.retainContext}
-          detail={job.retainContext ? "Retained only with your opt-in and an expiry." : "Temporary browser state is not kept."}
+          ok={retained}
+          detail={
+            retained
+              ? expiry
+                ? `Retained until ${expiry}.`
+                : "Retained after persistence was confirmed."
+              : job.retentionStatus === "requested" || job.retainContext
+                ? "Retention was requested. It is not saved until persistence is confirmed."
+                : "Temporary browser state is not kept."
+          }
         />
       </ul>
       {job.cleanupSummary ? <p className="mt-4 text-sm text-muted">{job.cleanupSummary}</p> : null}

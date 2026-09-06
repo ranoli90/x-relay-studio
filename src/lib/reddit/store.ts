@@ -232,7 +232,7 @@ export async function upsertAccount(opts: {
   const healthJson = JSON.stringify(opts.health);
   const sealedRefresh = seal(opts.refreshToken);
   const sealedAccess = seal(opts.accessToken);
-  await sql`
+  const rows = await sql<AccountRow>`
     insert into reddit_accounts (
       id, user_id, reddit_id, name, icon_img, created_utc, has_verified_email,
       is_gold, is_mod, is_suspended, link_karma, comment_karma, total_karma,
@@ -262,7 +262,10 @@ export async function upsertAccount(opts: {
       health_json = excluded.health_json,
       health_ok = excluded.health_ok,
       updated_at = now()
+    returning *
   `;
+  if (!rows[0]) throw new Error("Account upsert did not return a row.");
+  return decodeAccount(rows[0]);
 }
 
 export async function saveTokens(opts: {
@@ -370,12 +373,39 @@ export async function insertTicket(opts: {
   state: string;
   redirectUri: string;
   expiresAt: Date;
+  jobId?: string | null;
+  expectedUsername?: string | null;
+  expectedRedditId?: string | null;
+  credentialVersion?: number | null;
+  correlationId?: string | null;
+  transport?: string;
+  purpose?: string;
+  allowedOrigin?: string | null;
 }) {
   const sql = await getSql();
-  await sql`
-    insert into reddit_oauth_tickets (ticket, user_id, state, redirect_uri, expires_at)
-    values (${opts.ticket}, ${opts.userId}, ${opts.state}, ${opts.redirectUri}, ${opts.expiresAt.toISOString()})
-  `;
+  await sql.query(
+    `insert into reddit_oauth_tickets (
+       ticket, user_id, state, redirect_uri, expires_at,
+       job_id, expected_username, expected_reddit_id, credential_version,
+       transport, correlation_id, processing_state, app_credential_version,
+       purpose, allowed_origin
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'open',$9,$12,$13)`,
+    [
+      opts.ticket,
+      opts.userId,
+      opts.state,
+      opts.redirectUri,
+      opts.expiresAt.toISOString(),
+      opts.jobId ?? null,
+      opts.expectedUsername ?? null,
+      opts.expectedRedditId ?? null,
+      opts.credentialVersion ?? null,
+      opts.transport ?? "local",
+      opts.correlationId ?? null,
+      opts.purpose ?? "connect_account",
+      opts.allowedOrigin ?? null,
+    ],
+  );
 }
 
 export async function getTicket(ticket: string) {

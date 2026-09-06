@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Isolated onboarding fixture</title>
+  </head>
+  <body>
+    <main data-testid="fixture-email-v1" data-fixture="email-v1">
+      <p>TEST environment. This page is not Reddit and creates no real accounts.</p>
+      <h1>Create a test account</h1>
+      <form id="signup" action="#" method="post">
+        <p>
+          <label for="username">Username</label>
+          <input id="username" name="username" data-testid="reg-username" autocomplete="username" />
+        </p>
+        <p>
+          <label for="email">Email</label>
+          <input id="email" name="email" type="email" data-testid="reg-email" autocomplete="email" />
+        </p>
+        <p>
+          <label for="password">Password (owner only)</label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            data-testid="reg-password"
+            autocomplete="new-password"
+            data-owner-only="true"
+          />
+        </p>
+        <div data-testid="captcha" data-owner-required="captcha">CAPTCHA checkpoint — the owner must complete this.</div>
+        <p>
+          <label>
+            <input type="checkbox" name="terms" data-testid="accept-terms" data-owner-required="terms" />
+            I accept the terms (owner only)
+          </label>
+        </p>
+        <p>
+          <button type="button" name="continue" data-testid="continue">Continue</button>
+          <button type="submit" name="submit-final" data-testid="final-submit" data-owner-required="final_submit">
+            Create account
+          </button>
+        </p>
+      </form>
+    </main>
+  </body>
+</html>

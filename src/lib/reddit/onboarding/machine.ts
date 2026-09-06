@@ -38,7 +38,8 @@ export type MachineEvent =
   | { type: "DEADLINE_EXCEEDED" }
   | { type: "MANUAL_OWNER_REPORTED" }
   | { type: "UNSUPPORTED_PAGE" }
-  | { type: "RECONCILED"; outcome: CreationOutcome };
+  | { type: "RECONCILED"; outcome: CreationOutcome }
+  | { type: "HANDOFF_TO_MANUAL" };
 
 export class TransitionError extends Error {
   constructor(message: string) {
@@ -82,7 +83,7 @@ export function applyEvent(job: MachineJob, event: MachineEvent): MachineJob {
         controlOwner: "worker",
       });
     case "SUBMIT_LOST":
-      requireStatus(job, ["running", "needs_user"]);
+      requireStatus(job, ["queued", "running", "needs_user"]);
       return next(job, {
         status: "reconciling",
         creationOutcome: "unknown",
@@ -162,6 +163,19 @@ export function applyEvent(job: MachineJob, event: MachineEvent): MachineJob {
         return next(job, { status: "failed", creationOutcome: "rejected" });
       }
       return next(job, { status: "needs_user", creationOutcome: event.outcome });
+    case "HANDOFF_TO_MANUAL":
+      requireStatus(job, ["draft", "queued", "running", "needs_user", "waiting_external", "reconciling"]);
+      return next(job, {
+        mode: "manual",
+        status: "waiting_external",
+        step:
+          job.intent === "connect_existing"
+            ? "app_access"
+            : job.step === "consent"
+              ? "create_account"
+              : job.step,
+        controlOwner: "none",
+      });
     default:
       throw new TransitionError("Unknown event.");
   }
@@ -203,12 +217,14 @@ export function permittedActions(job: MachineJob, caps: { assisted: boolean; oau
     }
     if (job.controlOwner === "worker") actions.push("request_takeover");
     if (job.controlOwner === "user") actions.push("finish_takeover");
+    if (job.mode === "assisted" && !isTerminal(job.status)) actions.push("handoff_manual");
     if (job.status === "needs_user" && job.step === "create_account") actions.push("confirm_submit");
     if (job.step === "confirm" || job.step === "health") actions.push("confirm_identity");
     actions.push("finish_later");
   }
-  if (job.status === "running") {
+  if (job.status === "queued" || job.status === "running") {
     actions.push("request_takeover", "finish_later");
+    if (job.mode === "assisted") actions.push("handoff_manual");
   }
   if (job.status === "reconciling") {
     actions.push("finish_later");
@@ -234,6 +250,8 @@ export function canExecuteCommand(job: MachineJob, kind: CommandKind): boolean {
       return job.status === "needs_user" || job.status === "running";
     case "finalize":
       return job.step === "confirm" || job.step === "health" || job.step === "finish";
+    case "handoff_manual":
+      return job.mode === "assisted" && !isTerminal(job.status);
     default:
       return false;
   }

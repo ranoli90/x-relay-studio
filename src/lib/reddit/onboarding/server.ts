@@ -27,6 +27,7 @@ import {
   transitionJob,
   sessionBudgetSeconds,
   enqueueCleanup,
+  handoffToManual,
 } from "./store.ts";
 import { capabilities, assistedUnavailableReason } from "./policy.ts";
 import {
@@ -42,6 +43,7 @@ import { getApp, insertTicket, purgeExpiredTickets, toPublicApp, countAccounts, 
 import { authorizeUrl } from "../oauth.ts";
 import { appIdForDesk } from "../naming.ts";
 import type { SqlLike } from "./sql.ts";
+import { runOnboardingTx } from "./sql.ts";
 
 async function sql(): Promise<SqlLike> {
   return getSql();
@@ -90,15 +92,16 @@ export const createOnboarding = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     if (!redditOnboardingEnabled()) throw new Error("Reddit onboarding is not enabled.");
     try {
-      const db = await sql();
-      const { job } = await createOrReuseDraft(db, {
-        userId: context.userId,
-        mode: data.mode,
-        intent: data.intent,
-        expectedUsername: data.expectedUsername,
-        idempotencyKey: data.idempotencyKey,
-        body: data,
-      });
+      const { job } = await runOnboardingTx((db) =>
+        createOrReuseDraft(db, {
+          userId: context.userId,
+          mode: data.mode,
+          intent: data.intent,
+          expectedUsername: data.expectedUsername,
+          idempotencyKey: data.idempotencyKey,
+          body: data,
+        }),
+      );
       const app = await getApp(context.userId);
       return toPublicJob(job, { appConfigured: Boolean(app) });
     } catch (err) {
@@ -335,24 +338,33 @@ export const startJobBoundRedditOAuth = createServerFn({ method: "POST" })
       const ticket = crypto.randomUUID();
       const state = crypto.randomUUID();
       const correlationId = data.correlationId;
+      if (!correlationId) {
+        throw new OnboardingError("CORRELATION_REQUIRED", "A correlation identifier is required.");
+      }
       await insertTicket({
         ticket,
         userId: context.userId,
         state,
         redirectUri,
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        jobId: job.id,
+        expectedUsername: job.expected_username,
+        expectedRedditId: job.verified_reddit_id,
+        credentialVersion: app.credential_version ?? 1,
+        correlationId,
+        transport: "local",
+        purpose: "connect_account",
+        allowedOrigin: data.origin,
       });
-      await db.query(
-        `update reddit_oauth_tickets
-            set job_id = $2,
-                expected_username = $3,
-                credential_version = $4,
-                transport = 'local',
-                correlation_id = $5,
-                processing_state = 'open'
-          where ticket = $1`,
-        [ticket, job.id, job.expected_username, app.credential_version ?? 1, correlationId],
-      ).catch(() => undefined);
+      const bound = await db.query<{ ticket: string }>(
+        `select ticket from reddit_oauth_tickets
+          where ticket = $1 and user_id = $2 and job_id = $3 and correlation_id = $4
+          limit 1`,
+        [ticket, context.userId, job.id, correlationId],
+      );
+      if (!bound[0]) {
+        throw new OnboardingError("OAUTH_BIND_FAILED", "Could not bind this Reddit login attempt.", 500);
+      }
       await transitionJob(db, {
         userId: context.userId,
         jobId: job.id,
@@ -385,6 +397,17 @@ export const confirmConnectedIdentity = createServerFn({ method: "POST" })
       const job = await requireJob(db, context.userId, data.jobId, data.version);
       if (!job.verified_reddit_id || job.connection_state === "not_started") {
         throw new Error("Connect with Reddit first. A typed message does not prove the account.");
+      }
+      if (!job.account_id) {
+        throw new Error("No account is attached to this setup yet.");
+      }
+      const accounts = await listAccounts(context.userId);
+      const account = accounts.find((a) => a.id === job.account_id);
+      if (!account) {
+        throw new Error("The connected Reddit account does not match this setup.");
+      }
+      if (account.name.toLowerCase() !== (job.verified_username || "").toLowerCase()) {
+        throw new Error("The connected Reddit account does not match this setup.");
       }
       const next = await transitionJob(db, {
         userId: context.userId,
@@ -435,6 +458,28 @@ export const cancelOnboarding = createServerFn({ method: "POST" })
       await drainOwnedPreview(db, context.userId, data.jobId);
       const app = await getApp(context.userId);
       const fresh = (await getJob(db, context.userId, data.jobId)) || next;
+      return toPublicJob(fresh, { appConfigured: Boolean(app) });
+    } catch (err) {
+      throwOnboarding(err);
+    }
+  });
+
+export const handoffOnboardingToManual = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((d: unknown) => versionedJobSchema.parse(d))
+  .handler(async ({ context, data }) => {
+    try {
+      const job = await runOnboardingTx((tx) =>
+        handoffToManual(tx, {
+          userId: context.userId,
+          jobId: data.jobId,
+          version: data.version,
+        }),
+      );
+      const db = await sql();
+      await drainOwnedPreview(db, context.userId, data.jobId);
+      const app = await getApp(context.userId);
+      const fresh = (await getJob(db, context.userId, data.jobId)) || job;
       return toPublicJob(fresh, { appConfigured: Boolean(app) });
     } catch (err) {
       throwOnboarding(err);

@@ -6,9 +6,27 @@ import {
   type BrowserSession,
   type ControlView,
   type CreateSessionInput,
+  type RevokeControlResult,
+  type UsageReport,
 } from "../provider.ts";
 
-const API = "https://www.browserbase.com/v1";
+const API = "https://api.browserbase.com/v1";
+const REQUEST_TIMEOUT_MS = 20_000;
+
+type BrowserbaseSessionPayload = {
+  id?: unknown;
+  status?: unknown;
+  connectUrl?: unknown;
+  contextId?: unknown;
+  expiresAt?: unknown;
+  region?: unknown;
+  projectId?: unknown;
+  duration?: unknown;
+  durationSeconds?: unknown;
+  avgDuration?: unknown;
+  seconds?: unknown;
+  browserSettings?: unknown;
+};
 
 function creds() {
   const apiKey = process.env.BROWSERBASE_API_KEY?.trim();
@@ -20,34 +38,182 @@ function creds() {
   return { apiKey, projectId, region };
 }
 
+function isAbortError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  const name = "name" in err ? String((err as { name?: unknown }).name) : "";
+  return name === "AbortError" || name === "TimeoutError";
+}
+
+function normalizeTransportError(err: unknown, sideEffecting: boolean): never {
+  if (err instanceof BrowserProviderError) throw err;
+  if (isAbortError(err)) {
+    if (sideEffecting) {
+      throw new BrowserProviderError(
+        "SESSION_AMBIGUOUS",
+        "Browserbase timed out after the request may have been accepted. Reconcile before retrying.",
+      );
+    }
+    throw new BrowserProviderError("PROVIDER_TIMEOUT", "Browserbase timed out.");
+  }
+  if (err instanceof TypeError) {
+    if (sideEffecting) {
+      throw new BrowserProviderError(
+        "SESSION_AMBIGUOUS",
+        "Browserbase network error after the request may have been accepted. Reconcile before retrying.",
+      );
+    }
+    throw new BrowserProviderError("PROVIDER_TIMEOUT", "Browserbase network error.");
+  }
+  throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Browserbase request failed.");
+}
+
+function parseRetryAfter(header: string | null): number {
+  if (!header) return 30;
+  const seconds = Number(header);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.floor(seconds);
+  const when = Date.parse(header);
+  if (Number.isFinite(when)) {
+    const delta = Math.ceil((when - Date.now()) / 1000);
+    if (delta > 0) return delta;
+  }
+  return 30;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function readNumericSeconds(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value) && value >= 0) return value;
+  if (typeof value === "string" && value.trim()) {
+    const n = Number(value);
+    if (Number.isFinite(n) && n >= 0) return n;
+  }
+  return null;
+}
+
+export function mapBrowserbaseStatus(raw: unknown): BrowserSession["status"] {
+  if (typeof raw !== "string" || !raw.trim()) {
+    throw new BrowserProviderError("PROVIDER_UNKNOWN_STATUS", "Browserbase status is missing.");
+  }
+  switch (raw.toUpperCase()) {
+    case "PENDING":
+      return "pending";
+    case "RUNNING":
+      return "running";
+    case "ERROR":
+    case "TIMED_OUT":
+    case "COMPLETED":
+      return "ended";
+    default:
+      throw new BrowserProviderError(
+        "PROVIDER_UNKNOWN_STATUS",
+        `Browserbase status ${raw} is not a known running state.`,
+      );
+  }
+}
+
+function observedUsage(json: BrowserbaseSessionPayload): UsageReport {
+  const seconds =
+    readNumericSeconds(json.durationSeconds) ??
+    readNumericSeconds(json.duration) ??
+    readNumericSeconds(json.avgDuration) ??
+    readNumericSeconds(json.seconds);
+  if (seconds === null) return { seconds: null, unknown: true };
+  return { seconds, unknown: false };
+}
+
+function privacyEchoedOn(json: BrowserbaseSessionPayload): boolean {
+  const settings = asRecord(json.browserSettings);
+  if (!settings) return false;
+  const keys = ["recordSession", "logSession", "solveCaptchas", "advancedStealth", "captchaSolving"];
+  return keys.some((key) => settings[key] === true);
+}
+
 async function bb<T>(
   path: string,
-  init: RequestInit & { apiKey: string },
-): Promise<{ status: number; json: T; retryAfter?: number }> {
-  const res = await fetch(`${API}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "X-BB-API-Key": init.apiKey,
-      ...(init.headers || {}),
-    },
-    signal: AbortSignal.timeout(20_000),
-  });
-  const retryAfter = res.headers.get("retry-after");
-  let json = {} as T;
+  init: RequestInit & { apiKey: string; sideEffecting?: boolean; allowEmpty?: boolean },
+): Promise<{ status: number; json: T }> {
+  const sideEffecting = Boolean(init.sideEffecting);
+  let res: Response;
   try {
-    json = (await res.json()) as T;
-  } catch {
-    json = {} as T;
+    res = await fetch(`${API}${path}`, {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        "X-BB-API-Key": init.apiKey,
+        ...(init.headers || {}),
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
+  } catch (err) {
+    normalizeTransportError(err, sideEffecting);
   }
+
   if (res.status === 429) {
     throw new BrowserProviderError(
       "PROVIDER_RATE_LIMITED",
       "Browserbase asked us to wait.",
-      retryAfter ? Number(retryAfter) || 30 : 30,
+      parseRetryAfter(res.headers.get("retry-after")),
     );
   }
-  return { status: res.status, json, retryAfter: retryAfter ? Number(retryAfter) : undefined };
+
+  const text = await res.text();
+  if (!text.trim()) {
+    if (res.status === 204 || res.status === 404 || init.allowEmpty) {
+      return { status: res.status, json: {} as T };
+    }
+    if (res.status >= 200 && res.status < 300) {
+      if (sideEffecting) {
+        throw new BrowserProviderError("SESSION_AMBIGUOUS", "Browserbase returned an empty body.");
+      }
+      throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Browserbase returned invalid JSON.");
+    }
+    return { status: res.status, json: {} as T };
+  }
+
+  let json: T;
+  try {
+    json = JSON.parse(text) as T;
+  } catch {
+    if (res.status >= 200 && res.status < 300) {
+      if (sideEffecting) {
+        throw new BrowserProviderError("SESSION_AMBIGUOUS", "Browserbase returned invalid JSON.");
+      }
+      throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Browserbase returned invalid JSON.");
+    }
+    if (res.status >= 500) {
+      throw new BrowserProviderError(
+        sideEffecting ? "SESSION_AMBIGUOUS" : "PROVIDER_UNAVAILABLE",
+        "Browserbase returned invalid JSON.",
+      );
+    }
+    return { status: res.status, json: {} as T };
+  }
+  return { status: res.status, json };
+}
+
+function toSession(
+  json: BrowserbaseSessionPayload,
+  fallback: { contextId: string | null; projectId: string; region: string; timeoutSeconds: number },
+): BrowserSession {
+  if (typeof json.id !== "string" || !json.id) {
+    throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Browserbase session is missing an id.");
+  }
+  const status = mapBrowserbaseStatus(json.status);
+  return {
+    sessionId: json.id,
+    contextId: typeof json.contextId === "string" ? json.contextId : fallback.contextId,
+    connectUrl: typeof json.connectUrl === "string" ? json.connectUrl : "",
+    expiresAt:
+      typeof json.expiresAt === "string" && json.expiresAt
+        ? json.expiresAt
+        : new Date(Date.now() + fallback.timeoutSeconds * 1000).toISOString(),
+    projectId: typeof json.projectId === "string" && json.projectId ? json.projectId : fallback.projectId,
+    region: typeof json.region === "string" && json.region ? json.region : fallback.region,
+    status,
+  };
 }
 
 export class BrowserbaseProvider implements BrowserProvider {
@@ -60,12 +226,16 @@ export class BrowserbaseProvider implements BrowserProvider {
       {
         method: "POST",
         apiKey,
+        sideEffecting: true,
         body: JSON.stringify({
           projectId,
           name: `reddit-onboarding:${opts.environmentId}:${opts.jobId}`,
         }),
       },
     );
+    if (status >= 500) {
+      throw new BrowserProviderError("SESSION_AMBIGUOUS", "Context create did not confirm. Reconcile before retrying.");
+    }
     if (status >= 400 || !json.id) {
       throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Could not create an isolated browser context.");
     }
@@ -75,95 +245,94 @@ export class BrowserbaseProvider implements BrowserProvider {
   async createSession(input: CreateSessionInput): Promise<BrowserSession> {
     assertPolicySupported(input.policy);
     const { apiKey, projectId, region } = creds();
+    const persist = input.persist === true;
+    const browserSettings = {
+      context: input.contextId ? { id: input.contextId, persist } : undefined,
+      solveCaptchas: false,
+      recordSession: false,
+      logSession: false,
+      advancedStealth: false,
+    };
+    if (
+      browserSettings.recordSession !== false ||
+      browserSettings.logSession !== false ||
+      browserSettings.solveCaptchas !== false ||
+      browserSettings.advancedStealth !== false
+    ) {
+      throw new BrowserProviderError("PROVIDER_UNSUPPORTED_PRIVACY", "Requested privacy option is unsupported.");
+    }
     const body = {
       projectId,
       timeout: input.policy.timeoutSeconds,
       keepAlive: input.policy.keepAlive,
       region,
-      browserSettings: {
-        context: input.contextId ? { id: input.contextId, persist: false } : undefined,
-        solveCaptchas: false,
-        recordSession: false,
-        logSession: false,
-        advancedStealth: false,
-      },
+      browserSettings,
       userMetadata: {
         jobId: input.jobId,
         allocationIntentId: input.allocationIntentId,
         generation: String(input.generation),
       },
     };
-    const { status, json } = await bb<{
-      id?: string;
-      connectUrl?: string;
-      status?: string;
-      expiresAt?: string;
-      region?: string;
-    }>("/sessions", { method: "POST", apiKey, body: JSON.stringify(body) });
-    if (status >= 400 || !json.id) {
-      if (status === 0 || status >= 500) {
-        throw new BrowserProviderError("SESSION_AMBIGUOUS", "Session create did not confirm. Reconcile before retrying.");
-      }
+    const { status, json } = await bb<BrowserbaseSessionPayload>("/sessions", {
+      method: "POST",
+      apiKey,
+      sideEffecting: true,
+      body: JSON.stringify(body),
+    });
+    if (status >= 500) {
+      throw new BrowserProviderError("SESSION_AMBIGUOUS", "Session create did not confirm. Reconcile before retrying.");
+    }
+    if (status >= 400 || typeof json.id !== "string" || !json.id) {
       throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Browserbase rejected the session.");
     }
-    const required = ["solveCaptchas", "recordSession", "logSession", "advancedStealth"];
-    for (const key of required) {
-      if (!(key in (body.browserSettings as object))) {
-        throw new BrowserProviderError("PROVIDER_UNSUPPORTED_PRIVACY", "Privacy setting omitted.");
-      }
+    if (privacyEchoedOn(json)) {
+      throw new BrowserProviderError("PROVIDER_UNSUPPORTED_PRIVACY", "Provider echoed disallowed privacy settings.");
     }
-    return {
-      sessionId: json.id,
+    return toSession(json, {
       contextId: input.contextId ?? null,
-      connectUrl: json.connectUrl || "",
-      expiresAt: json.expiresAt || new Date(Date.now() + input.policy.timeoutSeconds * 1000).toISOString(),
       projectId,
-      region: json.region || region,
-      status: "running",
-    };
+      region,
+      timeoutSeconds: input.policy.timeoutSeconds,
+    });
   }
 
   async getSession(sessionId: string) {
     const { apiKey, projectId, region } = creds();
-    const { status, json } = await bb<{
-      id?: string;
-      status?: string;
-      connectUrl?: string;
-      contextId?: string;
-      expiresAt?: string;
-      region?: string;
-    }>(`/sessions/${encodeURIComponent(sessionId)}`, { method: "GET", apiKey });
+    const { status, json } = await bb<BrowserbaseSessionPayload>(
+      `/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "GET", apiKey },
+    );
     if (status === 404) return null;
-    if (status >= 400 || !json.id) {
+    if (status >= 500) {
       throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Could not read session status.");
     }
-    const ended = /stopped|ended|completed|error/i.test(json.status || "");
-    const sessionStatus: BrowserSession["status"] = ended
-      ? "ended"
-      : json.status === "releasing"
-        ? "releasing"
-        : "running";
-    return {
-      sessionId: json.id,
-      contextId: json.contextId ?? null,
-      connectUrl: json.connectUrl || "",
-      expiresAt: json.expiresAt || new Date().toISOString(),
+    if (status >= 400 || typeof json.id !== "string" || !json.id) {
+      throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Could not read session status.");
+    }
+    return toSession(json, {
+      contextId: typeof json.contextId === "string" ? json.contextId : null,
       projectId,
-      region: json.region || region,
-      status: sessionStatus,
-    };
+      region,
+      timeoutSeconds: 0,
+    });
   }
 
   async requestRelease(sessionId: string) {
-    const { apiKey } = creds();
+    const { apiKey, projectId } = creds();
     const { status } = await bb(`/sessions/${encodeURIComponent(sessionId)}`, {
       method: "POST",
       apiKey,
-      body: JSON.stringify({ projectId: creds().projectId, status: "REQUEST_RELEASE" }),
+      sideEffecting: true,
+      allowEmpty: true,
+      body: JSON.stringify({ projectId, status: "REQUEST_RELEASE" }),
     });
+    if (status === 404) return { accepted: true, ended: true };
+    if (status >= 500) {
+      throw new BrowserProviderError("SESSION_AMBIGUOUS", "Release request did not confirm.");
+    }
     if (status >= 400) return { accepted: false, ended: false };
     const current = await this.getSession(sessionId);
-    return { accepted: true, ended: current?.status === "ended" };
+    return { accepted: true, ended: current?.status === "ended" || current === null };
   }
 
   async deleteContext(contextId: string) {
@@ -171,7 +340,12 @@ export class BrowserbaseProvider implements BrowserProvider {
     const { status } = await bb(`/contexts/${encodeURIComponent(contextId)}`, {
       method: "DELETE",
       apiKey,
+      allowEmpty: true,
     });
+    if (status === 404) return { deleted: true };
+    if (status >= 500) {
+      throw new BrowserProviderError("PROVIDER_UNAVAILABLE", "Context delete did not confirm.");
+    }
     return { deleted: status < 400 };
   }
 
@@ -200,12 +374,20 @@ export class BrowserbaseProvider implements BrowserProvider {
     };
   }
 
-  async revokeControlView() {
-    return { revoked: false };
+  async revokeControlView(_sessionId: string, _generation: number): Promise<RevokeControlResult> {
+    // Browserbase does not document control-URL revocation. Local expiry is not confirmation.
+    return { revoked: false, verified: false };
   }
 
-  async usage() {
-    return { seconds: 0 };
+  async usage(sessionId: string): Promise<UsageReport> {
+    const { apiKey } = creds();
+    const { status, json } = await bb<BrowserbaseSessionPayload>(
+      `/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "GET", apiKey },
+    );
+    if (status === 404) return { seconds: null, unknown: true };
+    if (status >= 400) return { seconds: null, unknown: true };
+    return observedUsage(json);
   }
 }
 

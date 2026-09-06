@@ -47,6 +47,12 @@ export const SAFE_EVENT_TYPES = [
   "cleanup_completed",
   "retention_expiry",
   "unsupported_page",
+  "handoff_manual",
+  "allocation_reconciled",
+  "grant_rejected",
+  "readiness_observed",
+  "draft_generated",
+  "email_binding_changed",
 ] as const;
 
 export type SafeEventType = (typeof SAFE_EVENT_TYPES)[number];

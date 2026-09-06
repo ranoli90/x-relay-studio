@@ -2,13 +2,19 @@ name: ci
 
 on:
   push:
-    branches: [main, fix/**]
+    branches: [main, fix/**, feat/**]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   check:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -25,6 +31,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: check
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

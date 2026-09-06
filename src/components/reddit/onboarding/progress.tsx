@@ -71,7 +71,7 @@ export function OnboardingProgress({
             Take control
           </Button>
         ) : null}
-        {job.permittedActions.includes("start_manual") || job.mode === "assisted" ? (
+        {job.permittedActions.includes("handoff_manual") ? (
           <Button type="button" variant="ghost" onClick={onManual} disabled={busy}>
             Use manual instead
           </Button>

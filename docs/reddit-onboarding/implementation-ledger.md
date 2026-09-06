@@ -76,3 +76,20 @@ See `.env.example` and `docs/environments.md`. Names only:
 `REDDIT_ONBOARDING_ENABLED`, `REDDIT_ASSISTED_SIGNUP_ENABLED`, `REDDIT_REMOTE_OAUTH_ENABLED`, `REDDIT_BROWSER_PROVIDER`, `REDDIT_WORKFLOW_VERSION`, `REDDIT_SESSION_MAX_SECONDS`, `REDDIT_ONBOARDING_GLOBAL_CONCURRENCY`, `REDDIT_BROWSER_CONTEXT_RETENTION_DAYS`, `BROWSERBASE_API_KEY`, `BROWSERBASE_PROJECT_ID`, `BROWSERBASE_REGION`, `STAGEHAND_MODEL`, `SECRETS_ENCRYPTION_KEY`, `REDDIT_VAULT_KEY_ID`.
 
 Never prefix provider/model/encryption secrets with `VITE_`.
+
+## Continuation — worker restore, handoff, ops (2026-09-06)
+
+Preserved `feat/reddit-onboarding` (did not reset).
+
+### Restored / repaired
+- `worker-core.ts`: restored `handleCommand` after truncation. Allocation intents persist context/session ids immediately. Timeouts map to `SESSION_AMBIGUOUS`. Fixture path uses `FakePageDriver` + `runBoundedSignup`. No `TEST signup fixture` classify. Owner-scoped `drainOwnedPreview`. No unsafe unscoped claim fallback.
+- Coordinator: assisted → manual calls `handoffOnboardingToManual` on the same job. Username is required; never substituted with `user`. Idempotency keys are retained for retries of the same logical request.
+- Worker process: `pool.on('error')` and SIGTERM/SIGINT wait for in-flight drain.
+- Flags: `REDDIT_DRAFTING_ENABLED`, `REDDIT_PUBLISH_ENABLED`, `REDDIT_EMAIL_BINDING_ENABLED`, `redditRuntimeClass()`. CI also runs on `feat/**`.
+- Ops: `operator-guide.md`, credential inventory (dry-run, metadata only), `postgres-race.test.ts` (skips without `REDDIT_TEST_DATABASE_URL`).
+
+### Tests
+`npm run test:reddit-onboarding` (2026-09-06): **107 passed, 0 failed, 3 skipped** (`RC-001` live Postgres unset). Credential-inventory CLI test passed.
+
+Live Reddit, live Browserbase, production migrate, and merge/deploy were **not** done.
+

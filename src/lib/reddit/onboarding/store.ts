@@ -20,6 +20,7 @@ import { capabilities, assistedUnavailableReason } from "./policy.ts";
 import { hashFingerprint, hashIdempotency, sha256Hex } from "./vault.ts";
 import { redactValue, type SafeEventType } from "./observability.ts";
 import type { SqlLike } from "./sql.ts";
+import { isUniqueViolation, withSqlTransaction } from "./sql.ts";
 import { environmentId, redditSessionMaxSeconds, redditWorkflowVersion } from "./config.ts";
 
 export type JobRow = {
@@ -78,6 +79,11 @@ export type JobRow = {
   allocation_intent_id: string | null;
   masked_email: string | null;
   cleanup_summary: string | null;
+  allocation_status?: string | null;
+  provider_context_id?: string | null;
+  handoff_from_mode?: string | null;
+  retention_status?: string | null;
+  retention_expires_at?: string | Date | null;
 };
 
 export type CommandRow = {
@@ -165,6 +171,9 @@ export function toPublicJob(
     maskedEmail: row.masked_email,
     retainContext: Boolean(row.retain_context),
     retainPassword: Boolean(row.retain_password),
+    retentionStatus: row.retention_status ?? (row.retain_context ? "requested" : null),
+    retentionExpiresAt: iso(row.retention_expires_at ?? null),
+    cleanupPending: Boolean(row.cleanup_summary && /pending/i.test(row.cleanup_summary)),
     permittedActions: actions,
     capabilities: caps,
   };
@@ -261,47 +270,50 @@ export async function createOrReuseDraft(
   }
 
   const id = crypto.randomUUID();
-  await sql.query(`begin`);
   try {
-    const rows = await sql.query<JobRow>(
-      `insert into reddit_onboarding_jobs (
-         id, user_id, mode, intent, status, step, connection_state, version,
-         workflow_version, use_case_version, environment_id, expected_username
-       ) values (
-         $1, $2, $3, $4, 'draft', 'consent', 'not_started', 1,
-         $5, 'data-api-v1', $6, $7
-       ) returning *`,
-      [id, opts.userId, opts.mode, opts.intent, redditWorkflowVersion(), environmentId(), opts.expectedUsername ?? null],
-    );
-    const job = rows[0];
-    await sql.query(
-      `insert into reddit_onboarding_commands (
-         id, user_id, job_id, kind, idempotency_key_hash, request_fingerprint,
-         expected_job_version, payload_json, status
-       ) values ($1,$2,$3,'start',$4,$5,1,'{}','completed')`,
-      [crypto.randomUUID(), opts.userId, id, hash, fp],
-    );
-    await insertEvent(sql, {
-      userId: opts.userId,
-      jobId: id,
-      type: "job_created",
-      actorKind: "owner",
-      actorId: opts.userId,
-      jobVersion: 1,
-      details: { mode: opts.mode, intent: opts.intent },
+    return await withSqlTransaction(sql, async (tx) => {
+      const rows = await tx.query<JobRow>(
+        `insert into reddit_onboarding_jobs (
+           id, user_id, mode, intent, status, step, connection_state, version,
+           workflow_version, use_case_version, environment_id, expected_username
+         ) values (
+           $1, $2, $3, $4, 'draft', 'consent', 'not_started', 1,
+           $5, 'data-api-v1', $6, $7
+         ) returning *`,
+        [id, opts.userId, opts.mode, opts.intent, redditWorkflowVersion(), environmentId(), opts.expectedUsername ?? null],
+      );
+      const job = rows[0];
+      await tx.query(
+        `insert into reddit_onboarding_commands (
+           id, user_id, job_id, kind, idempotency_key_hash, request_fingerprint,
+           expected_job_version, payload_json, status
+         ) values ($1,$2,$3,'start',$4,$5,1,'{}','completed')`,
+        [crypto.randomUUID(), opts.userId, id, hash, fp],
+      );
+      await insertEvent(tx, {
+        userId: opts.userId,
+        jobId: id,
+        type: "job_created",
+        actorKind: "owner",
+        actorId: opts.userId,
+        jobVersion: 1,
+        details: { mode: opts.mode, intent: opts.intent },
+      });
+      return { job, reused: false };
     });
-    await sql.query(`commit`);
-    return { job, reused: false };
   } catch (err) {
-    try {
-      await sql.query(`rollback`);
-    } catch {
-      /* keep */
-    }
-    const msg = err instanceof Error ? err.message : String(err);
-    if (/unique|duplicate/i.test(msg)) {
+    if (isUniqueViolation(err)) {
       const again = await getActiveJob(sql, opts.userId);
-      if (again) return { job: again, reused: true };
+      if (again) {
+        if (again.mode !== opts.mode || again.intent !== opts.intent) {
+          throw new OnboardingError(
+            "ACTIVE_JOB_EXISTS",
+            "Finish or cancel the open Reddit setup before starting another.",
+            409,
+          );
+        }
+        return { job: again, reused: true };
+      }
       throw new OnboardingError("ACTIVE_JOB_EXISTS", "Finish or cancel the open Reddit setup before starting another.", 409);
     }
     throw err;
@@ -375,10 +387,6 @@ export async function enqueueCommand(
     operation: string;
   },
 ): Promise<{ command: CommandRow; job: JobRow; duplicate: boolean }> {
-  const job = await requireJob(sql, opts.userId, opts.jobId, opts.version);
-  if (!canExecuteCommand(asMachine(job), opts.kind)) {
-    throw new OnboardingError("UNSUPPORTED_STATE", `Cannot ${opts.kind} from ${job.status}.`);
-  }
   const hash = hashIdempotency(opts.userId, opts.operation, opts.idempotencyKey);
   const fp = hashFingerprint(opts.payload);
   const existing = await sql.query<CommandRow>(
@@ -391,7 +399,13 @@ export async function enqueueCommand(
     if (existing[0].request_fingerprint !== fp) {
       throw new OnboardingError("IDEMPOTENCY_CONFLICT", "This retry does not match the original request.", 409);
     }
+    const job = await getJob(sql, opts.userId, opts.jobId);
+    if (!job) throw new OnboardingError("NOT_FOUND", "Setup not found.", 404);
     return { command: existing[0], job, duplicate: true };
+  }
+  const job = await requireJob(sql, opts.userId, opts.jobId, opts.version);
+  if (!canExecuteCommand(asMachine(job), opts.kind)) {
+    throw new OnboardingError("UNSUPPORTED_STATE", `Cannot ${opts.kind} from ${job.status}.`);
   }
   const rows = await sql.query<CommandRow>(
     `insert into reddit_onboarding_commands (
@@ -434,10 +448,12 @@ export async function transitionJob(
       cleanup_summary: string | null;
       allocation_intent_id: string | null;
       provider_session_id: string | null;
+      provider_context_id: string | null;
       browser_profile_id: string | null;
       control_owner: string;
       reserved_browser_seconds: number;
       submit_intent_id: string | null;
+      allocation_status: string | null;
     }>;
     eventType: SafeEventType;
     details?: Record<string, unknown>;
@@ -479,9 +495,22 @@ export async function transitionJob(
        browser_profile_id = coalesce($22, browser_profile_id),
        reserved_browser_seconds = coalesce($23, reserved_browser_seconds),
        submit_intent_id = coalesce($24, submit_intent_id),
+       mode = coalesce($26, mode),
+       provider_context_id = coalesce($27, provider_context_id),
+       allocation_status = coalesce($28, allocation_status),
+       handoff_from_mode = coalesce($29, handoff_from_mode),
        updated_at = now(),
        last_activity_at = now()
      where id = $1 and user_id = $2 and version = $25
+       and (
+         $30::text is null
+         or (
+           lease_owner = $30
+           and lease_generation = $31
+           and lease_until is not null
+           and lease_until > now()
+         )
+       )
      returning *`,
     [
       opts.jobId,
@@ -509,9 +538,20 @@ export async function transitionJob(
       opts.patch?.reserved_browser_seconds ?? null,
       opts.patch?.submit_intent_id ?? null,
       opts.expectedVersion,
+      next.mode,
+      opts.patch?.provider_context_id ?? null,
+      opts.patch?.allocation_status ?? null,
+      opts.event.type === "HANDOFF_TO_MANUAL" ? job.mode : null,
+      opts.leaseOwner ?? null,
+      opts.leaseGeneration ?? null,
     ],
   );
-  if (!rows[0]) throw stale(job);
+  if (!rows[0]) {
+    if (opts.leaseOwner) {
+      throw new OnboardingError("STALE_LEASE", "This worker lease is no longer valid.", 409, job.version);
+    }
+    throw stale(job);
+  }
   await insertEvent(sql, {
     userId: opts.userId,
     jobId: opts.jobId,
@@ -528,42 +568,152 @@ export async function claimCommand(
   sql: SqlLike,
   workerId: string,
   leaseSeconds = 60,
+  scope?: { userId: string; jobId: string },
 ): Promise<{ command: CommandRow; job: JobRow } | null> {
-  const claimed = await sql.query<CommandRow>(
-    `update reddit_onboarding_commands
-        set status = 'leased',
-            lease_owner = $1,
-            lease_generation = lease_generation + 1,
-            lease_until = now() + ($2::int * interval '1 second'),
-            attempt = attempt + 1
-      where id = (
-        select c.id from reddit_onboarding_commands c
-        join reddit_onboarding_jobs j on j.id = c.job_id and j.user_id = c.user_id
-        where c.status in ('queued', 'leased')
-          and c.available_at <= now()
-          and (c.lease_until is null or c.lease_until <= now() or c.status = 'queued')
-          and (j.finished_at is null or c.kind in ('cancel', 'reconcile'))
-        order by c.available_at
-        for update skip locked
-        limit 1
-      )
-      returning *`,
-    [workerId, leaseSeconds],
-  );
-  const command = claimed[0];
-  if (!command) return null;
-  const jobRows = await sql.query<JobRow>(
+  try {
+    return await claimCommandOnce(sql, workerId, leaseSeconds, scope, true);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (!/skip locked|for update/i.test(msg)) throw err;
+    return claimCommandOnce(sql, workerId, leaseSeconds, scope, false);
+  }
+}
+
+async function claimCommandOnce(
+  sql: SqlLike,
+  workerId: string,
+  leaseSeconds: number,
+  scope: { userId: string; jobId: string } | undefined,
+  skipLocked: boolean,
+): Promise<{ command: CommandRow; job: JobRow } | null> {
+  const lock = skipLocked ? "for update skip locked" : "for update";
+  return withSqlTransaction(sql, async (tx) => {
+    const claimed = await tx.query<CommandRow>(
+      `update reddit_onboarding_commands
+          set status = 'leased',
+              lease_owner = $1,
+              lease_generation = lease_generation + 1,
+              lease_until = now() + ($2::int * interval '1 second'),
+              attempt = attempt + 1
+        where id = (
+          select c.id from reddit_onboarding_commands c
+          join reddit_onboarding_jobs j on j.id = c.job_id and j.user_id = c.user_id
+          where c.status in ('queued', 'leased')
+            and c.available_at <= now()
+            and (c.lease_until is null or c.lease_until <= now() or c.status = 'queued')
+            and (j.finished_at is null or c.kind in ('cancel', 'reconcile', 'handoff_manual'))
+            and ($3::text is null or c.user_id = $3)
+            and ($4::text is null or c.job_id = $4)
+            and (
+              j.lease_owner is null
+              or j.lease_owner = $1
+              or j.lease_until is null
+              or j.lease_until <= now()
+            )
+          order by c.available_at
+          ${lock}
+          limit 1
+        )
+        returning *`,
+      [workerId, leaseSeconds, scope?.userId ?? null, scope?.jobId ?? null],
+    );
+    const command = claimed[0];
+    if (!command) return null;
+    const jobRows = await tx.query<JobRow>(
+      `update reddit_onboarding_jobs
+          set lease_owner = $1,
+              lease_generation = lease_generation + 1,
+              lease_until = now() + ($2::int * interval '1 second'),
+              heartbeat_at = now()
+        where id = $3 and user_id = $4
+          and (
+            lease_owner is null
+            or lease_owner = $1
+            or lease_until is null
+            or lease_until <= now()
+          )
+        returning *`,
+      [workerId, leaseSeconds, command.job_id, command.user_id],
+    );
+    if (!jobRows[0]) {
+      await tx.query(
+        `update reddit_onboarding_commands
+            set status = 'queued', lease_owner = null, lease_until = null
+          where id = $1`,
+        [command.id],
+      );
+      return null;
+    }
+    return { command, job: jobRows[0] };
+  });
+}
+
+export async function renewLease(
+  sql: SqlLike,
+  opts: {
+    userId: string;
+    jobId: string;
+    workerId: string;
+    generation: number;
+    leaseSeconds?: number;
+  },
+): Promise<JobRow> {
+  const rows = await sql.query<JobRow>(
     `update reddit_onboarding_jobs
-        set lease_owner = $1,
-            lease_generation = lease_generation + 1,
-            lease_until = now() + ($2::int * interval '1 second'),
+        set lease_until = now() + ($5::int * interval '1 second'),
             heartbeat_at = now()
-      where id = $3 and user_id = $4
+      where id = $1 and user_id = $2
+        and lease_owner = $3
+        and lease_generation = $4
+        and lease_until is not null
+        and lease_until > now()
       returning *`,
-    [workerId, leaseSeconds, command.job_id, command.user_id],
+    [opts.jobId, opts.userId, opts.workerId, opts.generation, opts.leaseSeconds ?? 60],
   );
-  if (!jobRows[0]) return null;
-  return { command, job: jobRows[0] };
+  if (!rows[0]) {
+    throw new OnboardingError("STALE_LEASE", "Lease renewal failed; stop side effects.", 409);
+  }
+  return rows[0];
+}
+
+export async function handoffToManual(
+  sql: SqlLike,
+  opts: { userId: string; jobId: string; version: number },
+): Promise<JobRow> {
+  return withSqlTransaction(sql, async (tx) => {
+    const job = await requireJob(tx, opts.userId, opts.jobId, opts.version);
+    if (job.mode === "manual") return job;
+    const next = await transitionJob(tx, {
+      userId: opts.userId,
+      jobId: opts.jobId,
+      expectedVersion: opts.version,
+      event: { type: "HANDOFF_TO_MANUAL" },
+      eventType: "handoff_manual",
+      patch: {
+        cleanup_summary: job.provider_session_id
+          ? "Hosted browser cleanup pending. History is kept on this setup."
+          : "Switched this setup to manual. History is kept.",
+      },
+      details: { fromMode: job.mode },
+    });
+    if (job.provider_session_id) {
+      await enqueueCleanup(tx, {
+        userId: opts.userId,
+        jobId: job.id,
+        kind: "release_session",
+        target: job.provider_session_id,
+      });
+    }
+    if (job.provider_context_id) {
+      await enqueueCleanup(tx, {
+        userId: opts.userId,
+        jobId: job.id,
+        kind: "delete_context",
+        target: job.provider_context_id,
+      });
+    }
+    return next;
+  });
 }
 
 export async function completeCommand(

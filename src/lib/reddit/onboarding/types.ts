@@ -72,6 +72,7 @@ export const COMMAND_KINDS = [
   "reconcile",
   "cancel",
   "finalize",
+  "handoff_manual",
 ] as const;
 export type CommandKind = (typeof COMMAND_KINDS)[number];
 
@@ -85,12 +86,16 @@ export const SIDE_EFFECT_STATUSES = [
 export type SideEffectStatus = (typeof SIDE_EFFECT_STATUSES)[number];
 
 export const PROFILE_STATUSES = [
+  "requested",
   "temporary",
   "retained",
   "needs_reauth",
+  "expired",
+  "delete_pending",
+  "deleted",
+  "failed",
   "quarantined",
   "deleting",
-  "deleted",
   "error",
 ] as const;
 export type ProfileStatus = (typeof PROFILE_STATUSES)[number];
@@ -161,7 +166,11 @@ export type PermittedAction =
   | "cancel"
   | "finish_later"
   | "open_dashboard"
-  | "manage_saved_access";
+  | "manage_saved_access"
+  | "handoff_manual"
+  | "open_readiness"
+  | "open_drafts"
+  | "manage_email";
 
 export type OnboardingJobPublic = {
   id: string;
@@ -186,6 +195,9 @@ export type OnboardingJobPublic = {
   maskedEmail: string | null;
   retainContext: boolean;
   retainPassword: boolean;
+  retentionStatus: string | null;
+  retentionExpiresAt: string | null;
+  cleanupPending: boolean;
   permittedActions: PermittedAction[];
   capabilities: CapabilityMap;
 };
@@ -239,7 +251,8 @@ export type BrowserProviderErrorCode =
   | "SESSION_AMBIGUOUS"
   | "CONTEXT_DENIED"
   | "CONTROL_NOT_READY"
-  | "FAKE_PROVIDER";
+  | "FAKE_PROVIDER"
+  | "PROVIDER_UNKNOWN_STATUS";
 
 export class OnboardingError extends Error {
   code: string;
@@ -253,3 +266,64 @@ export class OnboardingError extends Error {
     this.currentVersion = currentVersion;
   }
 }
+
+export const EMAIL_BINDING_KINDS = ["existing_inbox", "owned_domain_alias", "managed_inbox"] as const;
+export type EmailBindingKind = (typeof EMAIL_BINDING_KINDS)[number];
+
+export const EMAIL_BINDING_STATUSES = [
+  "requested",
+  "pending",
+  "verified",
+  "destination_failed",
+  "quota_blocked",
+  "delete_pending",
+  "deleted",
+  "failed",
+] as const;
+export type EmailBindingStatus = (typeof EMAIL_BINDING_STATUSES)[number];
+
+export const READINESS_VALUES = ["pass", "blocked", "verified", "unverified", "valid", "needs_reauth", "action_needed", "none_reported", "restricted", "eligible", "needs_review", "running", "ended", "unknown"] as const;
+export type ReadinessValue = (typeof READINESS_VALUES)[number];
+
+export type ReadinessCheck = {
+  key: "owner" | "identity" | "access" | "recovery" | "restriction" | "permissions" | "community" | "session";
+  label: string;
+  status: string;
+  reason: string | null;
+  lastObservedAt: string | null;
+};
+
+export type ReadinessReport = {
+  accountId: string;
+  checks: ReadinessCheck[];
+  inventedReputation: false;
+  cqsClaim: null;
+};
+
+export type DraftPublic = {
+  id: string;
+  version: number;
+  accountId: string;
+  community: string;
+  topic: string;
+  title: string;
+  body: string;
+  postType: string;
+  flair: string | null;
+  fitExplanation: string | null;
+  validationStatus: string;
+  approvalStatus: string;
+  contentHash: string;
+  createdAt: string;
+};
+
+export type EmailBindingPublic = {
+  id: string;
+  kind: EmailBindingKind;
+  provider: string;
+  maskedDisplay: string;
+  status: EmailBindingStatus;
+  destinationVerified: boolean;
+  accountId: string | null;
+};
+

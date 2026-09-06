@@ -1,0 +1,86 @@
+import assert from "node:assert/strict";
+import { afterEach, describe, it } from "node:test";
+import {
+  onboardingFixtureEnabled,
+  redditAssistedSignupEnabled,
+  redditDraftingEnabled,
+  redditEmailBindingEnabled,
+  redditOnboardingEnabled,
+  redditPublishEnabled,
+  redditRuntimeClass,
+} from "./config.ts";
+
+const KEYS = [
+  "REDDIT_ONBOARDING_ENABLED",
+  "REDDIT_ASSISTED_SIGNUP_ENABLED",
+  "REDDIT_DRAFTING_ENABLED",
+  "REDDIT_PUBLISH_ENABLED",
+  "REDDIT_EMAIL_BINDING_ENABLED",
+  "REDDIT_ONBOARDING_FIXTURE",
+  "VERCEL",
+  "VERCEL_ENV",
+  "NODE_ENV",
+] as const;
+
+const snapshot: Record<string, string | undefined> = {};
+for (const key of KEYS) snapshot[key] = process.env[key];
+
+afterEach(() => {
+  for (const key of KEYS) {
+    const value = snapshot[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+
+describe("reddit onboarding environment defaults", () => {
+  it("defaults on locally when not deployed", () => {
+    delete process.env.VERCEL;
+    delete process.env.VERCEL_ENV;
+    process.env.NODE_ENV = "test";
+    delete process.env.REDDIT_ONBOARDING_ENABLED;
+    assert.equal(redditOnboardingEnabled(), true);
+    assert.equal(redditRuntimeClass(), "local");
+  });
+
+  it("defaults off on Vercel preview because VERCEL is set", () => {
+    process.env.VERCEL = "1";
+    process.env.VERCEL_ENV = "preview";
+    process.env.NODE_ENV = "production";
+    delete process.env.REDDIT_ONBOARDING_ENABLED;
+    assert.equal(redditOnboardingEnabled(), false);
+    assert.equal(redditRuntimeClass(), "hosted_preview");
+  });
+
+  it("defaults off in production and still honors explicit true", () => {
+    process.env.VERCEL = "1";
+    process.env.VERCEL_ENV = "production";
+    process.env.NODE_ENV = "production";
+    delete process.env.REDDIT_ONBOARDING_ENABLED;
+    assert.equal(redditOnboardingEnabled(), false);
+    process.env.REDDIT_ONBOARDING_ENABLED = "true";
+    assert.equal(redditOnboardingEnabled(), true);
+  });
+
+  it("keeps drafting, publish, email binding, assisted signup, and fixture off by default", () => {
+    delete process.env.VERCEL;
+    process.env.NODE_ENV = "test";
+    delete process.env.REDDIT_DRAFTING_ENABLED;
+    delete process.env.REDDIT_PUBLISH_ENABLED;
+    delete process.env.REDDIT_EMAIL_BINDING_ENABLED;
+    delete process.env.REDDIT_ASSISTED_SIGNUP_ENABLED;
+    delete process.env.REDDIT_ONBOARDING_FIXTURE;
+    assert.equal(redditDraftingEnabled(), false);
+    assert.equal(redditPublishEnabled(), false);
+    assert.equal(redditEmailBindingEnabled(), false);
+    assert.equal(redditAssistedSignupEnabled(), false);
+    assert.equal(onboardingFixtureEnabled(), false);
+  });
+
+  it("never enables the fixture allowlist on a hosted deployment", () => {
+    process.env.VERCEL = "1";
+    process.env.VERCEL_ENV = "preview";
+    process.env.REDDIT_ONBOARDING_FIXTURE = "true";
+    assert.equal(onboardingFixtureEnabled(), false);
+  });
+});

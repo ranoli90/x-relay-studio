@@ -1,7 +1,7 @@
 import { fetchMe, iconFromMe } from "./client";
 import { buildHealthReport } from "./health";
 import { probePublicProfile } from "./health-probe";
-import { exchangeCode } from "./oauth";
+import { exchangeCode, revokeToken } from "./oauth";
 import { userAgentFor } from "./naming";
 import {
   countAccounts,
@@ -11,8 +11,10 @@ import {
   upsertAccount,
 } from "./store";
 import { getSql, withTransaction } from "@/lib/db";
-import { ACCOUNT_CAP } from "./onboarding/types";
+import { ACCOUNT_CAP, OnboardingError } from "./onboarding/types";
 import { normalizeUsername } from "./onboarding/schemas";
+import { enqueueCleanup } from "./onboarding/store";
+import { encryptV2 } from "./onboarding/vault";
 
 export async function completeRedditOAuth(opts: {
   userId: string;
@@ -21,9 +23,22 @@ export async function completeRedditOAuth(opts: {
   expectedUsername?: string | null;
   expectedRedditId?: string | null;
   jobId?: string | null;
+  credentialVersion?: number | null;
+  allowedOrigin?: string | null;
+  correlationId?: string | null;
 }) {
   const app = await getApp(opts.userId);
   if (!app) throw new Error("Reddit app is not configured.");
+  if (
+    opts.credentialVersion != null &&
+    Number(app.credential_version ?? 1) !== Number(opts.credentialVersion)
+  ) {
+    throw new OnboardingError(
+      "CREDENTIAL_VERSION_MISMATCH",
+      "Reddit app credentials changed during login. Start connect again.",
+      409,
+    );
+  }
   const ua = userAgentFor(app.user_agent_name, app.app_id || "desk.mail");
   const tokens = await exchangeCode({
     clientId: app.client_id,
@@ -35,17 +50,51 @@ export async function completeRedditOAuth(opts: {
   if (!tokens.refresh_token) {
     throw new Error("Reddit did not return a refresh token. Duration must be permanent.");
   }
+
+  const rejectGrant = async (reason: string) => {
+    const sql = await getSql();
+    const material = encryptV2(tokens.refresh_token!, {
+      userId: opts.userId,
+      recordId: opts.jobId || opts.userId,
+      purpose: "oauth_revocation_material",
+    });
+    await enqueueCleanup(sql, {
+      userId: opts.userId,
+      jobId: opts.jobId ?? undefined,
+      kind: "revoke_oauth",
+      target: `rejected-grant:${opts.jobId || crypto.randomUUID()}`,
+      encryptedMaterial: material,
+    });
+    try {
+      await revokeToken({
+        clientId: app.client_id,
+        clientSecret: app.client_secret,
+        userAgent: ua,
+        token: tokens.refresh_token!,
+      });
+    } catch {
+      /* durable cleanup retries */
+    }
+    return reason;
+  };
+
   const { me, remaining } = await fetchMe(tokens.access_token, ua);
   if (!me?.id || !me.name) throw new Error("Reddit did not return an identity.");
 
   if (opts.expectedRedditId && opts.expectedRedditId !== me.id) {
+    await rejectGrant("wrong_reddit_id");
     throw new WrongAccountError(me.name);
   }
-  if (opts.expectedUsername && normalizeUsername(opts.expectedUsername).toLowerCase() !== me.name.toLowerCase()) {
+  if (
+    opts.expectedUsername &&
+    normalizeUsername(opts.expectedUsername).toLowerCase() !== me.name.toLowerCase()
+  ) {
+    await rejectGrant("wrong_username");
     throw new WrongAccountError(me.name);
   }
 
   if (await redditIdTakenByOther(me.id, opts.userId)) {
+    await rejectGrant("taken");
     throw new Error("That Reddit account is already connected.");
   }
 
@@ -56,21 +105,45 @@ export async function completeRedditOAuth(opts: {
     rateRemaining: remaining,
     publicProfile,
   });
-  const existing = await getAccountByRedditId(opts.userId, me.id);
-  const id = existing?.id ?? crypto.randomUUID();
 
-  await withTransaction(async () => {
+  const canonicalId = await withTransaction(async () => {
     const sql = await getSql();
     await sql.query(`select pg_advisory_xact_lock(hashtext($1))`, [`reddit-cap:${opts.userId}`]);
+
+    if (opts.jobId) {
+      const jobs = await sql.query<{
+        id: string;
+        status: string;
+        finished_at: string | Date | null;
+        cancel_requested_at: string | Date | null;
+      }>(
+        `select id, status, finished_at, cancel_requested_at
+           from reddit_onboarding_jobs
+          where id = $1 and user_id = $2
+          limit 1`,
+        [opts.jobId, opts.userId],
+      );
+      const job = jobs[0];
+      if (!job || job.finished_at || job.cancel_requested_at || job.status === "cancelled") {
+        throw new OnboardingError(
+          "ATTEMPT_CANCELLED",
+          "This Reddit login was cancelled and cannot attach an account.",
+          409,
+        );
+      }
+    }
+
     if (await redditIdTakenByOther(me.id, opts.userId)) {
       throw new Error("That Reddit account is already connected.");
     }
+    const existing = await getAccountByRedditId(opts.userId, me.id);
     const n = await countAccounts(opts.userId);
     if (!existing && n >= ACCOUNT_CAP) {
       throw new Error("Eight Reddit accounts is the cap on one desk. Disconnect one first.");
     }
-    await upsertAccount({
-      id,
+
+    const stored = await upsertAccount({
+      id: existing?.id ?? crypto.randomUUID(),
       userId: opts.userId,
       redditId: me.id,
       name: me.name,
@@ -89,8 +162,9 @@ export async function completeRedditOAuth(opts: {
       scopes: tokens.scope,
       health,
     });
+
     if (opts.jobId) {
-      await sql.query(
+      const linked = await sql.query(
         `update reddit_onboarding_jobs
             set verified_reddit_id = $3,
                 verified_username = $4,
@@ -102,13 +176,34 @@ export async function completeRedditOAuth(opts: {
                 step = 'health',
                 version = version + 1,
                 updated_at = now()
-          where id = $1 and user_id = $2 and finished_at is null`,
-        [opts.jobId, opts.userId, me.id, me.name, id],
+          where id = $1 and user_id = $2
+            and finished_at is null
+            and cancel_requested_at is null
+            and status not in ('cancelled', 'failed', 'blocked', 'expired')
+          returning id`,
+        [opts.jobId, opts.userId, me.id, me.name, stored.id],
       );
+      if (!linked[0]) {
+        throw new OnboardingError(
+          "ATTEMPT_CANCELLED",
+          "This Reddit login was cancelled and cannot attach an account.",
+          409,
+        );
+      }
     }
+    return stored.id;
+  }).catch(async (err) => {
+    if (err instanceof OnboardingError && err.code === "ATTEMPT_CANCELLED") {
+      await rejectGrant("attempt_cancelled");
+    } else if (err instanceof Error && /Eight Reddit accounts is the cap/.test(err.message)) {
+      await rejectGrant("cap");
+    } else if (err instanceof Error && /already connected/.test(err.message)) {
+      await rejectGrant("taken");
+    }
+    throw err;
   });
 
-  return { accountId: id, name: me.name };
+  return { accountId: canonicalId, name: me.name };
 }
 
 export class WrongAccountError extends Error {

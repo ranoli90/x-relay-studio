@@ -22,6 +22,7 @@ import {
   saveOnboardingDetails,
   startJobBoundRedditOAuth,
   startOnboarding,
+  handoffOnboardingToManual,
 } from "@/lib/reddit/onboarding/server";
 import type {
   OnboardingBootstrap,
@@ -50,6 +51,16 @@ function newKey() {
   return crypto.randomUUID();
 }
 
+type KeyPair = { idempotencyKey: string; correlationId: string };
+
+function rememberKey(store: Map<string, KeyPair>, op: string): KeyPair {
+  const existing = store.get(op);
+  if (existing) return existing;
+  const pair = { idempotencyKey: newKey(), correlationId: newKey() };
+  store.set(op, pair);
+  return pair;
+}
+
 export function OnboardingCoordinator({
   onFinished,
   embedded,
@@ -67,6 +78,7 @@ export function OnboardingCoordinator({
   const [selected, setSelected] = useState<"assisted" | "manual" | null>(null);
   const [pendingAccount, setPendingAccount] = useState<RedditAccountPublic | null>(null);
   const hidden = useRef(typeof document !== "undefined" ? document.hidden : false);
+  const opKeys = useRef(new Map<string, KeyPair>());
 
   const loadPendingAccount = useCallback(async (accountId?: string | null) => {
     const reddit = await getBootstrap();
@@ -134,15 +146,18 @@ export function OnboardingCoordinator({
   async function begin(mode: "assisted" | "manual", intent: "create" | "connect_existing") {
     setBusy(true);
     setError(null);
+    const op = `create:${mode}:${intent}`;
+    const keys = rememberKey(opKeys.current, op);
     try {
       const created = await createOnboarding({
         data: {
           mode,
           intent,
-          idempotencyKey: newKey(),
-          correlationId: newKey(),
+          idempotencyKey: keys.idempotencyKey,
+          correlationId: keys.correlationId,
         },
       });
+      opKeys.current.delete(op);
       setJob(created);
       setSelected(mode);
       setScreen(intent === "connect_existing" ? (boot?.appConfigured ? "oauth" : "app") : "details");
@@ -163,6 +178,8 @@ export function OnboardingCoordinator({
     if (!job) return;
     setBusy(true);
     setError(null);
+    const op = `start:${job.id}`;
+    const keys = rememberKey(opKeys.current, op);
     try {
       const saved = await saveOnboardingDetails({
         data: {
@@ -172,7 +189,7 @@ export function OnboardingCoordinator({
           retainContext: input.retainContext,
           retainPassword: input.retainPassword,
           assistanceConsent: input.assistanceConsent,
-          correlationId: newKey(),
+          correlationId: keys.correlationId,
         },
       });
       const started = await startOnboarding({
@@ -180,12 +197,14 @@ export function OnboardingCoordinator({
           jobId: saved.id,
           version: saved.version,
           consentVersion: input.consentVersion || ASSISTANCE_CONSENT_VERSION,
-          idempotencyKey: newKey(),
-          correlationId: newKey(),
+          idempotencyKey: keys.idempotencyKey,
+          correlationId: keys.correlationId,
         },
       });
+      opKeys.current.delete(op);
       setJob(started);
-      setScreen(started.mode === "manual" ? "progress" : "progress");
+      if (input.expectedUsername) setUsername(input.expectedUsername);
+      setScreen("progress");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not start setup.");
     } finally {
@@ -195,6 +214,11 @@ export function OnboardingCoordinator({
 
   async function reportCreated() {
     if (!job) return;
+    const reported = (username.trim() || job.expectedUsername || "").replace(/^u\//i, "");
+    if (reported.length < 3) {
+      setError("Enter the username you used. We will not guess.");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
@@ -202,15 +226,36 @@ export function OnboardingCoordinator({
         data: {
           jobId: job.id,
           version: job.version,
-          username: username || job.expectedUsername || "user",
+          username: reported,
           ownerCreated: true,
-          correlationId: newKey(),
+          correlationId: rememberKey(opKeys.current, `continue:${job.id}`).correlationId,
         },
       });
+      opKeys.current.delete(`continue:${job.id}`);
       setJob(next);
       setScreen(boot?.appConfigured ? "oauth" : "app");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Could not save that.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handoffManual() {
+    if (!job) return;
+    setBusy(true);
+    setError(null);
+    const op = `handoff:${job.id}`;
+    const keys = rememberKey(opKeys.current, op);
+    try {
+      const next = await handoffOnboardingToManual({
+        data: { jobId: job.id, version: job.version, correlationId: keys.correlationId },
+      });
+      opKeys.current.delete(op);
+      setJob(next);
+      setScreen("progress");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not switch to manual.");
     } finally {
       setBusy(false);
     }
@@ -227,14 +272,16 @@ export function OnboardingCoordinator({
     }
     setBusy(true);
     try {
+      const keys = rememberKey(opKeys.current, `cancel:${job.id}`);
       const next = await cancelOnboarding({
         data: {
           jobId: job.id,
           version: job.version,
-          idempotencyKey: newKey(),
-          correlationId: newKey(),
+          idempotencyKey: keys.idempotencyKey,
+          correlationId: keys.correlationId,
         },
       });
+      opKeys.current.delete(`cancel:${job.id}`);
       setJob(next);
       setScreen("result");
     } catch (e) {
@@ -332,7 +379,7 @@ export function OnboardingCoordinator({
           });
         }}
         onCancel={() => void cancel()}
-        onManual={() => void begin("manual", job.intent)}
+        onManual={() => void handoffManual()}
         onOpenSignup={() => window.open(boot.reviewedSignupUrl, "_blank", "noopener")}
         onContinue={() => setScreen("manual-return")}
       />,
@@ -351,8 +398,9 @@ export function OnboardingCoordinator({
           Username
           <input
             className="mt-2 h-11 w-full rounded-md border border-border bg-surface px-3"
-            value={username}
+            value={username || job.expectedUsername || ""}
             onChange={(e) => setUsername(e.target.value)}
+            autoComplete="username"
           />
         </label>
         {error ? <p className="mt-3 text-sm text-bad">{error}</p> : null}
@@ -375,7 +423,7 @@ export function OnboardingCoordinator({
             setScreen("progress");
           });
         }}
-        onManual={() => void begin("manual", job.intent)}
+        onManual={() => void handoffManual()}
       />,
     );
   }

@@ -70,15 +70,19 @@ export function encryptV2(plain: string, aad: AssociatedData, keyId = redditVaul
 export function decryptV2(blob: string, aad: AssociatedData): string {
   if (!isV2Envelope(blob)) throw new SecretDecryptError("NOT_V2");
   const parts = blob.split(".");
-  const iv = Buffer.from(parts[2], "base64url");
-  const tag = Buffer.from(parts[3], "base64url");
-  const ct = Buffer.from(parts[4], "base64url");
-  const decipher = createDecipheriv("aes-256-gcm", keyFor(INFO_V2), iv);
-  decipher.setAAD(aadBytes(aad, V2));
-  decipher.setAuthTag(tag);
   try {
+    const iv = Buffer.from(parts[2], "base64url");
+    const tag = Buffer.from(parts[3], "base64url");
+    const ct = Buffer.from(parts[4], "base64url");
+    if (iv.length !== 12 || tag.length !== 16 || ct.length < 1) {
+      throw new SecretDecryptError("MALFORMED");
+    }
+    const decipher = createDecipheriv("aes-256-gcm", keyFor(INFO_V2), iv);
+    decipher.setAAD(aadBytes(aad, V2));
+    decipher.setAuthTag(tag);
     return Buffer.concat([decipher.update(ct), decipher.final()]).toString("utf8");
-  } catch {
+  } catch (err) {
+    if (err instanceof SecretDecryptError) throw err;
     throw new SecretDecryptError("AUTH_FAILED");
   }
 }

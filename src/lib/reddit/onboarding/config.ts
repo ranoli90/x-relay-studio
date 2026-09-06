@@ -4,6 +4,14 @@ import {
   DEFAULT_SESSION_SECONDS,
 } from "./types.ts";
 
+/**
+ * Hosted isolation class used by defaults.
+ *
+ * `VERCEL` is set on every Vercel deployment, including preview URLs.
+ * `isDeployed()` therefore treats production *and* hosted preview as deployed.
+ * That is intentional: do not weaken production isolation so a preview
+ * comment can default the coordinator on.
+ */
 function isDeployed(): boolean {
   return Boolean(process.env.VERCEL) || process.env.NODE_ENV === "production";
 }
@@ -23,7 +31,30 @@ function readInt(name: string, fallback: number): number {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
 }
 
-/** Coordinator/UI. On in local/preview so the flow is testable; off in production until flagged. */
+/**
+ * Environment class for operators. Distinct from the onboarding default.
+ *
+ * - `production`: `VERCEL_ENV=production`, or `VERCEL`/`NODE_ENV=production`
+ *   without a preview label
+ * - `hosted_preview`: `VERCEL_ENV=preview` (still deployed; isolation holds)
+ * - `local`: no Vercel, not production Node
+ * - `fixture`: local-only fixture site (`REDDIT_ONBOARDING_FIXTURE`)
+ */
+export type RedditRuntimeClass = "production" | "hosted_preview" | "local" | "fixture";
+
+export function redditRuntimeClass(): RedditRuntimeClass {
+  if (onboardingFixtureEnabled()) return "fixture";
+  const vercelEnv = process.env.VERCEL_ENV?.trim();
+  if (vercelEnv === "preview") return "hosted_preview";
+  if (vercelEnv === "production" || isDeployed()) return "production";
+  return "local";
+}
+
+/**
+ * Coordinator/UI. Default on only in local non-deployed development.
+ * Vercel (including preview) and production stay off unless REDDIT_ONBOARDING_ENABLED is explicit.
+ * Do not treat a hosted preview as locally testable.
+ */
 export function redditOnboardingEnabled(): boolean {
   const explicit = readFlag("REDDIT_ONBOARDING_ENABLED");
   if (explicit !== undefined) return explicit;
@@ -89,4 +120,31 @@ export function allowLegacyPlaintextSecrets(): boolean {
 export function onboardingFixtureEnabled(): boolean {
   if (isDeployed()) return false;
   return readFlag("REDDIT_ONBOARDING_FIXTURE") === true;
+}
+
+function fixtureListenPort(): string {
+  const raw = (process.env.REDDIT_ONBOARDING_FIXTURE_PORT || process.env.PORT || "8080").trim();
+  return /^\d{2,5}$/.test(raw) ? raw : "8080";
+}
+
+/** Full origins (scheme + host + port) allowed only while isolated fixture mode is on. */
+export function fixtureOriginAllowlist(): string[] {
+  if (!onboardingFixtureEnabled()) return [];
+  const port = fixtureListenPort();
+  return [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
+}
+
+/** OpenRouter draft composer. Off unless explicitly enabled. Never triggered by signup. */
+export function redditDraftingEnabled(): boolean {
+  return readFlag("REDDIT_DRAFTING_ENABLED") === true;
+}
+
+/** Direct Reddit publish. Stays off unless a separate approval gate enables it. */
+export function redditPublishEnabled(): boolean {
+  return readFlag("REDDIT_PUBLISH_ENABLED") === true;
+}
+
+/** Managed recovery-email alias/inbox. Existing owner inboxes work without this. */
+export function redditEmailBindingEnabled(): boolean {
+  return readFlag("REDDIT_EMAIL_BINDING_ENABLED") === true;
 }

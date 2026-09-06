@@ -8,6 +8,7 @@ import { disconnectAccount, runHealthCheck } from "@/lib/reddit/server";
 import { Button } from "@/components/ui/button";
 import { PushScreen } from "@/components/screen-stack";
 import { OnboardingCoordinator } from "./onboarding/coordinator";
+import { AccountActions } from "./onboarding/account-actions";
 import { InboxView } from "./inbox-view";
 import { cn } from "@/lib/utils";
 
@@ -120,7 +121,7 @@ export function Dashboard({
                       void disconnectAccount({ data: { accountId: account.id } }).then(onChanged);
                     }}
                   >
-                    Revoke u/{account.name}
+                    Disconnect X Relay
                   </Button>
                   <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmCut(false)}>
                     Keep
@@ -128,7 +129,7 @@ export function Dashboard({
                 </>
               ) : (
                 <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmCut(true)}>
-                  Disconnect
+                  Disconnect X Relay
                 </Button>
               )}
             </div>
@@ -162,6 +163,14 @@ export function Dashboard({
               </ul>
             </div>
           ) : null}
+          <AccountActions
+            accountId={account.id}
+            accountName={account.name}
+            onReconnect={() => setAdding(true)}
+            onDisconnectRelay={() => {
+              void disconnectAccount({ data: { accountId: account.id } }).then(onChanged);
+            }}
+          />
           <InboxView accountId={account.id} onUnread={onUnread} />
         </main>
       </div>
