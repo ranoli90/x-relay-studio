@@ -19,7 +19,6 @@ export function OnboardingProgress({
   job,
   batch,
   events,
-  onTakeControl,
   onCancel,
   onManual,
   onOpenSignup,
@@ -95,11 +94,6 @@ export function OnboardingProgress({
         {job.permittedActions.includes("confirm_submit") && onConfirmSubmit ? (
           <Button type="button" variant="secondary" onClick={onConfirmSubmit} disabled={busy}>
             I submitted the form myself
-          </Button>
-        ) : null}
-        {job.permittedActions.includes("request_takeover") ? (
-          <Button type="button" variant="secondary" onClick={onTakeControl} disabled={busy}>
-            Take control
           </Button>
         ) : null}
         {job.permittedActions.includes("handoff_manual") ? (

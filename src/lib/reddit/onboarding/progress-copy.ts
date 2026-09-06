@@ -11,9 +11,15 @@ function isManualCreate(job: ProgressCopyJob): boolean {
   return job.status === "draft" && (job.step === "consent" || job.step === "create_account");
 }
 
+function isOwnerGateCopy(text: string): boolean {
+  return /captcha|security check|robot|tick the|user agreement|sign up button|complete the security/i.test(
+    text,
+  );
+}
+
 export function progressTitle(job: ProgressCopyJob): string {
-  if (job.waitReason) return job.waitReason;
-  if (job.status === "needs_user") return "Your turn";
+  if (job.waitReason && !isOwnerGateCopy(job.waitReason)) return job.waitReason;
+  if (job.status === "needs_user") return "Create this Reddit account.";
   if (job.status === "reconciling") return "Checking the result";
   if (job.status === "waiting_external" && isManualCreate(job)) return "Create this Reddit account.";
   if (job.status === "waiting_external") return "Waiting on the next Reddit step";
@@ -34,7 +40,7 @@ export function progressEventCopy(type: string): string {
     case "session_allocation_confirmed":
       return "Hosted browser is ready.";
     case "user_action_required":
-      return "Waiting for your verification.";
+      return "Open Reddit signup if you have not already, then continue here.";
     case "result_unknown":
       return "Checking the result. We will not submit again.";
     case "oauth_started":
@@ -49,13 +55,15 @@ export function progressBody(job: ProgressCopyJob, lastEventType?: string | null
     return "Open Reddit and create the account. Come back and continue with the username you used. We will not guess it.";
   }
   if (job.status === "running") {
-    return "Automation is filling supported fields. CAPTCHA, terms, and Sign Up stay yours.";
+    return "Filling supported fields in the hosted browser. Continue here when the account exists.";
   }
   if (job.status === "queued") {
     return "Waiting for the hosted browser. Keep this screen open.";
   }
   const fromEvent = lastEventType ? progressEventCopy(lastEventType) : "";
   if (fromEvent) return fromEvent;
-  if (job.status === "needs_user") return "Your turn on the Reddit page.";
+  if (job.status === "needs_user") {
+    return "Open Reddit and create the account. Come back and continue with the username you used.";
+  }
   return "Waiting for the next step.";
 }

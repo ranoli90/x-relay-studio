@@ -36,8 +36,7 @@ export function SteelHostCard({
         <h2 className="mt-2 text-lg font-medium tracking-tight">Steel Cloud</h2>
         <p className="mt-2 text-sm leading-relaxed text-muted">
           Steel hosts the remote browser. The free plan needs no card — about 300 browser hours.
-          Register, copy an API key, and paste it here. CAPTCHA, terms, and final submit stay your
-          clicks.
+          Register, copy an API key, and paste it here.
         </p>
         <p className="mt-2 text-sm leading-relaxed text-muted">
           {host.previewUsesLocal

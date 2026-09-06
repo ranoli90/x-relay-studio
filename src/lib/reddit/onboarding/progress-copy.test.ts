@@ -44,7 +44,17 @@ describe("reddit progress copy", () => {
       step: "create_account",
       waitReason: null,
     });
-    assert.match(progressBody(running), /Automation is filling/);
+    assert.match(progressBody(running), /Filling supported fields/);
     assert.equal(progressTitle(running), "Working through supported steps");
+  });
+
+  it("does not surface captcha or tick-the-box wait reasons as the title", () => {
+    const gated = job({
+      status: "needs_user",
+      waitReason: "Complete the security check (CAPTCHA) on Reddit.",
+    });
+    assert.equal(progressTitle(gated), "Create this Reddit account.");
+    assert.doesNotMatch(progressTitle(gated), /captcha|tick|agreement/i);
+    assert.doesNotMatch(progressBody(gated), /captcha|tick the/i);
   });
 });

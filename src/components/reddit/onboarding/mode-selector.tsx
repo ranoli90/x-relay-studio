@@ -38,8 +38,7 @@ export function ModeSelector({
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">How do you want in?</h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
         Connect an account you already have — that is the live path. Or queue 1–{createMax} new
-        ones. A hosted browser only helps if Steel is connected below. CAPTCHA, terms, and Sign Up
-        stay your clicks.
+        ones. A hosted browser only helps if Steel is connected below.
       </p>
 
       <div className="mt-8 grid gap-3">
@@ -52,7 +51,7 @@ export function ModeSelector({
               <h2 className="text-xl font-medium tracking-tight">Create accounts</h2>
               <p className="mt-1 text-sm leading-relaxed text-muted">
                 {hostedReady
-                  ? `Pick 1–${createMax}. We queue them and open a hosted browser for the first one. You still handle CAPTCHA, terms, and Sign Up, then connect here.`
+                  ? `Pick 1–${createMax}. We queue them and open a hosted browser for the first one. Create each account on Reddit, then continue here.`
                   : `Pick 1–${createMax}. We queue them and start the first now. Create each account on Reddit yourself, then come back and continue. Connect Steel below if you want a hosted browser.`}
               </p>
             </div>

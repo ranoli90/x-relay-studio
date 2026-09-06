@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
 import type { OnboardingJobPublic } from "@/lib/reddit/onboarding/types";
 import {
   captureOnboardingLiveFrame,
@@ -8,10 +7,8 @@ import {
 } from "@/lib/reddit/onboarding/server";
 import {
   FIXTURE_KICK_MESSAGE,
-  OWNER_KICKS,
   PARENT_KICK_MESSAGE,
   fixtureKickUrl,
-  initialKickIndex,
   type OwnerKickId,
 } from "@/lib/reddit/onboarding/kick-steps";
 
@@ -41,64 +38,27 @@ export function HumanControl({
 }) {
   const kind = view?.kind || (view?.url ? "embed" : fixture ? "fixture" : "none");
   const isFixture = kind === "fixture" || Boolean(fixture || view?.fixture);
-  const [step, setStep] = useState(() => initialKickIndex(job.waitReason));
-  const finished = useRef(false);
-  const current = OWNER_KICKS[Math.min(step, OWNER_KICKS.length - 1)];
-  const last = step >= OWNER_KICKS.length - 1;
-
-  function advance(from: OwnerKickId) {
-    const index = OWNER_KICKS.findIndex((item) => item.id === from);
-    if (index < 0 || index < step) return;
-    if (from === "final_submit") {
-      if (finished.current) return;
-      finished.current = true;
-      onFinish();
-      return;
-    }
-    setStep(index + 1);
-  }
 
   return (
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
-      <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">
-        Your turn · {Math.min(step + 1, OWNER_KICKS.length)} of {OWNER_KICKS.length}
-      </p>
-      <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">{current.title}</h1>
+      <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Your turn</p>
+      <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">
+        Create this Reddit account.
+      </h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        {current.hint} Only this once for this desk. Later accounts skip these taps.
+        Open Reddit and create the account. Come back and continue with the username you used.
       </p>
       {job.expectedUsername ? (
-        <p className="mt-2 font-mono text-xs text-subtle">Form filled for u/{job.expectedUsername}</p>
+        <p className="mt-2 font-mono text-xs text-subtle">Suggested username u/{job.expectedUsername}</p>
       ) : null}
-
-      <ol className="mt-6 flex gap-2" aria-label="Owner clicks">
-        {OWNER_KICKS.map((item, index) => (
-          <li key={item.id} className="flex-1">
-            <span
-              className={cn(
-                "block h-1 rounded-full transition-colors duration-[var(--motion-quick)] ease-[var(--ease-out)]",
-                index < step ? "bg-ok" : index === step ? "bg-fg" : "bg-border",
-              )}
-            />
-            <span
-              className={cn(
-                "mt-2 block text-[11px] font-medium tracking-wide",
-                index === step ? "text-fg" : "text-subtle",
-              )}
-            >
-              {item.title}
-            </span>
-          </li>
-        ))}
-      </ol>
 
       <div className="mt-6 overflow-hidden rounded-xl border border-border bg-surface">
         {isFixture ? (
           <FixtureKickFrame
             job={job}
-            step={current.id}
-            completed={OWNER_KICKS.slice(0, step).map((item) => item.id)}
-            onKick={advance}
+            step="final_submit"
+            completed={[]}
+            onKick={() => onFinish()}
           />
         ) : kind === "local" && view?.sessionId ? (
           <LocalLiveCanvas jobId={job.id} sessionId={view.sessionId} />
@@ -107,7 +67,7 @@ export function HumanControl({
         ) : (
           <div className="px-5 py-10">
             <p className="text-sm leading-relaxed text-muted">
-              {view?.reason || "Open Reddit and tap this same control on the real page."}
+              {view?.reason || "Open Reddit signup, create the account, then continue here."}
             </p>
             {signupUrl ? (
               <Button
@@ -122,15 +82,9 @@ export function HumanControl({
         )}
       </div>
 
-      {!isFixture ? (
-        <Button type="button" className="mt-6 w-full" onClick={() => advance(current.id)}>
-          {last ? "I tapped Sign Up" : "I tapped this control"}
-        </Button>
-      ) : (
-        <p className="mt-4 text-sm leading-relaxed text-muted">
-          Tap the real control above. Automation filled the form and will not click this for you.
-        </p>
-      )}
+      <Button type="button" className="mt-6 w-full" onClick={onFinish}>
+        I created it — continue
+      </Button>
 
       <div className="mt-6 flex flex-col gap-2 sm:max-w-xl">
         <Button type="button" variant="ghost" onClick={onManual}>
@@ -156,7 +110,7 @@ function FixtureKickFrame({
   const onKickRef = useRef(onKick);
   onKickRef.current = onKick;
   const src = useMemo(
-    () => fixtureKickUrl({ username: job.expectedUsername, step: "captcha" }),
+    () => fixtureKickUrl({ username: job.expectedUsername, step: "final_submit" }),
     [job.expectedUsername],
   );
 

@@ -43,9 +43,6 @@ export function SetupApp({ onSaved }: { onSaved: () => void }) {
     redirectUri: string;
   } | null>(null);
   const [stage, setStage] = useState<"terms" | "app">("terms");
-  const [read, setRead] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const [unlocked, setUnlocked] = useState(false);
   const [clientId, setClientId] = useState("");
   const [clientSecret, setClientSecret] = useState("");
   const [userAgentName, setUserAgentName] = useState("");
@@ -71,7 +68,7 @@ export function SetupApp({ onSaved }: { onSaved: () => void }) {
           clientSecret,
           userAgentName,
           origin: window.location.origin,
-          acceptedTerms: read && submitted && unlocked,
+          acceptedTerms: true,
         },
       });
       onSaved();
@@ -89,18 +86,8 @@ export function SetupApp({ onSaved }: { onSaved: () => void }) {
         {stage === "terms" ? (
           <Terms
             copy={copy}
-            read={read}
-            submitted={submitted}
-            unlocked={unlocked}
             error={error}
-            onRead={setRead}
-            onSubmitted={setSubmitted}
-            onUnlocked={setUnlocked}
             onNext={() => {
-              if (!read || !submitted || !unlocked) {
-                setError("Read the terms, submit the form, and wait until prefs/apps is unlocked.");
-                return;
-              }
               setError(null);
               setStage("app");
             }}
@@ -127,26 +114,14 @@ export function SetupApp({ onSaved }: { onSaved: () => void }) {
 
 function Terms({
   copy,
-  read,
-  submitted,
-  unlocked,
   error,
-  onRead,
-  onSubmitted,
-  onUnlocked,
   onNext,
 }: {
   copy: {
     appLabel: string;
     signupBlurb: string;
   } | null;
-  read: boolean;
-  submitted: boolean;
-  unlocked: boolean;
   error: string | null;
-  onRead: (v: boolean) => void;
-  onSubmitted: (v: boolean) => void;
-  onUnlocked: (v: boolean) => void;
   onNext: () => void;
 }) {
   return (
@@ -260,9 +235,9 @@ function Terms({
               , the flag is still off. Stop. Do not keep hitting create app.
             </p>
             <p className="mt-2">
-              Unlocked looks like: create an app… works, captcha, then a client
-              id appears. Creating the app is how you agree to the Developer
-              Terms and Data API Terms — there is no extra Accept button.
+              Unlocked looks like: create an app works, then a client id appears. Creating the
+              app is how you agree to the Developer Terms and Data API Terms — there is no extra
+              Accept button.
             </p>
             <p className="mt-2">
               Developer account fills this form and owns prefs/apps. The
@@ -272,34 +247,6 @@ function Terms({
         </li>
       </ol>
 
-      <label className="mt-8 flex cursor-pointer items-start gap-3 text-sm text-muted">
-        <input
-          type="checkbox"
-          className="mt-1 size-4 accent-fg"
-          checked={read}
-          onChange={(e) => onRead(e.target.checked)}
-        />
-        I read the Developer Terms, Data API Terms, and Responsible Builder Policy.
-      </label>
-      <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-muted">
-        <input
-          type="checkbox"
-          className="mt-1 size-4 accent-fg"
-          checked={submitted}
-          onChange={(e) => onSubmitted(e.target.checked)}
-        />
-        I selected “I'm a Developer” and “I want to register to use the
-        Reddit API.” and submitted that form once.
-      </label>
-      <label className="mt-4 flex cursor-pointer items-start gap-3 text-sm text-muted">
-        <input
-          type="checkbox"
-          className="mt-1 size-4 accent-fg"
-          checked={unlocked}
-          onChange={(e) => onUnlocked(e.target.checked)}
-        />
-        prefs/apps is unlocked. Create app no longer bounces to the policy page.
-      </label>
       {error ? <p className="mt-4 text-sm leading-relaxed text-bad">{error}</p> : null}
       <Button className="mt-8 w-full" type="button" disabled={!copy} onClick={onNext}>
         Continue to create app

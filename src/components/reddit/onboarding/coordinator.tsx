@@ -742,8 +742,7 @@ export function OnboardingCoordinator({
           <h1 className="mt-4 text-3xl font-medium tracking-tight">Connect the test account</h1>
           <p className="mt-3 text-sm leading-relaxed text-muted">
             This preview does not talk to Reddit. Connecting stores a local fixture identity so you
-            can finish health and the dashboard. CAPTCHA, terms, and live login stay owner actions
-            on the real site.
+            can finish health and the dashboard.
           </p>
           <label className="mt-6 block text-sm">
             Username
@@ -887,18 +886,10 @@ function screenFor(job: OnboardingJobPublic, appConfigured: boolean, fixture = f
   if (job.step === "health" || job.step === "confirm") return "health";
   if (job.step === "oauth") return appConfigured ? "oauth" : "app";
   if (job.step === "app_access" || job.step === "app_credentials") return appConfigured ? "oauth" : "app";
-  if (
-    job.intent === "create" &&
-    job.status === "needs_user" &&
-    (job.step === "verify_account" || job.step === "create_account")
-  ) {
-    return "control";
-  }
-  if (job.controlOwner === "user") return "control";
+  // Never park create on the captcha / terms kick screen.
   if (job.status === "draft") {
     if (job.intent === "connect_existing") return appConfigured || fixture ? "oauth" : "app";
-    if (job.batchId) return "progress";
-    return "details";
+    return "progress";
   }
   return "progress";
 }
