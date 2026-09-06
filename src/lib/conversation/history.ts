@@ -10,9 +10,18 @@ export type HistoryRow = {
 };
 
 const CONFIRMED_STATUS = new Set(["sent", "sent_confirmed", "observed"]);
+const LOCAL_ORIGINS = new Set(["local_note", "local_template", "imported", "operator_note"]);
+
+export function isLocalNote(row: HistoryRow): boolean {
+  const origin = (row.origin ?? "").toLowerCase();
+  if (LOCAL_ORIGINS.has(origin)) return true;
+  const status = (row.status ?? "").toLowerCase();
+  return status === "draft" || status === "held" || status === "local";
+}
 
 export function isConfirmedOutbound(row: HistoryRow): boolean {
   if (row.role !== "persona") return false;
+  if (isLocalNote(row)) return false;
   const status = (row.status ?? "").toLowerCase();
   if (!status) return false;
   if (status === "approved" || status === "held" || status === "local" || status === "draft") return false;
@@ -20,6 +29,7 @@ export function isConfirmedOutbound(row: HistoryRow): boolean {
 }
 
 export function isConfirmedInbound(row: HistoryRow): boolean {
+  if (isLocalNote(row)) return false;
   return row.role === "fan" || row.role === "inbound" || row.origin === "observed_partner";
 }
 
@@ -35,6 +45,13 @@ export function confirmedTranscript(rows: HistoryRow[]): { role: "fan" | "person
     }
   }
   return out;
+}
+
+/** Filter local notes first, then apply the history window. */
+export function confirmedTranscriptLimited(rows: HistoryRow[], limit: number): { role: "fan" | "persona"; body: string }[] {
+  const confirmed = confirmedTranscript(rows);
+  if (limit <= 0) return [];
+  return confirmed.slice(-limit);
 }
 
 export function confirmedTurnCount(rows: HistoryRow[]): number {

@@ -7,6 +7,7 @@ import {
   classifyTransportResult,
   combineHealth,
   confirmedTranscript,
+  confirmedTranscriptLimited,
   confirmedTurnCount,
   decideLiveAutoSend,
   extractProposedFacts,
@@ -202,6 +203,18 @@ describe("AC transcript", () => {
     const t = confirmedTranscript(rows);
     assert.deepEqual(t.map((m) => m.body), ["hi", "hey"]);
     assert.equal(confirmedTurnCount(rows), 2);
+  });
+
+  it("filters local notes before applying the history limit", () => {
+    const rows = [
+      { role: "fan", body: "old", status: "sent" },
+      { role: "persona", body: "note", status: "local", origin: "local_note" },
+      { role: "fan", body: "mid", status: "sent" },
+      { role: "persona", body: "draft", status: "draft" },
+      { role: "persona", body: "hey", status: "sent" },
+    ];
+    const limited = confirmedTranscriptLimited(rows, 2);
+    assert.deepEqual(limited.map((m) => m.body), ["mid", "hey"]);
   });
 });
 
