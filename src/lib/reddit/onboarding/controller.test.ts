@@ -57,6 +57,11 @@ describe("bounded signup controller", () => {
     assert.notEqual(htmlTitle, "TEST signup fixture");
     assert.match(FIXTURE_HTML, /name="username"/);
     assert.match(FIXTURE_HTML, /name="email"/);
+    assert.match(FIXTURE_HTML, /I'm not a robot/);
+    assert.match(FIXTURE_HTML, /data-owner-required="captcha"/);
+    assert.match(FIXTURE_HTML, /data-owner-required="terms"/);
+    assert.match(FIXTURE_HTML, /data-owner-required="final_submit"/);
+    assert.match(FIXTURE_HTML, /Sign Up/);
 
     const driver = new FakePageDriver();
     const observation = await runBoundedSignup(driver, fixturePlan(), {

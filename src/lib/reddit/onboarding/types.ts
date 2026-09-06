@@ -252,6 +252,7 @@ export type OnboardingBootstrap = {
   fixtureEnabled: boolean;
   provider: BrowserProviderName;
   steelHost: SteelHostPublic;
+  ownerKicksCompleted: boolean;
   accountCount: number;
   accountCap: number;
   remainingCreateSlots: number;

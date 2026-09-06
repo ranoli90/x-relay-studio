@@ -23,8 +23,9 @@ export function ModeSelector({
   onConnect: () => void;
 }) {
   const maxPick = Math.max(0, Math.min(createMax, remainingSlots));
-  const [count, setCount] = useState(maxPick > 0 ? Math.min(1, maxPick) : 1);
+  const [count, setCount] = useState(1);
   const canCreate = maxPick > 0;
+  const pick = Math.min(count, Math.max(1, maxPick));
 
   return (
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
@@ -60,13 +61,13 @@ export function ModeSelector({
                   key={n}
                   type="button"
                   role="radio"
-                  aria-checked={count === n}
+                  aria-checked={pick === n}
                   aria-label={`${n} ${n === 1 ? "account" : "accounts"}`}
                   disabled={!allowed || busy}
                   onClick={() => setCount(n)}
                   className={cn(
                     "flex min-h-12 items-center justify-center rounded-lg border text-lg font-medium tabular-nums",
-                    count === n && allowed
+                    pick === n && allowed
                       ? "border-reddit bg-reddit text-reddit-fg"
                       : "border-border bg-surface-2 text-fg",
                     !allowed && "cursor-not-allowed opacity-40",
@@ -86,16 +87,18 @@ export function ModeSelector({
             type="button"
             className="mt-4 min-h-12 w-full"
             disabled={!canCreate || busy}
-            onClick={() => onCreate(count)}
+            onClick={() => onCreate(pick)}
           >
             {busy
               ? "Queuing…"
-              : count <= 1
+              : pick <= 1
                 ? "Make 1 account"
-                : `Queue ${count} and start making them`}
+                : `Queue ${pick} and start making them`}
           </Button>
           {!canCreate ? (
-            <p className="mt-3 text-sm text-warn">This desk is full. Disconnect one first, or connect an account you already use.</p>
+            <p className="mt-3 text-sm text-warn">
+              This desk is full. Disconnect one first, or connect an account you already use.
+            </p>
           ) : null}
         </article>
 

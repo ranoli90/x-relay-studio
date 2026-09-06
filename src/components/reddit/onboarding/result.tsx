@@ -27,7 +27,7 @@ export function OnboardingResult({
   const retained = job.retentionStatus === "retained";
   const expiry = retained ? formatExpiry(job.retentionExpiresAt) : null;
   return (
-    <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
+    <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16" data-testid="onboarding-result">
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Result</p>
       {batch && batch.size > 1 ? (
         <p className="mt-2 font-mono text-xs tracking-[0.18em] text-reddit uppercase">
@@ -90,7 +90,7 @@ export function OnboardingResult({
 
 function ResultCard({ title, ok, detail }: { title: string; ok: boolean; detail: string }) {
   return (
-    <li className="rounded-xl border border-border bg-surface p-4">
+    <li className="rounded-xl border border-border bg-surface p-4" data-testid={`result-${title.toLowerCase().replace(/\s+/g, "-")}`}>
       <p className="text-sm font-medium">
         {title}{" "}
         <span className={ok ? "text-ok" : "text-muted"}>{ok ? "yes" : "not yet"}</span>

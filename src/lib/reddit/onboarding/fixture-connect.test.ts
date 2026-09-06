@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { PGlite } from "@electric-sql/pglite";
 import { completeFixtureConnect, finishIsolatedFixtureSignup, fixtureHealthReport, generateFixtureUsername } from "./fixture-connect.ts";
+import { ownerKicksAlreadyDone } from "./owner-gates.ts";
 import { createOrReuseDraft, enqueueCommand, getJob, saveDetails, transitionJob } from "./store.ts";
 import { schema, toSql } from "./test-schema.ts";
 import { drainOwnedPreview } from "./worker-core.ts";
@@ -132,6 +133,8 @@ describe("isolated fixture connect", () => {
     });
     await drainOwnedPreview(sql, "user-auto", saved.id);
     const afterDrain = await getJob(sql, "user-auto", saved.id);
+    assert.equal(afterDrain?.status, "needs_user");
+    assert.match(afterDrain?.wait_reason || "", /security check/i);
     const done = await finishIsolatedFixtureSignup(sql, {
       userId: "user-auto",
       jobId: saved.id,
@@ -148,9 +151,50 @@ describe("isolated fixture connect", () => {
     );
     assert.equal(accounts[0]?.name, username);
     assert.ok(accounts[0]?.onboarded_at);
+    assert.equal(await ownerKicksAlreadyDone(sql, "user-auto"), true);
+    assert.equal(await ownerKicksAlreadyDone(sql, "user-other"), false);
     delete process.env.REDDIT_ONBOARDING_FIXTURE;
     delete process.env.REDDIT_ASSISTED_SIGNUP_ENABLED;
     delete process.env.REDDIT_BROWSER_PROVIDER;
+    await pg.close();
+  });
+
+  it("treats later accounts as already past the owner taps", async () => {
+    process.env.REDDIT_ONBOARDING_FIXTURE = "true";
+    delete process.env.VERCEL;
+    process.env.NODE_ENV = "test";
+    process.env.SECRETS_ENCRYPTION_KEY = "fixture-skip-test-key";
+    const pg = new PGlite();
+    await pg.waitReady;
+    await schema(pg);
+    const sql = toSql(pg);
+    assert.equal(await ownerKicksAlreadyDone(sql, "user-skip"), false);
+    const firstName = generateFixtureUsername();
+    const created = await createOrReuseDraft(sql, {
+      userId: "user-skip",
+      mode: "manual",
+      intent: "create",
+      expectedUsername: firstName,
+      idempotencyKey: "fx-skip-1",
+      body: { mode: "manual", intent: "create" },
+    });
+    const started = await transitionJob(sql, {
+      userId: "user-skip",
+      jobId: created.job.id,
+      expectedVersion: created.job.version,
+      event: { type: "OWNER_STARTS" },
+      eventType: "started",
+    });
+    await finishIsolatedFixtureSignup(sql, {
+      userId: "user-skip",
+      jobId: created.job.id,
+      version: started.version,
+      username: firstName,
+    });
+    assert.equal(await ownerKicksAlreadyDone(sql, "user-skip"), true);
+    await sql.query(`update reddit_accounts set disconnected_at = now() where user_id = $1`, ["user-skip"]);
+    assert.equal(await ownerKicksAlreadyDone(sql, "user-skip"), true);
+    delete process.env.REDDIT_ONBOARDING_FIXTURE;
     await pg.close();
   });
 });

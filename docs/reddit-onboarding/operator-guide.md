@@ -29,7 +29,7 @@ The Grok preview turns Reddit setup **on locally only**:
 - `REDDIT_DRAFTING_ENABLED=true`
 - `REDDIT_EMAIL_BINDING_ENABLED=true`
 
-Create 1–5 / Connect my own run against the local fixture page. CAPTCHA, terms, and final submit stay owner clicks on that page. No Reddit account is created. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
+Create 1–5 / Connect my own run against the local fixture page. Create is one queue: pick a count and we start making them in order. CAPTCHA, terms, and final submit stay owner clicks on live Reddit. No Reddit.com account is created. Isolated signup uses a local `*@fixture.test` address — there is no disposable-mail factory. `REDDIT_PUBLISH_ENABLED` and `REDDIT_REMOTE_OAUTH_ENABLED` stay off.
 
 Unattended Reddit signup is **not implemented and is forbidden**: no CAPTCHA solver, no terms auto-accept, no silent OAuth consent.
 
@@ -37,7 +37,7 @@ Unattended Reddit signup is **not implemented and is forbidden**: no CAPTCHA sol
 
 Vercel is fail-closed. `VERCEL` is set there, so onboarding, assisted signup, and the fixture default **off**. To turn the coordinator on for a named preview or production:
 
-1. Apply migrations `0027`, `0028`, `0029`, and `0030` on the Postgres that `DATABASE_URL` points at.
+1. Apply migrations `0027`–`0030`, `0032`, and `0033` on the Postgres that `DATABASE_URL` points at.
 2. Set **server** env (never `VITE_`):
    - `REDDIT_ONBOARDING_ENABLED=true` — coordinator only
    - `REDDIT_ASSISTED_SIGNUP_ENABLED=true` only with Steel/local/Browserbase on a worker host
