@@ -122,18 +122,9 @@ Live Reddit, live Browserbase, production migrate, and merge/deploy were **not**
 
 The Reddit door hid the chooser on hosted (`REDDIT_ONBOARDING_ENABLED` defaulted off) and buried connect as a ghost control. First screen is now two options:
 
-- **Create accounts** — pick 1–5. Five queues all five and starts making them in order (one live job; remaining slots on `reddit_onboarding_batches`).
+- **Create accounts** — pick 1–5. Five queues all five and starts the first (one live job; remaining slots on `reddit_onboarding_batches`).
 - **Connect my own** — ordinary OAuth.
 
-`0032_reddit_create_batch.sql` is additive. Unattended CAPTCHA/terms still not implemented. Assisted live start still needs a real browser host (Steel / local / Browserbase), not fake-on-Vercel.
-
-## Continuation — Create 1–5 or Connect my own
-
-The Reddit door hid the chooser on hosted (`REDDIT_ONBOARDING_ENABLED` defaulted off) and buried connect as a ghost control. First screen is now two options:
-
-- **Create accounts** — pick 1–5. Five queues all five and starts making them in order (one live job; remaining slots on `reddit_onboarding_batches`).
-- **Connect my own** — ordinary OAuth.
-
-`0032_reddit_create_batch.sql` is additive. Unattended CAPTCHA/terms still not implemented. Assisted live start still needs a real browser host (Steel / local / Browserbase), not fake-on-Vercel.
+`0033_reddit_create_batch.sql` is additive. Unattended CAPTCHA/terms still not implemented. Assisted live start still needs a real browser host (Steel / local / Browserbase), not fake-on-Vercel. Without that host, Create hands the job to **manual**: open Reddit signup, then continue with the username. Progress no longer prints internal `draft · not_started` status. Stuck draft batches unstick on bootstrap or job poll.
 
 

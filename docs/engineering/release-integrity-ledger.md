@@ -58,6 +58,7 @@ Phone-login retry policy in this baseline (auth five attempts, ordinary writes o
 | XR-050 | P2 | PR-08/09 | source-fixed | README and environments.md document draft-hold, emergency stop, two ledgers, and that reads do not rearm. |
 | XR-051 | P0 | prod-boot | source-fixed | Production BindDesk failed closed on `0027_reddit_onboarding.sql` after F09 removed migrate-from-build. Neon now applies pending files on first connect. BindDesk no longer prints `db:migrate`. Production apply NOT RUN from this sandbox (no `DATABASE_URL`). |
 | XR-052 | P0 | reddit-door | source-fixed | Reddit door always shows Create vs Connect. Create is 1–5; 5 queues all and starts the first. Sequential one-live-job under the existing unique index. Live unattended signup still not implemented. |
+| XR-053 | P0 | reddit-create | source-fixed | Production Create queued a draft and never started (fake provider, no hosted browser). Job now hands off to manual: Open Reddit signup + continue-to-connect. Progress no longer dumps `draft · not_started`. Stuck draft batches unstick on bootstrap/poll. |
 
 ## What was not tested
 

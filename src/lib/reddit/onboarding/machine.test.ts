@@ -125,4 +125,25 @@ describe("onboarding machine", () => {
       true,
     );
   });
+
+  it("lets a draft create continue without a hosted browser", () => {
+    const actions = permittedActions(draft({ mode: "assisted", intent: "create" }), {
+      assisted: false,
+      oauth: false,
+      appReady: false,
+    });
+    assert.equal(actions.includes("open_signup"), true);
+    assert.equal(actions.includes("continue_manual"), true);
+    assert.equal(actions.includes("cancel"), true);
+  });
+
+  it("handoff from a draft create waits on the owner", () => {
+    const next = applyEvent(draft({ mode: "assisted", step: "consent" }), { type: "HANDOFF_TO_MANUAL" });
+    assert.equal(next.mode, "manual");
+    assert.equal(next.status, "waiting_external");
+    assert.equal(next.step, "create_account");
+    const actions = permittedActions(next, { assisted: false, oauth: false, appReady: false });
+    assert.equal(actions.includes("open_signup"), true);
+    assert.equal(actions.includes("continue_manual"), true);
+  });
 });

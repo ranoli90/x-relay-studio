@@ -131,6 +131,14 @@ export function OnboardingCoordinator({
     }
     if (next.currentJob) {
       setJob(next.currentJob);
+      try {
+        const ev = await getOnboardingEvents({
+          data: { jobId: next.currentJob.id, afterSequence: 0 },
+        });
+        setEvents(ev.events);
+      } catch {
+        setEvents([]);
+      }
       const nextScreen = screenFor(next.currentJob, next.appConfigured, next.fixtureEnabled);
       setScreen(nextScreen);
       if (nextScreen === "health") {
@@ -324,6 +332,14 @@ export function OnboardingCoordinator({
       setJob(queued.job);
       setBatch(queued.batch);
       if (queued.job.expectedUsername) setUsername(queued.job.expectedUsername);
+      try {
+        const ev = await getOnboardingEvents({
+          data: { jobId: queued.job.id, afterSequence: 0 },
+        });
+        setEvents(ev.events);
+      } catch {
+        setEvents([]);
+      }
       if (queued.batch.status === "completed") {
         setScreen("result");
         return;

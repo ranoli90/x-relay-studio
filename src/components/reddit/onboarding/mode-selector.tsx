@@ -32,7 +32,7 @@ export function ModeSelector({
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Reddit</p>
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">How do you want in?</h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        Two ways. We make new accounts for you, or you connect one you already have.
+        Two ways. Create a new account on Reddit and connect it, or connect one you already have.
       </p>
 
       <div className="mt-8 grid gap-3">
@@ -44,7 +44,8 @@ export function ModeSelector({
             <div className="min-w-0 flex-1">
               <h2 className="text-xl font-medium tracking-tight">Create accounts</h2>
               <p className="mt-1 text-sm leading-relaxed text-muted">
-                Pick 1–{createMax}. {createMax} queues all of them and starts making them in order.
+                Pick 1–{createMax}. We start the first now. You create it on Reddit unless a hosted
+                browser is connected.
               </p>
             </div>
           </div>

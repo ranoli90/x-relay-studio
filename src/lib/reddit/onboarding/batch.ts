@@ -87,9 +87,13 @@ export async function getOpenBatch(sql: SqlLike, userId: string): Promise<BatchR
   return rows[0] ?? null;
 }
 
-function waitCopy(index: number, size: number): string {
-  if (size <= 1) return "Making this Reddit account.";
-  return `Queued ${size} accounts. Making ${index} of ${size}.`;
+export function createWaitCopy(index: number, size: number, hosted: boolean): string {
+  if (hosted) {
+    if (size <= 1) return "Making this Reddit account.";
+    return `Queued ${size} accounts. Making ${index} of ${size}.`;
+  }
+  if (size <= 1) return "Create this Reddit account.";
+  return `Queued ${size} accounts. Create ${index} of ${size} on Reddit.`;
 }
 
 async function insertCreateJob(
@@ -117,7 +121,7 @@ async function insertCreateJob(
       batchIndex: opts.index,
       count: opts.size,
     },
-    waitReason: waitCopy(opts.index, opts.size),
+    waitReason: createWaitCopy(opts.index, opts.size, hostedBrowserReady()),
     batchId: opts.batchId,
     batchSize: opts.size,
     batchIndex: opts.index,

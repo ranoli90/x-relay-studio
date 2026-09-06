@@ -211,6 +211,7 @@ export function permittedActions(job: MachineJob, caps: { assisted: boolean; oau
     actions.push("save_details");
     if (job.mode === "assisted" && caps.assisted) actions.push("start_assisted");
     actions.push("start_manual", "open_signup");
+    if (job.intent === "create") actions.push("continue_manual");
   }
   if (job.status === "waiting_external" || job.status === "needs_user") {
     if (job.step === "create_account" || job.step === "verify_account" || job.step === "consent") {

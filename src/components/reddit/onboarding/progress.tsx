@@ -1,5 +1,7 @@
 import { Button } from "@/components/ui/button";
+import { CopyRow } from "@/components/reddit/copy-row";
 import type { OnboardingBatchPublic, OnboardingEventPublic, OnboardingJobPublic } from "@/lib/reddit/onboarding/types";
+import { progressBody, progressTitle } from "@/lib/reddit/onboarding/progress-copy";
 
 const STAGES = [
   { id: "account", label: "Account" },
@@ -42,6 +44,9 @@ export function OnboardingProgress({
 }) {
   const stage = stageOf(job);
   const last = events.at(-1);
+  const showContinue =
+    job.permittedActions.includes("continue_manual") ||
+    (job.intent === "create" && job.connectionState === "not_started" && job.status !== "running");
   return (
     <section className="mx-auto w-full max-w-xl px-5 py-10 sm:py-16">
       <ol className="flex flex-wrap gap-2 font-mono text-[11px] uppercase tracking-widest text-muted">
@@ -57,16 +62,19 @@ export function OnboardingProgress({
           Account {batch.currentIndex} of {batch.size}
         </p>
       ) : null}
-      <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">
-        {job.waitReason || statusTitle(job)}
-      </h1>
+      <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">{progressTitle(job)}</h1>
       <p className="mt-3 text-sm leading-relaxed text-muted" aria-live="polite">
-        {last ? eventCopy(last.eventType) : "Waiting for the next step."} Automation is{" "}
-        {job.status === "running" ? "in control" : "paused"}.
+        {progressBody(job, last?.eventType)}
       </p>
-      <p className="mt-2 font-mono text-xs text-subtle">
-        Status {job.status} · {job.creationOutcome} creation · {job.connectionState} connection
-      </p>
+      {job.expectedUsername && job.intent === "create" && job.connectionState === "not_started" ? (
+        <div className="mt-5">
+          <CopyRow
+            label="Suggested username"
+            value={job.expectedUsername}
+            hint="Use this on Reddit, or pick another and tell us after."
+          />
+        </div>
+      ) : null}
 
       <div className="mt-8 flex flex-col gap-3">
         {job.permittedActions.includes("open_signup") ? (
@@ -74,7 +82,7 @@ export function OnboardingProgress({
             {fixture ? "Open the isolated test page" : "Open Reddit signup"}
           </Button>
         ) : null}
-        {job.permittedActions.includes("continue_manual") ? (
+        {showContinue ? (
           <Button type="button" variant="secondary" onClick={onContinue} disabled={busy}>
             I created it — continue to connect
           </Button>
@@ -107,30 +115,4 @@ export function OnboardingProgress({
       {job.cleanupSummary ? <p className="mt-2 text-sm text-muted">{job.cleanupSummary}</p> : null}
     </section>
   );
-}
-
-function statusTitle(job: OnboardingJobPublic) {
-  if (job.status === "needs_user") return "Your turn";
-  if (job.status === "reconciling") return "Checking the result";
-  if (job.status === "waiting_external") return "Waiting on the next Reddit step";
-  if (job.status === "queued" || job.status === "running") return "Working through supported steps";
-  if (job.status === "cancelled") return "Setup stopped";
-  return "Reddit setup";
-}
-
-function eventCopy(type: string) {
-  switch (type) {
-    case "started":
-      return "Opened signup.";
-    case "session_allocation_confirmed":
-      return "Hosted browser is ready.";
-    case "user_action_required":
-      return "Waiting for your verification.";
-    case "result_unknown":
-      return "Checking the result. We will not submit again.";
-    case "oauth_started":
-      return "Connect with Reddit to verify the account.";
-    default:
-      return "Setup is still in progress.";
-  }
 }
