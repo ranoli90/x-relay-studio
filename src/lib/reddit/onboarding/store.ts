@@ -182,6 +182,7 @@ export function toPublicJob(
     batchId: row.batch_id ?? null,
     batchSize: Number(row.batch_size ?? 1),
     batchIndex: Number(row.batch_index ?? 1),
+    hostedSession: Boolean(row.provider_session_id),
   };
 }
 
@@ -549,7 +550,7 @@ export async function transitionJob(
       next.step,
       next.connectionState,
       next.creationOutcome,
-      next.controlOwner,
+      opts.patch?.control_owner ?? next.controlOwner,
       next.version,
       finished,
       next.cancelRequested,

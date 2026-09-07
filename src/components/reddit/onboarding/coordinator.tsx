@@ -155,7 +155,8 @@ export function OnboardingCoordinator({
   }, [loadBoot]);
 
   useEffect(() => {
-    if (screen !== "control" || !job) return;
+    const wantStream = screen === "control" || (screen === "progress" && Boolean(job?.hostedSession));
+    if (!wantStream || !job) return;
     if (boot?.fixtureEnabled) {
       setControlView({
         available: true,
@@ -206,7 +207,7 @@ export function OnboardingCoordinator({
     return () => {
       cancelled = true;
     };
-  }, [screen, job?.id, boot?.fixtureEnabled]);
+  }, [screen, job?.id, job?.hostedSession, boot?.fixtureEnabled]);
 
   const refreshJob = useCallback(async (id: string) => {
     const next = await getOnboardingJob({ data: { jobId: id } });
@@ -595,6 +596,8 @@ export function OnboardingCoordinator({
         events={events}
         busy={busy}
         fixture={Boolean(boot.fixtureEnabled)}
+        streamUrl={controlView?.url ?? null}
+        streamReason={controlView?.reason ?? null}
         onTakeControl={() => {
           void requestOnboardingTakeover({
             data: { jobId: job.id, version: job.version, correlationId: rememberKey(opKeys.current, `takeover:${job.id}`).correlationId },

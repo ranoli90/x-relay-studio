@@ -107,6 +107,37 @@ describe("steel adapter", () => {
     assert.throws(() => mapSteelStatus("mystery"), (err: unknown) => codeOf(err) === "PROVIDER_UNKNOWN_STATUS");
   });
 
+  it("sends persistProfile and timeout in milliseconds", async () => {
+    process.env.STEEL_API_KEY = "steel-key";
+    delete process.env.STEEL_API_URL;
+    stubFetch((call) => {
+      if (call.method === "POST") {
+        const body = JSON.parse(call.body || "{}") as {
+          timeout?: number;
+          persistProfile?: boolean;
+          solveCaptcha?: boolean;
+          stealth?: boolean;
+          useProxy?: boolean;
+        };
+        assert.equal(body.persistProfile, true);
+        assert.equal(body.solveCaptcha, false);
+        assert.equal(body.stealth, false);
+        assert.equal(body.useProxy, true);
+        assert.ok((body.timeout ?? 0) >= 60_000);
+        return jsonResponse(200, {
+          id: "ses-p",
+          status: "live",
+          profileId: "prf-1",
+          debugUrl: "https://api.steel.dev/v1/sessions/ses-p/debug",
+        });
+      }
+      return jsonResponse(404, {});
+    });
+    const session = await new SteelProvider().createSession({ ...sessionInput(), persist: true });
+    assert.equal(session.profileId, "prf-1");
+    assert.match(String(session.debugUrl), /debug/);
+  });
+
   it("does not send captcha solving and fails if the provider echoes it on", async () => {
     process.env.STEEL_API_URL = "http://127.0.0.1:3000";
     stubFetch((call) => {
@@ -134,7 +165,8 @@ describe("steel adapter", () => {
       }),
     );
     const view = await new SteelProvider().issueControlView("ses-v", 3);
-    assert.match(view.url, /\/debug\?interactive=true$/);
+    assert.match(view.url, /interactive=true/);
+    assert.match(view.url, /showControls=true/);
     assert.equal(view.writable, true);
     assert.equal(view.generation, 3);
   });

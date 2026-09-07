@@ -184,7 +184,7 @@ describe("reddit create batch", () => {
   it("uses honest wait copy when no hosted browser is filling the form", () => {
     assert.equal(createWaitCopy(1, 1, false), "Create this Reddit account.");
     assert.equal(createWaitCopy(2, 5, false), "Queued 5 accounts. Create 2 of 5 on Reddit.");
-    assert.equal(createWaitCopy(1, 1, true), "Making this Reddit account.");
+    assert.equal(createWaitCopy(1, 1, true), "Create this Reddit account.");
   });
 
   it("hands a queued draft to manual so continue-to-connect is allowed", async () => {

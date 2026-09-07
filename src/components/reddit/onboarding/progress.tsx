@@ -27,6 +27,8 @@ export function OnboardingProgress({
   onConfirmSubmit,
   busy,
   fixture,
+  streamUrl,
+  streamReason,
 }: {
   job: OnboardingJobPublic;
   batch?: OnboardingBatchPublic | null;
@@ -40,6 +42,8 @@ export function OnboardingProgress({
   onConfirmSubmit?: () => void;
   busy: boolean;
   fixture?: boolean;
+  streamUrl?: string | null;
+  streamReason?: string | null;
 }) {
   const stage = stageOf(job);
   const last = events.at(-1);
@@ -75,10 +79,35 @@ export function OnboardingProgress({
         </div>
       ) : null}
 
+      {streamUrl ? (
+        <div className="mt-6 overflow-hidden rounded-xl border border-border bg-surface">
+          <iframe
+            title="Fresh Reddit browser"
+            src={streamUrl}
+            className="block h-[32rem] w-full bg-bg sm:h-[36rem]"
+            allow="clipboard-write; fullscreen; autoplay"
+          />
+          <p className="border-t border-border px-4 py-3 text-xs leading-relaxed text-muted">
+            Create the account in this window. A fresh residential session is open so Reddit is
+            less likely to treat it as spam. When you finish, continue here and we keep this
+            browser profile.
+          </p>
+        </div>
+      ) : job.hostedSession ? (
+        <p className="mt-6 text-sm leading-relaxed text-muted">
+          {streamReason || "Opening the fresh browser… keep this screen open."}
+        </p>
+      ) : null}
+
       <div className="mt-8 flex flex-col gap-3">
-        {job.permittedActions.includes("open_signup") ? (
+        {job.permittedActions.includes("open_signup") && !streamUrl ? (
           <Button type="button" onClick={onOpenSignup} disabled={busy}>
             {fixture ? "Open the isolated test page" : "Open Reddit signup"}
+          </Button>
+        ) : null}
+        {streamUrl && job.permittedActions.includes("open_signup") ? (
+          <Button type="button" variant="ghost" onClick={onOpenSignup} disabled={busy}>
+            Open signup in a new tab
           </Button>
         ) : null}
         {showContinue ? (

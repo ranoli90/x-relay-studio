@@ -23,6 +23,7 @@ import {
   onboardingFixtureEnabled,
   assistedApprovalStatus,
   redditDraftingEnabled,
+  steelConfigured,
 } from "./config.ts";
 import { ASSISTANCE_CONSENT_VERSION, ACCOUNT_CAP, CREATE_BATCH_MAX, OnboardingError, REVIEWED_SIGNUP_URL } from "./types.ts";
 import { drainOwnedPreview, selectProvider } from "./worker-core.ts";
@@ -65,6 +66,9 @@ import {
   remainingCreateSlots,
   toPublicBatch,
 } from "./batch.ts";
+import { persistStreamedProfileAfterCreate, startStreamedCreateJob, streamedCreateReady } from "./stream-create.ts";
+import { bindProfileToAccount } from "./retention.ts";
+import { steelProvider } from "./providers/steel.ts";
 
 async function sql(): Promise<SqlLike> {
   return getSql();
@@ -160,6 +164,17 @@ async function ensureQueuedCreateJobLive(
 ) {
   const job = await requireJob(db, opts.userId, opts.jobId);
   if (job.status !== "draft" || !job.batch_id) return job;
+  await hydrateSteelFromStore(db, opts.userId).catch(() => false);
+  if (streamedCreateReady()) {
+    try {
+      return await startStreamedCreateJob(db, { userId: opts.userId, jobId: opts.jobId });
+    } catch (err) {
+      if (err instanceof OnboardingError && err.code === "PROVIDER_NOT_CONFIGURED") {
+        return startQueuedCreateManualJob(db, { userId: opts.userId, jobId: opts.jobId });
+      }
+      throw err;
+    }
+  }
   if (hostedBrowserReady()) {
     return startQueuedCreateJob(db, opts);
   }
@@ -434,6 +449,7 @@ export async function handleContinueManualOnboarding({ context, data }: { contex
         },
         details: { ownerCreated: data.ownerCreated },
       });
+      await persistStreamedProfileAfterCreate(db, { userId: context.userId, job }).catch(() => undefined);
       const app = await getApp(context.userId);
       return toPublicJob(job, { appConfigured: Boolean(app) });
     } catch (err) {
@@ -496,13 +512,16 @@ export async function handleGetOnboardingControlView({ context, data }: { contex
         fixture: true,
       };
     }
-    if (job.control_owner !== "user") {
+    await hydrateSteelFromStore(db, context.userId).catch(() => false);
+    const streamed = Boolean(job.provider_session_id) && steelConfigured();
+    if (job.control_owner !== "user" && !streamed) {
       throw new Error("Take control first. A live view is not issued while automation is running.");
     }
-    const provider = redditBrowserProvider();
+    const provider = steelConfigured() ? "steel" : redditBrowserProvider();
     if (job.provider_session_id && (provider === "steel" || provider === "browserbase" || provider === "local")) {
       try {
-        const view = await selectProvider().issueControlView(
+        const issuer = provider === "steel" ? steelProvider : selectProvider();
+        const view = await issuer.issueControlView(
           job.provider_session_id,
           Number(job.session_generation || 1),
         );
@@ -651,6 +670,19 @@ export async function handleConfirmConnectedIdentity({ context, data }: { contex
       }
       if (account.name.toLowerCase() !== (job.verified_username || "").toLowerCase()) {
         throw new Error("The connected Reddit account does not match this setup.");
+      }
+      if (job.browser_profile_id && job.account_id) {
+        await bindProfileToAccount(db, {
+          userId: context.userId,
+          profileId: job.browser_profile_id,
+          accountId: job.account_id,
+          redditId: job.verified_reddit_id,
+          username: job.verified_username || account.name,
+        }).catch(() => undefined);
+        if (job.provider_session_id) {
+          await steelProvider.requestRelease(job.provider_session_id).catch(() => undefined);
+        }
+        await persistStreamedProfileAfterCreate(db, { userId: context.userId, job }).catch(() => undefined);
       }
       const next = await transitionJob(db, {
         userId: context.userId,
