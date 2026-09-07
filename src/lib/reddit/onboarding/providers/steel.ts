@@ -21,6 +21,7 @@ type SteelSessionPayload = {
   debugUrl?: unknown;
   sessionViewerUrl?: unknown;
   contextId?: unknown;
+  profileId?: unknown;
   timeout?: unknown;
   duration?: unknown;
   durationSeconds?: unknown;
@@ -124,7 +125,7 @@ export function mapSteelStatus(raw: unknown): BrowserSession["status"] {
 function privacyEchoedOn(json: SteelSessionPayload): boolean {
   const rec = asRecord(json);
   if (!rec) return false;
-  const keys = ["solveCaptcha", "solveCaptchas", "captchaSolving", "stealth", "advancedStealth", "recordSession", "logSession"];
+  const keys = ["solveCaptcha", "solveCaptchas", "captchaSolving", "recordSession", "logSession"];
   return keys.some((key) => rec[key] === true);
 }
 
@@ -206,14 +207,21 @@ function toSession(
     (typeof json.websocketUrl === "string" && json.websocketUrl) ||
     (typeof json.connectUrl === "string" && json.connectUrl) ||
     "";
+  const profileId = typeof json.profileId === "string" && json.profileId ? json.profileId : null;
+  const debugUrl =
+    (typeof json.debugUrl === "string" && json.debugUrl) ||
+    (typeof json.sessionViewerUrl === "string" && json.sessionViewerUrl) ||
+    null;
   return {
     sessionId: json.id,
     contextId: typeof json.contextId === "string" ? json.contextId : fallback.contextId,
     connectUrl: connect,
     expiresAt: new Date(Date.now() + fallback.timeoutSeconds * 1000).toISOString(),
     projectId: "steel",
-    region: "self-hosted",
+    region: steelApiKey() ? "cloud" : "self-hosted",
     status,
+    profileId,
+    debugUrl,
   };
 }
 
@@ -227,16 +235,20 @@ export class SteelProvider implements BrowserProvider {
 
   async createSession(input: CreateSessionInput): Promise<BrowserSession> {
     assertPolicySupported(input.policy);
-    const body = {
-      timeout: input.policy.timeoutSeconds,
+    const timeoutMs = Math.max(60_000, input.policy.timeoutSeconds * 1000);
+    const cloud = Boolean(steelApiKey()) && !process.env.STEEL_API_URL?.trim();
+    const body: Record<string, unknown> = {
+      timeout: timeoutMs,
       solveCaptcha: false,
       stealth: false,
+      persistProfile: Boolean(input.persist),
       userMetadata: {
         jobId: input.jobId,
         allocationIntentId: input.allocationIntentId,
         generation: String(input.generation),
       },
     };
+    if (cloud) body.useProxy = true;
     const { status, json } = await steel<SteelSessionPayload>("/v1/sessions", {
       method: "POST",
       sideEffecting: true,
@@ -252,7 +264,7 @@ export class SteelProvider implements BrowserProvider {
       throw new BrowserProviderError("PROVIDER_UNSUPPORTED_PRIVACY", "Steel echoed disallowed privacy settings.");
     }
     return toSession(json, {
-      contextId: input.contextId ?? null,
+      contextId: input.contextId ?? (typeof json.profileId === "string" ? json.profileId : null),
       timeoutSeconds: input.policy.timeoutSeconds,
     });
   }
@@ -321,13 +333,36 @@ export class SteelProvider implements BrowserProvider {
     if (!url) {
       throw new BrowserProviderError("CONTROL_NOT_READY", "Steel live view is not available.");
     }
-    const interactive = url.includes("?") ? `${url}&interactive=true` : `${url}?interactive=true`;
+    const joiner = url.includes("?") ? "&" : "?";
+    const interactive = `${url}${joiner}interactive=true&showControls=true`;
     return {
       url: interactive,
       writable: true,
       generation,
       expiresAt: new Date(Date.now() + 180_000).toISOString(),
     };
+  }
+
+  /**
+   * Best-effort: load a URL in an existing session without Playwright.
+   * Steel Cloud/self-host differ; a miss just leaves the live view on a blank tab.
+   */
+  async openUrl(sessionId: string, url: string): Promise<boolean> {
+    const encoded = encodeURIComponent(sessionId);
+    const attempts: Array<{ path: string; body: Record<string, unknown> }> = [
+      { path: `/v1/sessions/${encoded}/scrape`, body: { url } },
+      { path: "/v1/sessions/scrape", body: { url, sessionId } },
+    ];
+    for (const attempt of attempts) {
+      const result = await steel(attempt.path, {
+        method: "POST",
+        sideEffecting: true,
+        allowEmpty: true,
+        body: JSON.stringify(attempt.body),
+      }).catch(() => null);
+      if (result && result.status >= 200 && result.status < 300) return true;
+    }
+    return false;
   }
 
   async revokeControlView(_sessionId: string, _generation: number): Promise<RevokeControlResult> {

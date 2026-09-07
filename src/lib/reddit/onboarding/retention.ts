@@ -204,6 +204,32 @@ export async function getProfileForAccount(
   return rows[0] ? toPublicProfile(rows[0]) : null;
 }
 
+export async function bindProfileToAccount(
+  sql: SqlLike,
+  opts: {
+    userId: string;
+    profileId: string;
+    accountId: string;
+    redditId?: string | null;
+    username?: string | null;
+  },
+): Promise<ProfilePublic> {
+  const rows = await sql.query<ProfileRow>(
+    `update reddit_browser_profiles
+        set account_id = $3,
+            reddit_id = coalesce($4, reddit_id),
+            last_verified_reddit_id = coalesce($4, last_verified_reddit_id),
+            last_verified_username = coalesce($5, last_verified_username),
+            last_identity_verified_at = now(),
+            updated_at = now()
+      where id = $1 and user_id = $2 and deleted_at is null
+      returning *`,
+    [opts.profileId, opts.userId, opts.accountId, opts.redditId ?? null, opts.username ?? null],
+  );
+  if (!rows[0]) throw new OnboardingError("PROFILE_NOT_FOUND", "No browser profile was found.");
+  return toPublicProfile(rows[0]);
+}
+
 export async function requestRetention(
   sql: SqlLike,
   opts: { userId: string; profileId: string; consentReceiptId?: string | null },

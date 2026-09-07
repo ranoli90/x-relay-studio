@@ -57,4 +57,16 @@ describe("reddit progress copy", () => {
     assert.doesNotMatch(progressTitle(gated), /captcha|tick|agreement/i);
     assert.doesNotMatch(progressBody(gated), /captcha|tick the/i);
   });
+
+  it("tells the owner the fresh browser is the place to create", () => {
+    const streamed = job({
+      status: "waiting_external",
+      mode: "manual",
+      step: "create_account",
+      waitReason: "Create this Reddit account.",
+      hostedSession: true,
+    });
+    assert.equal(progressTitle(streamed), "Create this Reddit account.");
+    assert.match(progressBody(streamed), /fresh browser/i);
+  });
 });

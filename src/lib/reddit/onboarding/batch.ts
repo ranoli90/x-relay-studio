@@ -17,6 +17,7 @@ import {
   browserProviderConfigured,
   onboardingFixtureEnabled,
   redditBrowserProvider,
+  steelConfigured,
 } from "./config.ts";
 
 export type BatchRow = {
@@ -49,8 +50,12 @@ export function toPublicBatch(row: BatchRow): OnboardingBatchPublic {
   };
 }
 
-/** Real hosted browser is ready to run a create. Fake is only for the isolated fixture. */
+/**
+ * A real hosted browser can be opened for Create.
+ * Steel Cloud/self-host counts even when REDDIT_BROWSER_PROVIDER is still the default fake.
+ */
 export function hostedBrowserReady(): boolean {
+  if (steelConfigured()) return true;
   const provider = redditBrowserProvider();
   if (provider === "fake") return onboardingFixtureEnabled();
   return browserProviderConfigured(provider);
@@ -89,8 +94,8 @@ export async function getOpenBatch(sql: SqlLike, userId: string): Promise<BatchR
 
 export function createWaitCopy(index: number, size: number, hosted: boolean): string {
   if (hosted) {
-    if (size <= 1) return "Making this Reddit account.";
-    return `Queued ${size} accounts. Making ${index} of ${size}.`;
+    if (size <= 1) return "Create this Reddit account.";
+    return `Queued ${size} accounts. Create ${index} of ${size} in a fresh browser.`;
   }
   if (size <= 1) return "Create this Reddit account.";
   return `Queued ${size} accounts. Create ${index} of ${size} on Reddit.`;

@@ -38,6 +38,8 @@ export type BrowserSession = {
   projectId: string;
   region: string;
   status: "pending" | "running" | "releasing" | "ended";
+  profileId?: string | null;
+  debugUrl?: string | null;
 };
 
 export type ControlView = {

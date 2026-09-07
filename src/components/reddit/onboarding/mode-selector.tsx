@@ -37,8 +37,9 @@ export function ModeSelector({
       <p className="font-mono text-xs tracking-[0.18em] text-muted uppercase">Reddit</p>
       <h1 className="mt-4 text-3xl font-medium tracking-tight sm:text-4xl">How do you want in?</h1>
       <p className="mt-4 text-sm leading-relaxed text-muted">
-        Connect an account you already have — that is the live path. Or queue 1–{createMax} new
-        ones. A hosted browser only helps if Steel is connected below.
+        Connect an account you already have — that is the live path. Or pick 1–{createMax} new
+        ones. When Steel is connected we open a fresh browser here and stream it so you can
+        finish signup fast. Each account gets its own profile.
       </p>
 
       <div className="mt-8 grid gap-3">
@@ -51,14 +52,14 @@ export function ModeSelector({
               <h2 className="text-xl font-medium tracking-tight">Create accounts</h2>
               <p className="mt-1 text-sm leading-relaxed text-muted">
                 {hostedReady
-                  ? `Pick 1–${createMax}. We queue them and open a hosted browser for the first one. Create each account on Reddit, then continue here.`
-                  : `Pick 1–${createMax}. We queue them and start the first now. Create each account on Reddit yourself, then come back and continue. Connect Steel below if you want a hosted browser.`}
+                  ? `Pick 1–${createMax}. We open a fresh browser for the first one and stream it here. Create the account in that window, then continue. Next accounts get a new browser.`
+                  : `Pick 1–${createMax}. Connect Steel below first if you want a fresh browser streamed here. Otherwise create each account on Reddit yourself, then continue.`}
               </p>
             </div>
           </div>
 
           <p className="mt-3 font-mono text-[11px] tracking-widest text-subtle uppercase">
-            {hostedReady ? "Hosted browser ready" : "No hosted browser yet · manual on Reddit"}
+            {hostedReady ? "Fresh browser will stream here" : "No hosted browser yet · manual on Reddit"}
           </p>
 
           <div
@@ -102,10 +103,10 @@ export function ModeSelector({
             onClick={() => onCreate(pick)}
           >
             {busy
-              ? "Queuing…"
+              ? "Opening a fresh browser…"
               : pick <= 1
                 ? "Make 1 account"
-                : `Queue ${pick} and start the first`}
+                : `Start ${pick} — first browser now`}
           </Button>
           {!canCreate ? (
             <p className="mt-3 text-sm text-warn">

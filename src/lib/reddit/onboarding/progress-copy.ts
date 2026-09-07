@@ -3,7 +3,7 @@ import type { OnboardingJobPublic } from "./types.ts";
 export type ProgressCopyJob = Pick<
   OnboardingJobPublic,
   "status" | "mode" | "intent" | "step" | "waitReason" | "expectedUsername"
->;
+> & { hostedSession?: boolean };
 
 function isManualCreate(job: ProgressCopyJob): boolean {
   if (job.intent !== "create") return false;
@@ -51,6 +51,9 @@ export function progressEventCopy(type: string): string {
 }
 
 export function progressBody(job: ProgressCopyJob, lastEventType?: string | null): string {
+  if (job.hostedSession && job.intent === "create" && job.status !== "running") {
+    return "A fresh browser is open below. Create the account there, then continue with the username you used. We will not guess it.";
+  }
   if (isManualCreate(job) && job.status !== "running") {
     return "Open Reddit and create the account. Come back and continue with the username you used. We will not guess it.";
   }
