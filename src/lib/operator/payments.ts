@@ -42,10 +42,21 @@ export function publicPaymentView(input: {
       approved: false,
     };
   }
+  const instC = parseCurrency(instruction.currency);
+  const destC = destination ? parseCurrency(destination.currency) : null;
+  if (!destination || !instC || !destC || instC !== destC) {
+    return {
+      copy: instruction.publicCopy,
+      provider: destination?.provider ?? null,
+      destinationRef: null,
+      currency: instruction.currency,
+      approved: false,
+    };
+  }
   return {
     copy: instruction.publicCopy,
-    provider: destination?.provider ?? null,
-    destinationRef: destination?.destinationRef ?? null,
+    provider: destination.provider,
+    destinationRef: destination.destinationRef,
     currency: instruction.currency,
     approved: true,
   };

@@ -20,6 +20,12 @@ import { healthIsReady, type GenerationHealth } from "@/lib/conversation/generat
 import { OPERATOR_ERASE_TABLES } from "./erase.ts";
 import { quoteFromOffer, quoteView, type QuoteView } from "./quotes.ts";
 
+function isUniqueViolation(err: unknown): boolean {
+  const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
+  const msg = err instanceof Error ? err.message : "";
+  return code === "23505" || /unique|duplicate/i.test(msg);
+}
+
 function colBool(row: Record<string, unknown>, key: string): boolean {
   const v = row[key];
   return v === true || v === "t" || v === "true" || v === 1;
@@ -181,16 +187,24 @@ export async function loadPublishedProjection(
   };
 }
 
-export async function catalogForPlanning(userId: string, _fallback: CatalogRow[] = []): Promise<CatalogRow[]> {
+export async function catalogForPlanning(
+  userId: string,
+  _fallback: CatalogRow[] = [],
+  published?: PublishedProjection | null,
+): Promise<CatalogRow[]> {
   void _fallback;
-  const published = await loadPublishedProjection(userId);
+  const proj = published === undefined ? await loadPublishedProjection(userId) : published;
   const sql = await getSql();
-  const dest = await sql.query<{ provider: string }>(
-    `select provider from payment_destinations where user_id = $1 order by created_at desc limit 1`,
-    [userId],
-  );
-  const rail = dest[0]?.provider ?? published?.destinationHint ?? "";
-  return planningCatalog(published, rail).map((r) => ({
+  const dest = proj
+    ? await sql.query<{ provider: string }>(
+        `select provider from payment_destinations
+          where user_id = $1 and binding_id = $2
+          order by created_at desc limit 1`,
+        [userId, proj.bindingId],
+      )
+    : [];
+  const rail = dest[0]?.provider ?? proj?.destinationHint ?? "";
+  return planningCatalog(proj, rail).map((r) => ({
     id: r.id,
     sku: r.sku,
     title: r.title,
@@ -253,6 +267,30 @@ export async function loadComposerDrafts(userId: string): Promise<Record<string,
   return out;
 }
 
+export async function loadConversationControls(
+  userId: string,
+  conversationId: string,
+): Promise<{ takeover: boolean; optOut: boolean }> {
+  const sql = await getSql();
+  const rows = await sql.query<Record<string, unknown>>(
+    `select coalesce(t.takeover, false) as takeover, coalesce(t.opt_out, false) as opt_out
+       from agent_threads t
+      where t.user_id = $1
+        and (
+          t.id = $2
+          or t.telegram_account_id = $2
+          or t.fan_id in (select id from agent_fans where user_id = $1 and tg_peer_id = $2)
+        )
+      limit 1`,
+    [userId, conversationId],
+  );
+  const row = rows[0];
+  return {
+    takeover: row ? colBool(row, "takeover") : false,
+    optOut: row ? colBool(row, "opt_out") : false,
+  };
+}
+
 export async function acknowledgeVisibleChat(
   userId: string,
   conversationId: string,
@@ -263,7 +301,7 @@ export async function acknowledgeVisibleChat(
     `select unread from telegram_chats where user_id = $1 and id = $2`,
     [userId, conversationId],
   );
-  const unread = rows[0]?.unread ?? 0;
+  const unread = Number(rows[0]?.unread ?? 0);
   if (!shouldMarkRead(ack)) return unread;
   await sql.query(
     `insert into conversation_read_acks (user_id, conversation_id, last_visible_at)
@@ -272,10 +310,19 @@ export async function acknowledgeVisibleChat(
      do update set last_visible_at = now()`,
     [userId, conversationId],
   );
-  await sql.query(`update telegram_chats set unread = 0 where user_id = $1 and id = $2`, [
-    userId,
-    conversationId,
-  ]);
+  const cleared = await sql.query<{ unread: number }>(
+    `update telegram_chats set unread = 0
+      where user_id = $1 and id = $2 and unread = $3
+      returning unread`,
+    [userId, conversationId, unread],
+  );
+  if (!cleared[0]) {
+    const again = await sql.query<{ unread: number }>(
+      `select unread from telegram_chats where user_id = $1 and id = $2`,
+      [userId, conversationId],
+    );
+    return again[0]?.unread ?? unread;
+  }
   return 0;
 }
 
@@ -505,9 +552,16 @@ export async function loadOperatorDesk(userId: string): Promise<{
     currency: string;
     credential_id: string | null;
   }>(
-    `select id, provider, destination_ref, currency, credential_id from payment_destinations
-      where user_id = $1 order by created_at desc limit 1`,
-    [userId],
+    projection
+      ? `select id, provider, destination_ref, currency, credential_id from payment_destinations
+          where user_id = $1 and binding_id = $2
+            and ($3::text is null or currency = $3)
+          order by created_at desc limit 1`
+      : `select id, provider, destination_ref, currency, credential_id from payment_destinations
+          where user_id = $1 order by created_at desc limit 1`,
+    projection
+      ? [userId, projection.bindingId, ins[0]?.currency ?? projection.offers[0]?.amount.currency ?? null]
+      : [userId],
   );
   const assets = await sql.query<{
     id: string;
@@ -646,6 +700,10 @@ export async function publishBusinessFromBrief(
   if (!gate.ok) throw new Error(gate.reason);
 
   const published = await withTransaction(async (sql: Sql) => {
+    await sql.query(`select id from operator_bindings where id = $1 and user_id = $2 for update`, [
+      bind.id,
+      userId,
+    ]);
     const last = await sql.query<{ revision: number }>(
       `select revision from business_revisions where binding_id = $1 order by revision desc limit 1`,
       [bind.id],
@@ -726,10 +784,18 @@ export async function recordPaymentEvidence(
   const offer = await sql.query<{
     amount_minor: number;
     currency: string;
-  }>(`select amount_minor, currency from business_offers where id = $1 and user_id = $2`, [input.offerId, userId]);
+    binding_id: string | null;
+  }>(`select amount_minor, currency, binding_id from business_offers where id = $1 and user_id = $2`, [
+    input.offerId,
+    userId,
+  ]);
   const dest = await sql.query<{ id: string }>(
-    `select id from payment_destinations where user_id = $1 order by created_at desc limit 1`,
-    [userId],
+    `select id from payment_destinations
+      where user_id = $1
+        and ($2::text is null or binding_id = $2)
+        and ($3::text is null or currency = $3)
+      order by created_at desc limit 1`,
+    [userId, offer[0]?.binding_id ?? null, offer[0]?.currency ?? null],
   );
   if (!offer[0] || !dest[0]) return { accepted: false, reason: "missing", provenance: "evidence_candidate" };
   const decision = evaluatePaymentEvidence({
@@ -814,7 +880,7 @@ export async function recordDispatchAttempt(input: {
 
 export async function finishDispatchAttempt(
   userId: string,
-  conversationId: string,
+  attemptId: string,
   status: string,
   reason?: string | null,
   transportMessageId?: string | number | null,
@@ -832,13 +898,8 @@ export async function finishDispatchAttempt(
               else reconciled_as
             end,
             updated_at = now()
-      where id = (
-        select id from send_attempts
-         where user_id = $1 and conversation_id = $2
-         order by created_at desc
-         limit 1
-      )`,
-    [userId, conversationId, status, reason ?? null, transportMessageId == null ? null : String(transportMessageId)],
+      where id = $2 and user_id = $1`,
+    [userId, attemptId, status, reason ?? null, transportMessageId == null ? null : String(transportMessageId)],
   );
 }
 
@@ -914,24 +975,38 @@ export async function recordScopedFact(input: {
   confidence: number;
 }): Promise<void> {
   const sql = await getSql();
-  await sql.query(
-    `insert into memory_facts
-       (id, user_id, customer_id, account_id, subject, predicate, value, source_event_id, speaker, assertion, confidence, status)
-     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active')`,
-    [
-      newOperatorId("fact"),
-      input.userId,
-      input.customerId,
-      input.accountId ?? null,
-      input.subject.slice(0, 80),
-      input.predicate.slice(0, 80),
-      input.value.slice(0, 400),
-      input.sourceEventId ?? null,
-      input.speaker,
-      input.assertion,
-      Math.max(0, Math.min(1, input.confidence)),
-    ],
+  const predicate = input.predicate.slice(0, 80);
+  const value = input.value.slice(0, 400);
+  const existing = await sql.query<{ id: string }>(
+    `select id from memory_facts
+      where user_id = $1 and customer_id = $2 and predicate = $3 and value = $4 and status = 'active'
+      limit 1`,
+    [input.userId, input.customerId, predicate, value],
   );
+  if (existing[0]) return;
+  try {
+    await sql.query(
+      `insert into memory_facts
+         (id, user_id, customer_id, account_id, subject, predicate, value, source_event_id, speaker, assertion, confidence, status)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active')`,
+      [
+        newOperatorId("fact"),
+        input.userId,
+        input.customerId,
+        input.accountId ?? null,
+        input.subject.slice(0, 80),
+        predicate,
+        value,
+        input.sourceEventId ?? null,
+        input.speaker,
+        input.assertion,
+        Math.max(0, Math.min(1, input.confidence)),
+      ],
+    );
+  } catch (err) {
+    if (isUniqueViolation(err)) return;
+    throw err;
+  }
 }
 
 export async function forgetScopedFact(userId: string, factId: string): Promise<boolean> {

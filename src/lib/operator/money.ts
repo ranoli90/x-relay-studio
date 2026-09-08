@@ -50,7 +50,7 @@ export function currencyExponent(currency: string): number {
 }
 
 export function money(minor: number, currency: string): Money {
-  if (!Number.isInteger(minor) || minor < 0) {
+  if (!Number.isSafeInteger(minor) || minor < 0) {
     throw new Error("money_minor_must_be_non_negative_integer");
   }
   const c = parseCurrency(currency);
@@ -75,6 +75,16 @@ export function formatMoney(value: Money): string {
   const sign = value.currency === "USD" ? "$" : value.currency === "EUR" ? "€" : `${value.currency} `;
   if (exp === 0 || frac === 0) return `${sign}${whole}`;
   return `${sign}${whole}.${String(frac).padStart(exp, "0")}`;
+}
+
+export function minorToFractionalString(minor: number, currency: string): string {
+  const exp = currencyExponent(currency);
+  if (exp === 0) return String(minor);
+  const scale = 10 ** exp;
+  const whole = Math.floor(minor / scale);
+  const frac = minor % scale;
+  if (frac === 0) return String(whole);
+  return `${whole}.${String(frac).padStart(exp, "0")}`;
 }
 
 export function sameMoney(a: Money, b: Money): boolean {

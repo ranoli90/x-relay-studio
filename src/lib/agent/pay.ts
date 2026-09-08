@@ -116,8 +116,10 @@ export async function applyMarkPaid(
   const evidenceCurrency = parseCurrency(input.currency);
   if (!offerCurrency || !evidenceCurrency) return { ok: false, reason: "currency_missing" };
   if (evidenceCurrency !== offerCurrency) return { ok: false, reason: "wrong_currency" };
-  if (offer.destination_id && input.destinationId && offer.destination_id !== input.destinationId) {
-    return { ok: false, reason: "wrong_destination" };
+  if (offer.destination_id) {
+    if (!input.destinationId || offer.destination_id !== input.destinationId) {
+      return { ok: false, reason: "wrong_destination" };
+    }
   }
   if (!sameMoney(money(expectedMinor, offerCurrency), money(input.amountCents, evidenceCurrency))) {
     return { ok: false, reason: "amount_mismatch" };

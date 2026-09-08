@@ -88,7 +88,7 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
   const check = revalidateForSend(captured, live);
   if (!check.allow) return { status: "fail", error: check.reason };
   const conversationId = opts.chat ?? opts.peer;
-  await recordDispatchAttempt({
+  const attemptId = await recordDispatchAttempt({
     userId: opts.userId,
     conversationId,
     body: opts.body,
@@ -96,6 +96,7 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
     live,
     status: "sending",
   });
+  let classified: AutoDispatchResult;
   try {
     const result = await send({
       userId: opts.userId,
@@ -110,29 +111,32 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
       optOut: live.optOut,
       emergencyStop: live.emergencyStop,
     });
-    const classified = classifyReturned(result);
+    classified = classifyReturned(result);
+  } catch (err) {
+    classified = classifyThrown(err);
+  }
+  const finishStatus =
+    classified.status === "ok" ? "confirmed" : classified.status === "uncertain" ? "uncertain" : "failed";
+  const finishReason =
+    classified.status === "ok"
+      ? null
+      : classified.status === "not_live"
+        ? "not_live"
+        : classified.status === "uncertain" || classified.status === "fail"
+          ? classified.error
+          : "failed";
+  try {
     await finishDispatchAttempt(
       opts.userId,
-      conversationId,
-      classified.status === "ok" ? "confirmed" : classified.status === "uncertain" ? "uncertain" : "failed",
-      classified.status === "ok" ? null : classified.status === "not_live" ? "not_live" : classified.error,
+      attemptId,
+      finishStatus,
+      finishReason,
       classified.status === "ok" ? classified.telegramMessageId : null,
     );
-    return classified;
-  } catch (err) {
-    const classified = classifyThrown(err);
-    const failReason =
-      classified.status === "uncertain" || classified.status === "fail"
-        ? classified.error
-        : classified.status === "not_live"
-          ? "not_live"
-          : "failed";
-    await finishDispatchAttempt(
-      opts.userId,
-      conversationId,
-      classified.status === "uncertain" ? "uncertain" : "failed",
-      failReason,
-    );
-    return classified;
+  } catch {
+    if (classified.status === "ok" || classified.status === "uncertain") {
+      return { status: "uncertain", error: "possible_transmission:persist_failed" };
+    }
   }
+  return classified;
 }

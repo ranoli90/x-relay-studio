@@ -57,9 +57,14 @@ const THIRD_PARTY = /\b(my (friend|sister|brother|mom|dad|wife|husband)|a friend
 function slug(title: string): string {
   return title
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/[^\p{L}\p{N}]+/gu, "_")
     .replace(/^_|_$/g, "")
     .slice(0, 40);
+}
+
+function aliasPattern(alias: string): RegExp {
+  const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, "iu");
 }
 
 export function catalogAliases(row: CatalogRow): string[] {
@@ -93,7 +98,7 @@ export function resolveCatalogSku(text: string, catalog: CatalogRow[]): string |
   for (const row of catalog) {
     for (const alias of catalogAliases(row)) {
       if (!alias) continue;
-      const re = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+      const re = aliasPattern(alias);
       if (re.test(body)) hits.push({ sku: row.sku, score: alias.length });
     }
   }

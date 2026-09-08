@@ -1,5 +1,5 @@
 import type { CatalogRow } from "./types.ts";
-import { formatMoney, money, parseMoneyFromText } from "../operator/money.ts";
+import { formatMoney, money, parseMoneyFromText, currencyExponent } from "../operator/money.ts";
 
 const PRICE = /\$\s*(\d+(?:\.\d{1,2})?)/g;
 
@@ -19,13 +19,12 @@ export function inventedPrice(text: string, catalog: CatalogRow[], exactMinor?: 
     for (const hit of hits) {
       const minor = hit.money.minor;
       if (typeof exactMinor === "number") {
-        if (minor !== exactMinor) return hit.money.minor / 10 ** (hit.money.currency === "JPY" || hit.money.currency === "XTR" ? 0 : 2);
+        if (minor !== exactMinor) return hit.money.minor / 10 ** currencyExponent(hit.money.currency);
         continue;
       }
       const row = catalog.find((r) => r.priceCents === minor && (r.currency ?? "USD") === hit.money.currency);
       if (!row) {
-        const dollars = hit.money.currency === "USD" ? hit.money.minor / 100 : hit.money.minor / 100;
-        return dollars;
+        return hit.money.minor / 10 ** currencyExponent(hit.money.currency);
       }
     }
     return null;

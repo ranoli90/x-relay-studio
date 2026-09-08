@@ -26,7 +26,7 @@ export function correctFact(
   facts: MemoryFact[],
   input: { id: string; userId: string; value: string; replacementId: string },
 ): MemoryFact[] {
-  const prev = facts.find((f) => f.id === input.id && f.userId === input.userId);
+  const prev = facts.find((f) => f.id === input.id && f.userId === input.userId && f.status === "active");
   if (!prev) return facts;
   return [
     ...facts.map((f) => (f.id === prev.id ? { ...f, status: "superseded" as const } : f)),
@@ -41,7 +41,8 @@ export function correctFact(
 }
 
 export function promptLines(facts: MemoryFact[], userId: string, customerId: string, limit = 12): string[] {
+  const cap = Number.isFinite(limit) ? Math.max(0, Math.floor(limit)) : 0;
   return factsForCustomer(facts, userId, customerId)
-    .slice(0, limit)
+    .slice(0, cap)
     .map((f) => `${f.predicate}=${f.value}`);
 }

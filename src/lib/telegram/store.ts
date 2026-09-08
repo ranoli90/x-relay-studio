@@ -108,12 +108,19 @@ function emptyLinkedSnapshot(configured: boolean, generation: number): TelegramS
 
 let draftTimers: Record<string, number> = {};
 
+function clearDraftTimers() {
+  if (typeof window === "undefined") return;
+  for (const id of Object.values(draftTimers)) window.clearTimeout(id);
+  draftTimers = {};
+}
+
 export const useTelegram = create<TelegramState>((set, get) => {
   function epoch() {
     return { generation: get().generation, selectedChatId: get().selectedChatId };
   }
 
   function dropCaches(nextGeneration: number) {
+    clearDraftTimers();
     return {
       generation: nextGeneration,
       selectedChatId: null as string | null,
@@ -154,7 +161,14 @@ export const useTelegram = create<TelegramState>((set, get) => {
     setShellTab: (shellTab) =>
       set({
         shellTab,
-        view: shellTab === "settings" ? "settings" : shellTab === "inbox" ? get().view : "list",
+        view:
+          shellTab === "settings"
+            ? "settings"
+            : shellTab === "inbox"
+              ? get().view === "settings"
+                ? "list"
+                : get().view
+              : "list",
         error: null,
         errorSource: null,
       }),
@@ -187,6 +201,7 @@ export const useTelegram = create<TelegramState>((set, get) => {
     setFolder: (folder) => set({ folder }),
     clearError: () => set({ error: null, errorSource: null }),
     setDraft: (chatId, value) => {
+      const gen = get().generation;
       const drafts = { ...get().drafts };
       if (value) drafts[chatId] = value;
       else delete drafts[chatId];
@@ -195,6 +210,7 @@ export const useTelegram = create<TelegramState>((set, get) => {
       if (draftTimers[chatId]) window.clearTimeout(draftTimers[chatId]);
       draftTimers[chatId] = window.setTimeout(() => {
         delete draftTimers[chatId];
+        if (get().generation !== gen) return;
         void import("@/lib/operator/fns")
           .then((m) => m.saveDraftFn({ data: { conversationId: chatId, body: value } }))
           .catch(() => undefined);

@@ -108,7 +108,7 @@ export const setEmergencyStopFn = createServerFn({ method: "POST" })
     await sql.query(
       `update telegram_user_sessions set emergency_stop = $2 where user_id = $1`,
       [context.userId, data.on],
-    ).catch(() => undefined);
+    );
     if (data.on) {
       await sql.query(
         `update agent_personas set auto_send = false, automation_mode = 'draft' where user_id = $1`,
@@ -128,14 +128,23 @@ export const setTakeoverFn = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { getSql } = await import("@/lib/db");
     const sql = await getSql();
-    await sql.query(
-      `update agent_threads set takeover = $3 where user_id = $1 and (id = $2 or telegram_account_id = $2)`,
+    const rows = await sql.query<{ id: string }>(
+      `update agent_threads
+          set takeover = $3
+        where user_id = $1
+          and (
+            id = $2
+            or telegram_account_id = $2
+            or fan_id in (select id from agent_fans where user_id = $1 and tg_peer_id = $2)
+          )
+       returning id`,
       [context.userId, data.conversationId, data.on],
-    ).catch(() => undefined);
+    );
+    if (!rows[0]) throw new Error("conversation not found");
     await sql.query(
       `update telegram_chats set muted = $3 where user_id = $1 and id = $2`,
       [context.userId, data.conversationId, data.on],
-    ).catch(() => undefined);
+    );
     return { on: data.on };
   });
 
@@ -149,13 +158,20 @@ export const setPartnerOptOutFn = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { getSql } = await import("@/lib/db");
     const sql = await getSql();
-    await sql.query(
+    const rows = await sql.query<{ id: string }>(
       `update agent_threads
           set opt_out = $3, opt_out_at = case when $3 then now() else null end,
               consent_epoch = consent_epoch + 1
-        where user_id = $1 and (id = $2 or telegram_account_id = $2)`,
+        where user_id = $1
+          and (
+            id = $2
+            or telegram_account_id = $2
+            or fan_id in (select id from agent_fans where user_id = $1 and tg_peer_id = $2)
+          )
+        returning id`,
       [context.userId, data.conversationId, data.on],
-    ).catch(() => undefined);
+    );
+    if (!rows[0]) throw new Error("conversation not found");
     return { on: data.on };
   });
 
@@ -225,6 +241,18 @@ export const evaluateEvidenceFn = createServerFn({ method: "POST" })
   .handler(async ({ context, data }) => {
     const { recordPaymentEvidence } = await import("./persist.server");
     return recordPaymentEvidence(context.userId, data);
+  });
+
+export const loadConversationControlsFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => {
+    const d = input as { conversationId?: string };
+    if (!d.conversationId) throw new Error("conversation required");
+    return { conversationId: String(d.conversationId) };
+  })
+  .handler(async ({ context, data }) => {
+    const { loadConversationControls } = await import("./persist.server");
+    return loadConversationControls(context.userId, data.conversationId);
   });
 
 export const labAllowedFn = createServerFn({ method: "GET" })

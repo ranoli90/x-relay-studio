@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
-import { loadOperatorDeskFn, setPartnerOptOutFn, setTakeoverFn } from "@/lib/operator/fns";
+import { loadConversationControlsFn, loadOperatorDeskFn, setPartnerOptOutFn, setTakeoverFn } from "@/lib/operator/fns";
 import { formatMoney } from "@/lib/operator/money";
 import type { TelegramChat } from "@/lib/telegram/types";
 import { isServicePeer } from "@/lib/telegram/preview";
@@ -24,9 +24,21 @@ export function ConversationSheet({
   const [about, setAbout] = useState<string | null>(null);
   const [offerLine, setOfferLine] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [controlsReady, setControlsReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
+    setControlsReady(false);
+    void loadConversationControlsFn({ data: { conversationId: chat.id } })
+      .then((controls) => {
+        if (cancelled) return;
+        setTakeover(controls.takeover);
+        setOptOut(controls.optOut);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setControlsReady(true);
+      });
     void loadOperatorDeskFn()
       .then((desk) => {
         if (cancelled) return;
@@ -112,7 +124,7 @@ export function ConversationSheet({
                 <SheetSwitch
                   label="Take over this chat"
                   checked={takeover}
-                  disabled={busy}
+                  disabled={busy || !controlsReady}
                   onChange={(on) => void toggleTakeover(on)}
                 />
               </div>
@@ -126,7 +138,7 @@ export function ConversationSheet({
                 <SheetSwitch
                   label="Partner asked to stop"
                   checked={optOut}
-                  disabled={busy}
+                  disabled={busy || !controlsReady}
                   onChange={(on) => void toggleOptOut(on)}
                 />
               </div>
