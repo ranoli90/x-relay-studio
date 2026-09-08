@@ -23,7 +23,7 @@ Baseline still present on main `2e16ef71`. Repair is on `repair/telegram-assista
 
 | XR-016 | Claim leases | IN_PROGRESS | NOT_RUN | existing claim path; crash tests remaining |
 | XR-017 | Fair ingest | SOURCE_FIXED | UNIT_VERIFIED | nextIngestBatch |
-| XR-018 | Permission defaults | SOURCE_FIXED | UNIT_VERIFIED | processing_permission default false |
+| XR-018 | Permission defaults | SOURCE_FIXED | UNIT_VERIFIED | live desks default armed (0036); isolated kernel still off; stop/takeover/opt-out halt |
 | XR-019 | Provider timeout recovery | IN_PROGRESS | NOT_RUN | uncertain recorded; live recovery NOT_RUN |
 | XR-020 | Stop aggregation | SOURCE_FIXED | UNIT_VERIFIED | persona OR session emergency_stop |
 | XR-021 | Outbox aggregation | SOURCE_FIXED | UNIT_VERIFIED | send_attempts + Activity |

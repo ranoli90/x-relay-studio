@@ -233,13 +233,16 @@ export async function saveSignedIn(opts: {
   const rows = await sql.query<{ user_id: string }>(
     `update telegram_user_sessions
         set session_enc = $2, phone_code_hash_enc = null, needs_password = false,
-            last_error = null, auth_dead = false, updated_at = now()
+            last_error = null, auth_dead = false,
+            watching = true, automation_armed = true, updated_at = now()
       where user_id = $1
         and ($3::int is null or coalesce(account_generation, 1) = $3)
       returning user_id`,
     [opts.userId, encryptSecret(opts.session), opts.generation ?? null],
   );
   if (!rows[0]) throw new TelegramError("unlinked", "Telegram signed this desk out. Connect again.", 401);
+  const { applyLiveArm } = await import("@/lib/agent/seed.server");
+  await applyLiveArm(opts.userId);
   const row = await getUserSession(opts.userId);
   if (!row) throw new TelegramError("invalid", "Connect Telegram first.", 404);
   return row;

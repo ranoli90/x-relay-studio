@@ -665,6 +665,10 @@ export const setEmergencyStop = createServerFn({ method: "POST" })
         where user_id = $2`,
       [on, context.userId],
     ).catch(() => undefined);
+    if (!on) {
+      const { applyLiveArm } = await import("./seed.server.ts");
+      await applyLiveArm(context.userId);
+    }
     kickAgentLoop(context.userId);
     return { ok: true, on };
   });

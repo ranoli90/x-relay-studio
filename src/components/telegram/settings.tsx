@@ -162,7 +162,7 @@ export function SettingsPane({
             />
           </div>
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
-            Scoped permission for this desk to run the model on stored chats. Off by default.
+            Scoped permission for this desk to run the model on stored chats. On for every connected account.
           </p>
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
@@ -181,7 +181,7 @@ export function SettingsPane({
           <p className="mt-2 text-sm leading-relaxed text-[var(--tg-text-secondary)]">
             {account.preview
               ? "Preview is local. Nothing is auto-sent."
-              : "Send only after a live permission check at the transport boundary. Local approval is not a customer message."}
+              : "On for every connected account. Stop is the halt. A published Business offer is still required before a priced reply is sent."}
           </p>
         </section>
         <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
