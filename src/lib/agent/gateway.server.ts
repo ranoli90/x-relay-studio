@@ -60,7 +60,7 @@ const TABLE: Record<AgentTask, Route> = {
     primary: "x-ai/grok-4.5",
     fallback: ["x-ai/grok-4", "x-ai/grok-4-fast", "minimax/minimax-m3", "deepseek/deepseek-chat"],
     sort: "throughput",
-    timeoutMs: 12000,
+    timeoutMs: 25000,
     maxTokens: 280,
   },
   hard_write: {
@@ -68,7 +68,7 @@ const TABLE: Record<AgentTask, Route> = {
     primary: "x-ai/grok-4.5",
     fallback: ["x-ai/grok-4.6", "x-ai/grok-4"],
     sort: "throughput",
-    timeoutMs: 16000,
+    timeoutMs: 30000,
     maxTokens: 400,
   },
   diary: {
@@ -297,7 +297,7 @@ export async function runTask(opts: {
         model: "grok-4.5",
         messages: opts.messages,
         maxTokens: route.maxTokens,
-        timeoutMs: Math.min(xaiRemaining, 12_000),
+        timeoutMs: Math.min(xaiRemaining, 28_000),
         json: opts.json,
       });
       const bad = unusableFinish(result.finishReason, result.text);

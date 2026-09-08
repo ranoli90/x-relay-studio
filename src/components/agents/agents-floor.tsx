@@ -55,9 +55,11 @@ export function AgentsFloor() {
   const [compose, setCompose] = useState("");
   const [agentFilter, setAgentFilter] = useState<string | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [fresh, setFresh] = useState(false);
   const threadIdRef = useRef<string | null>(null);
   const deskRef = useRef<FloorDesk | null>(null);
   const autoOpened = useRef(false);
+  const freshRef = useRef(false);
 
   threadIdRef.current = selectedId;
   deskRef.current = desk;
@@ -160,13 +162,16 @@ export function AgentsFloor() {
     }
   }
 
-  async function run(text: string, scenario?: ScenarioId) {
+  async function run(text: string, scenario?: ScenarioId, nextFresh = freshRef.current) {
     setBusy(true);
     setError(null);
     try {
+      const threadId = nextFresh ? undefined : selectedId ?? thread?.thread.id;
       const res = await simulateInbound({
-        data: { threadId: selectedId ?? thread?.thread.id, text, scenario },
+        data: { ...(threadId ? { threadId } : {}), text, scenario },
       });
+      freshRef.current = false;
+      setFresh(false);
       await reload(res.threadId);
       setSim("");
       if (narrow) setPane("thread");
@@ -326,7 +331,10 @@ export function AgentsFloor() {
       </header>
 
       {error ? (
-        <div className="flex items-center justify-between gap-3 border-b border-down/30 bg-down/10 px-3 py-2 text-sm text-down">
+        <div
+          className="flex items-center justify-between gap-3 border-b border-down/30 bg-down/10 px-3 py-2 text-sm text-down"
+          data-testid="floor-error"
+        >
           <p>{error}</p>
           <button
             type="button"
@@ -410,8 +418,14 @@ export function AgentsFloor() {
             value={sim}
             onChange={setSim}
             busy={busy}
+            fresh={fresh}
             onSend={() => void run(sim)}
             onScenario={(id) => void run("", id)}
+            onFresh={() => {
+              const next = !freshRef.current;
+              freshRef.current = next;
+              setFresh(next);
+            }}
           />
         </aside>
 

@@ -64,6 +64,10 @@ export function FloorThreadList({
             <button
               type="button"
               onClick={() => onOpen(t.id)}
+              data-testid="thread-row"
+              data-thread-id={t.id}
+              data-state={t.state}
+              data-workflow={t.workflow}
               className={cn(
                 "flex w-full items-start gap-3 border-b border-border px-3 py-3 text-left",
                 "transition-colors duration-[var(--motion-quick)] ease-[var(--ease-out)]",

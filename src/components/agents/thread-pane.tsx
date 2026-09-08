@@ -110,9 +110,11 @@ export function ThreadPane({
             <ChevronLeft className="size-5" />
           </button>
         ) : null}
-        <div className="min-w-0 flex-1 px-2">
-          <p className="truncate text-sm font-medium">{t.fanName}</p>
-          <p className="truncate font-mono text-xs uppercase tracking-widest text-subtle">
+        <div className="min-w-0 flex-1 px-2" data-testid="thread-header">
+          <p className="truncate text-sm font-medium" data-testid="thread-fan">
+            {t.fanName}
+          </p>
+          <p className="truncate font-mono text-xs uppercase tracking-widest text-subtle" data-testid="thread-meta">
             {agent} · {wfLabel(t.workflow)} · {t.archetype.replaceAll("_", " ")}
           </p>
         </div>
@@ -263,6 +265,9 @@ function Bubble({
   return (
     <div className={cn("flex", mine ? "justify-end" : "justify-start")}>
       <div
+        data-testid="bubble"
+        data-role={message.role}
+        data-status={message.status}
         className={cn(
           "max-w-[min(28rem,92%)] rounded-xl px-3 py-2 text-sm leading-relaxed",
           message.role === "system" && "w-full bg-surface-2 text-center text-muted",
@@ -289,10 +294,11 @@ function Bubble({
             onChange={(e) => onEdit(e.target.value)}
             className="min-h-16 w-full resize-y bg-transparent text-sm outline-none"
             aria-label="Edit draft"
+            data-testid="draft-body"
           />
         ) : (
           message.body.split("\n").map((line, i) => (
-            <p key={i} className={i ? "mt-1" : undefined}>
+            <p key={i} className={i ? "mt-1" : undefined} data-testid={i === 0 ? "bubble-text" : undefined}>
               {line}
             </p>
           ))

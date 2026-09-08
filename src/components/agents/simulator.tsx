@@ -1,19 +1,24 @@
 import { Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { SCENARIOS, type ScenarioId } from "./model";
 
 export function InboundSimulator({
   value,
   onChange,
   busy,
+  fresh,
   onSend,
   onScenario,
+  onFresh,
 }: {
   value: string;
   onChange: (v: string) => void;
   busy: boolean;
+  fresh: boolean;
   onSend: () => void;
   onScenario: (id: ScenarioId) => void;
+  onFresh: () => void;
 }) {
   return (
     <div className="shrink-0 border-t border-border p-3">
@@ -24,11 +29,25 @@ export function InboundSimulator({
         Isolated fixture. Preview a fan without live Telegram. Nothing here is sent to a partner.
       </p>
       <div className="mt-2 flex flex-wrap gap-1">
+        <button
+          type="button"
+          disabled={busy}
+          aria-pressed={fresh}
+          data-testid="sim-new-fan"
+          onClick={onFresh}
+          className={cn(
+            "h-11 min-h-[44px] rounded-md border px-3 text-xs transition-colors duration-[var(--motion-quick)] ease-[var(--ease-out)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40 disabled:opacity-40",
+            fresh ? "border-fg text-fg" : "border-border text-muted hover:text-fg",
+          )}
+        >
+          New fan
+        </button>
         {SCENARIOS.map((s) => (
           <button
             key={s.id}
             type="button"
             disabled={busy}
+            data-testid={`scenario-${s.id}`}
             onClick={() => onScenario(s.id)}
             className="h-11 min-h-[44px] rounded-md border border-border px-3 text-xs text-muted transition-colors duration-[var(--motion-quick)] ease-[var(--ease-out)] hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40 disabled:opacity-40"
           >
@@ -38,6 +57,8 @@ export function InboundSimulator({
       </div>
       <form
         className="mt-2 flex gap-2"
+        aria-busy={busy}
+        data-testid="sim-form"
         onSubmit={(e) => {
           e.preventDefault();
           onSend();
@@ -47,9 +68,16 @@ export function InboundSimulator({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Fan says…"
+          data-testid="sim-input"
           className="h-11 min-h-[44px] min-w-0 flex-1 rounded-md border border-border bg-bg px-3 text-sm outline-none transition-[border-color,box-shadow] duration-[var(--motion-quick)] focus:ring-2 focus:ring-fg/30"
         />
-        <Button type="submit" size="icon" disabled={busy || !value.trim()} aria-label="Simulate inbound">
+        <Button
+          type="submit"
+          size="icon"
+          disabled={busy || !value.trim()}
+          aria-label="Simulate inbound"
+          data-testid="sim-send"
+        >
           <Send className="size-4" />
         </Button>
       </form>

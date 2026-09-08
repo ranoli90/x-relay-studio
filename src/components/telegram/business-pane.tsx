@@ -108,6 +108,7 @@ export function BusinessPane() {
             value={plain}
             onChange={(e) => setPlain(e.target.value)}
             rows={4}
+            data-testid="business-brief"
             className={cn(
               "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base text-[var(--tg-text)]",
               tgFocusClass,
