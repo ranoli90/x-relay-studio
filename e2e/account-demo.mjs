@@ -296,6 +296,11 @@ const PATHS = [
       const bad = inventedPrice(reply);
       if (bad) return `invented price $${bad}`;
       if (PAYPAL.test(reply)) return "named paypal";
+      const photoPrice = pricesIn(reply).some((n) => Math.abs(n - 12.5) < 0.01);
+      const asksWhich = /\b(which|what (are you|do you) want|photo notes|pack)\b/i.test(reply);
+      if (!photoPrice && !asksWhich && /custom clip|customs start/i.test(reply)) {
+        return "quoted custom for pics instead of the photo pack";
+      }
       return null;
     },
   },
@@ -378,10 +383,11 @@ const PATHS = [
     intent: "only published rails, never paypal",
     check(thread) {
       const reply = thread.reply || "";
-      if (!reply) return null;
+      if (!reply) return "silent on a payment-method ask";
       const stiff = tooStiff(reply);
       if (stiff) return stiff;
       if (/\byeah\b.*\bpaypal\b|\bpaypal works\b|\bpaypal is fine\b/i.test(reply)) return "accepted paypal";
+      if (PAYPAL.test(reply) && !/\b(don't|do not|no|not)\b/.test(reply)) return "named paypal";
       if (inventedPrice(reply)) return `invented price ${inventedPrice(reply)}`;
       return null;
     },
@@ -498,6 +504,9 @@ const FOLLOWUPS = [
           const stiff = tooStiff(reply);
           if (stiff) return stiff;
           if (inventedPrice(reply)) return `invented price ${inventedPrice(reply)}`;
+          if (!pricesIn(reply).some((n) => Math.abs(n - 12.5) < 0.01) && !/photo notes/i.test(reply)) {
+            return "did not quote the photo notes pack";
+          }
           return null;
         },
       },
@@ -520,7 +529,7 @@ const FOLLOWUPS = [
           if (!reply) return null;
           const stiff = tooStiff(reply);
           if (stiff) return stiff;
-          if (pricesIn(reply).length > 1) return "re-pitched a menu on thanks";
+          if (pricesIn(reply).length > 0) return "re-pitched a price on thanks";
           return null;
         },
       },
@@ -592,28 +601,34 @@ async function walkAccount(page, results) {
 
   await page.locator("[data-testid='nav-business']").click();
   await page.locator("[data-testid='business-brief']").waitFor({ timeout: 15_000 });
+  await Promise.race([
+    page.getByText(/No published revision yet/i).waitFor({ timeout: 8_000 }),
+    page.getByText(/revision \d+/i).waitFor({ timeout: 8_000 }),
+  ]).catch(() => undefined);
+  await page.waitForTimeout(400);
   await page.locator("[data-testid='business-brief']").fill(
     "Maya\nDisclosed AI persona. Online only. No IRL. Photo notes, customs, sexting, weekly GFE.",
   );
-  const addOffer = page.getByRole("button", { name: /Add offer/i });
-  const extras = [
+  const wanted = [
+    { title: "Photo notes pack", amount: "12.50" },
     { title: "Custom clip", amount: "25.00" },
     { title: "Sexting session", amount: "60.00" },
     { title: "Weekly GFE", amount: "150.00" },
   ];
-  for (const extra of extras) {
+  const addOffer = page.getByRole("button", { name: /Add offer/i });
+  while ((await page.getByLabel(/^Offer$/).count()) < wanted.length) {
     await addOffer.click();
   }
-  const titles = page.getByLabel(/^Offer$/);
-  const amounts = page.getByLabel(/^Amount$/);
-  const count = await titles.count();
-  for (let i = 0; i < extras.length; i++) {
-    const idx = count - extras.length + i;
-    await titles.nth(idx).fill(extras[i].title);
-    await amounts.nth(idx).fill(extras[i].amount);
+  for (let i = 0; i < wanted.length; i++) {
+    await page.locator(`[data-testid='offer-title-${i}']`).fill(wanted[i].title);
+    await page.locator(`[data-testid='offer-amount-${i}']`).fill(wanted[i].amount);
   }
   await page.locator("[data-testid='business-publish']").click();
-  await page.getByText(/revision 1/i).waitFor({ timeout: 20_000 });
+  await page.getByText(/revision 1|revision \d+/i).waitFor({ timeout: 20_000 });
+  const publishedCopy = await page.locator("body").innerText();
+  if (!/photo notes pack/i.test(publishedCopy) || !/\$12\.50/.test(publishedCopy)) {
+    throw new Error("Published catalog missing the photo notes pack at $12.50.");
+  }
   await shot(page, "business-published");
   results.push({
     id: "business",

@@ -113,6 +113,68 @@ describe("AC punctuation and greetings", () => {
     assert.equal(wf, "W5_DAY_ARC");
   });
 
+  it("bare thanks stays chat, not a new close", () => {
+    const u = understandLocal("thanks", { lifetimeCents: 2500, source: "telegram", archetype: "buyer", turns: 4 });
+    const wf = routeWorkflow(runSafety("thanks"), u, {
+      lifetimeCents: 2500,
+      turns: 4,
+      takeover: false,
+      justDelivered: false,
+      silentDays: 0,
+      gfeHeld: false,
+      overflow: false,
+      whale: false,
+      firstOfferSent: true,
+    });
+    assert.equal(wf, "W5_DAY_ARC");
+    const out = writeLocal(input("W5_DAY_ARC", { inbound: "thanks" }));
+    assert.equal(/\$\d/.test(out.bubbles.join(" ")), false);
+  });
+
+  it("pics resolve to a published photo pack when the catalog has one", () => {
+    const catalog: CatalogRow[] = [
+      {
+        id: "pack",
+        sku: "photo_notes_pack",
+        title: "Photo notes pack",
+        priceCents: 1250,
+        rail: "manual_handle",
+        eligibility: "any",
+        currency: "USD",
+      },
+      {
+        id: "custom",
+        sku: "custom_clip",
+        title: "Custom clip",
+        priceCents: 2500,
+        rail: "manual_handle",
+        eligibility: "any",
+        currency: "USD",
+      },
+    ];
+    const u = understandLocal("how much for pics", {
+      lifetimeCents: 0,
+      source: "telegram",
+      archetype: "new",
+      turns: 1,
+      catalog,
+    });
+    assert.equal(u.intent, "price_ask");
+    assert.equal(u.wantsSku, "photo_notes_pack");
+    const wf = routeWorkflow(runSafety("how much for pics"), u, {
+      lifetimeCents: 0,
+      turns: 1,
+      takeover: false,
+      justDelivered: false,
+      silentDays: 0,
+      gfeHeld: false,
+      overflow: false,
+      whale: false,
+      firstOfferSent: false,
+    });
+    assert.equal(wf, "W6_CLOSE_NOW");
+  });
+
   it("local greeting has no warehouse, no price, no placeholder vocative", () => {
     const out = writeLocal(input("W5_DAY_ARC", { inbound: "What’s up", fanName: "account", hour: 23, clock: WAREHOUSE }));
     const text = out.bubbles.join(" ").toLowerCase();

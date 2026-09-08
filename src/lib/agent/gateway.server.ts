@@ -7,10 +7,9 @@ import { newId } from "./ids.ts";
 import type { WriteInput, WriteResult } from "./types.ts";
 import {
   writeLocal,
-  validateDraft,
-  splitBubbles,
   writeCapsFor,
   shouldSkipRemoteWrite,
+  settleRemoteWrite,
   LOCAL_WRITER_MODEL,
 } from "./write.ts";
 import {
@@ -374,17 +373,15 @@ export async function writeWithGateway(userId: string, threadId: string, input: 
     ],
   });
   if (!llm) {
+    if (!local.dropped && local.bubbles.length > 0) return local;
     return { bubbles: [], dropped: true, dropReason: "generation_failed", model: LOCAL_WRITER_MODEL };
   }
   const badFinish = unusableFinish(llm.finishReason, llm.text);
   if (badFinish) {
+    if (!local.dropped && local.bubbles.length > 0) return local;
     return { bubbles: [], dropped: true, dropReason: badFinish, model: llm.model };
   }
-  const drop = validateDraft(llm.text, input.catalog, input.hour, input.clock, caps);
-  if (drop) {
-    return { bubbles: [], dropped: true, dropReason: `validator_rejected: ${drop}`, model: llm.model };
-  }
-  return { bubbles: splitBubbles(llm.text), dropped: false, dropReason: null, model: llm.model };
+  return settleRemoteWrite(llm.text, local, input, caps, llm.model);
 }
 
 export { extractJson, TABLE as ROUTE_TABLE, buildWriterMessages, WRITER_UNTRUSTED_POLICY };

@@ -121,6 +121,7 @@ export function BusinessPane() {
               Offer
               <input
                 value={offer.title}
+                data-testid={`offer-title-${i}`}
                 onChange={(e) =>
                   setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, title: e.target.value } : r)))
                 }
@@ -136,6 +137,7 @@ export function BusinessPane() {
                 <input
                   inputMode="decimal"
                   value={offer.amount}
+                  data-testid={`offer-amount-${i}`}
                   onChange={(e) =>
                     setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, amount: e.target.value } : r)))
                   }
