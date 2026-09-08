@@ -1,6 +1,7 @@
 import { timingSafeEqual } from "node:crypto";
 import { z } from "zod";
 import { newId } from "./ids.ts";
+import { parseCurrency, sameMoney, money } from "../operator/money.ts";
 
 type Sql = {
   query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
@@ -11,11 +12,27 @@ export const FanPaySchema = z.object({
   rail: z.string().trim().min(2).max(40),
   externalId: z.string().trim().min(4).max(120),
   amountCents: z.coerce.number().int().positive().max(100_000_000),
+  currency: z.string().trim().min(3).max(3).optional(),
+  destinationId: z.string().trim().min(4).max(80).optional(),
+  processorAccountId: z.string().trim().min(2).max(80).optional(),
+  provenance: z.enum(["provider_confirmed", "operator_attested", "evidence_candidate"]).default("provider_confirmed"),
 });
 
 export type MarkPaidResult =
   | { ok: true; replay: boolean; offerId: string; threadId: string }
-  | { ok: false; reason: "not_found" | "amount_mismatch" | "wrong_status" | "expired" | "conflict" };
+  | {
+      ok: false;
+      reason:
+        | "not_found"
+        | "amount_mismatch"
+        | "wrong_status"
+        | "expired"
+        | "conflict"
+        | "wrong_currency"
+        | "wrong_destination"
+        | "attestation_not_settlement"
+        | "currency_missing";
+    };
 
 type OfferLock = {
   id: string;
@@ -25,6 +42,8 @@ type OfferLock = {
   status: string;
   price_cents: number;
   amount_minor?: number | null;
+  currency?: string | null;
+  destination_id?: string | null;
   expires_at?: string | Date | null;
 };
 
@@ -39,26 +58,15 @@ function isPayableStatus(status: string): boolean {
 }
 
 async function lockOffer(sql: Sql, offerId: string): Promise<OfferLock | undefined> {
-  try {
-    return (
-      await sql.query<OfferLock>(
-        `select id, user_id, thread_id, fan_id, status, price_cents,
-                coalesce(amount_minor, price_cents) as amount_minor, expires_at
-           from agent_offers where id = $1
-           for update`,
-        [offerId],
-      )
-    )[0];
-  } catch {
-    return (
-      await sql.query<OfferLock>(
-        `select id, user_id, thread_id, fan_id, status, price_cents
-           from agent_offers where id = $1
-           for update`,
-        [offerId],
-      )
-    )[0];
-  }
+  return (
+    await sql.query<OfferLock>(
+      `select id, user_id, thread_id, fan_id, status, price_cents,
+              amount_minor, currency, destination_id, expires_at
+         from agent_offers where id = $1
+         for update`,
+      [offerId],
+    )
+  )[0];
 }
 
 /**
@@ -78,23 +86,42 @@ export function fanWebhookAuthorized(
 }
 
 /**
- * Fan → operator settlement. Amount and ownership come from the locked offer row,
- * not the webhook payload. Replay of the same external id is a no-op.
- *
- * `userId` scopes simulatePay / operator calls. Pass `null` for the signed fan
- * webhook so the owner is taken from the locked offer.
+ * Fan → operator settlement. Amount, currency, destination and ownership come
+ * from the locked offer/quote row, not the webhook payload. Replay of the same
+ * external id is a no-op. Operator attestation is never provider_confirmed.
  */
 export async function applyMarkPaid(
   sql: Sql,
   userId: string | null,
-  input: { offerId: string; rail: string; externalId: string; amountCents: number },
+  input: {
+    offerId: string;
+    rail: string;
+    externalId: string;
+    amountCents: number;
+    currency?: string;
+    destinationId?: string;
+    provenance?: "provider_confirmed" | "operator_attested" | "evidence_candidate";
+  },
 ): Promise<MarkPaidResult> {
+  if (input.provenance && input.provenance !== "provider_confirmed") {
+    return { ok: false, reason: "attestation_not_settlement" };
+  }
   const offer = await lockOffer(sql, input.offerId);
   if (!offer) return { ok: false, reason: "not_found" };
   if (userId != null && offer.user_id !== userId) return { ok: false, reason: "not_found" };
 
   const ownerId = offer.user_id;
-  const expected = Number(offer.amount_minor ?? offer.price_cents);
+  const expectedMinor = Number(offer.amount_minor ?? offer.price_cents);
+  const offerCurrency = parseCurrency(offer.currency);
+  const evidenceCurrency = parseCurrency(input.currency);
+  if (!offerCurrency || !evidenceCurrency) return { ok: false, reason: "currency_missing" };
+  if (evidenceCurrency !== offerCurrency) return { ok: false, reason: "wrong_currency" };
+  if (offer.destination_id && input.destinationId && offer.destination_id !== input.destinationId) {
+    return { ok: false, reason: "wrong_destination" };
+  }
+  if (!sameMoney(money(expectedMinor, offerCurrency), money(input.amountCents, evidenceCurrency))) {
+    return { ok: false, reason: "amount_mismatch" };
+  }
 
   if (offer.status === "paid" || offer.status === "delivered") {
     return { ok: true, replay: true, offerId: offer.id, threadId: offer.thread_id };
@@ -108,14 +135,13 @@ export async function applyMarkPaid(
   if (!isPayableStatus(offer.status) && offer.status !== "sent") {
     return { ok: false, reason: "wrong_status" };
   }
-  if (expected !== input.amountCents) return { ok: false, reason: "amount_mismatch" };
 
   try {
     await sql.query("savepoint pay_insert").catch(() => undefined);
     await sql.query(
       `insert into agent_payments (id, user_id, offer_id, rail, amount_cents, status, external_id, paid_at)
        values ($1,$2,$3,$4,$5,'paid',$6,now())`,
-      [newId("pay"), ownerId, offer.id, input.rail, expected, input.externalId],
+      [newId("pay"), ownerId, offer.id, input.rail, expectedMinor, input.externalId],
     );
   } catch (err) {
     await sql.query("rollback to savepoint pay_insert").catch(() => undefined);
@@ -146,7 +172,7 @@ export async function applyMarkPaid(
   await sql.query(
     `update agent_fans set lifetime_cents = lifetime_cents + $1, trust = least(100, trust + 8)
       where id = $2 and user_id = $3`,
-    [expected, claimed[0].fan_id, ownerId],
+    [expectedMinor, claimed[0].fan_id, ownerId],
   );
   await sql.query(
     `update agent_threads set workflow = 'W9_FULFILL', state = 'fulfilling'

@@ -2,7 +2,7 @@ name: ci
 
 on:
   push:
-    branches: [main, fix/**, feat/**]
+    branches: [main, fix/**, feat/**, repair/**]
   pull_request:
   workflow_dispatch:
 
@@ -25,6 +25,7 @@ jobs:
       - run: node scripts/check-migration-unique.mjs
       - run: npm test
       - run: npx tsc --noEmit
+      - run: npm run build
 
   smoke:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'

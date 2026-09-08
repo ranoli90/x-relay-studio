@@ -32,8 +32,8 @@ describe("decideAutoSend", () => {
     assert.equal(decideAutoSend(input({ takeover: true })), false);
   });
 
-  it("W6 always draft", () => {
-    assert.equal(decideAutoSend(input({ workflow: "W6_CLOSE_NOW" })), false);
+  it("W6 auto-sends published standard prices when approved-auto", () => {
+    assert.equal(decideAutoSend(input({ workflow: "W6_CLOSE_NOW" })), true);
   });
 
   it("W5 auto when approved-auto and validated", () => {
@@ -72,5 +72,9 @@ describe("decideAutoSend", () => {
     assert.equal(decideAutoSend(input({ emergencyStop: true })), false);
     assert.equal(decideAutoSend(input({ partnerOptOut: true })), false);
     assert.equal(decideAutoSend(input({ accountLive: false })), false);
+  });
+
+  it("processing permission off is not an on switch", () => {
+    assert.equal(decideAutoSend(input({ conversationPermitted: false })), false);
   });
 });

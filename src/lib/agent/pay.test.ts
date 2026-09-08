@@ -15,7 +15,8 @@ function toSql(pg: PGlite) {
 const SCHEMA = `
   create table agent_offers (
     id text primary key, user_id text not null, thread_id text not null, fan_id text not null,
-    status text not null, price_cents integer not null, paid_at timestamptz, delivered_at timestamptz
+    status text not null, price_cents integer not null, paid_at timestamptz, delivered_at timestamptz,
+    amount_minor integer, currency text, destination_id text, expires_at timestamptz
   );
   create table agent_payments (
     id text primary key, user_id text not null, offer_id text not null,
@@ -40,7 +41,7 @@ const SCHEMA = `
 async function seed(pg: PGlite) {
   await pg.exec(`
     insert into agent_offers values
-      ('off_aaaaaaaaaaaaaaaa','desk_a','thr_a','fan_a','sent',5000,null,null);
+      ('off_aaaaaaaaaaaaaaaa','desk_a','thr_a','fan_a','sent',5000,null,null,5000,'USD',null,null);
     insert into agent_fans values ('fan_a','desk_a',0,20);
     insert into agent_threads values ('thr_a','desk_a','W8_OFFER','awaiting_pay');
   `);
@@ -81,6 +82,7 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_1",
       amountCents: 5000,
+      currency: "USD",
     });
     assert.equal(foreign.ok, false);
     const wrong = await applyMarkPaid(sql, "desk_a", {
@@ -88,6 +90,7 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_1",
       amountCents: 1,
+      currency: "USD",
     });
     assert.equal(wrong.ok, false);
     if (!wrong.ok) assert.equal(wrong.reason, "amount_mismatch");
@@ -109,6 +112,7 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_x",
       amountCents: 5000,
+      currency: "USD",
     });
     assert.equal(missing.ok, false);
     if (!missing.ok) assert.equal(missing.reason, "not_found");
@@ -128,6 +132,7 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_body",
       amountCents: 5000,
+      currency: "USD",
     });
     assert.equal(first.ok, true);
     if (first.ok) {
@@ -153,6 +158,7 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_same",
       amountCents: 5000,
+      currency: "USD",
     });
     assert.equal(first.ok, true);
     if (first.ok) assert.equal(first.replay, false);
@@ -161,6 +167,7 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_same",
       amountCents: 5000,
+      currency: "USD",
     });
     assert.equal(second.ok, true);
     if (second.ok) assert.equal(second.replay, true);
@@ -178,7 +185,7 @@ describe("F08 fan payment settlement", () => {
     await seed(pg);
     await pg.exec(`
       insert into agent_offers values
-        ('off_bbbbbbbbbbbbbbbb','desk_a','thr_b','fan_b','sent',5000,null,null);
+        ('off_bbbbbbbbbbbbbbbb','desk_a','thr_b','fan_b','sent',5000,null,null,5000,'USD',null,null);
       insert into agent_fans values ('fan_b','desk_a',0,20);
       insert into agent_threads values ('thr_b','desk_a','W8_OFFER','awaiting_pay');
     `);
@@ -188,6 +195,7 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_shared",
       amountCents: 5000,
+      currency: "USD",
     });
     assert.equal(first.ok, true);
     const stolen = await applyMarkPaid(sql, null, {
@@ -195,6 +203,7 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_shared",
       amountCents: 5000,
+      currency: "USD",
     });
     assert.equal(stolen.ok, false);
     if (!stolen.ok) assert.ok(stolen.reason === "wrong_status" || stolen.reason === "conflict");
@@ -225,9 +234,48 @@ describe("F08 fan payment settlement", () => {
       rail: "throne",
       externalId: "wh_draft",
       amountCents: 5000,
+      currency: "USD",
     });
     assert.equal(paid.ok, false);
     if (!paid.ok) assert.equal(paid.reason, "wrong_status");
+    const pays = (await pg.query<{ n: number }>("select count(*)::int as n from agent_payments")).rows[0];
+    assert.equal(pays.n, 0);
+    await pg.close();
+  });
+
+  it("refuses missing currency, wrong currency, and operator attestation as settlement", async () => {
+    const pg = new PGlite();
+    await pg.waitReady;
+    await pg.exec(SCHEMA);
+    await seed(pg);
+    const sql = toSql(pg);
+    const missing = await applyMarkPaid(sql, null, {
+      offerId: "off_aaaaaaaaaaaaaaaa",
+      rail: "throne",
+      externalId: "wh_nocurrency",
+      amountCents: 5000,
+    });
+    assert.equal(missing.ok, false);
+    if (!missing.ok) assert.equal(missing.reason, "currency_missing");
+    const wrongCcy = await applyMarkPaid(sql, null, {
+      offerId: "off_aaaaaaaaaaaaaaaa",
+      rail: "throne",
+      externalId: "wh_eur",
+      amountCents: 5000,
+      currency: "EUR",
+    });
+    assert.equal(wrongCcy.ok, false);
+    if (!wrongCcy.ok) assert.equal(wrongCcy.reason, "wrong_currency");
+    const attested = await applyMarkPaid(sql, null, {
+      offerId: "off_aaaaaaaaaaaaaaaa",
+      rail: "throne",
+      externalId: "wh_attested",
+      amountCents: 5000,
+      currency: "USD",
+      provenance: "operator_attested",
+    });
+    assert.equal(attested.ok, false);
+    if (!attested.ok) assert.equal(attested.reason, "attestation_not_settlement");
     const pays = (await pg.query<{ n: number }>("select count(*)::int as n from agent_payments")).rows[0];
     assert.equal(pays.n, 0);
     await pg.close();

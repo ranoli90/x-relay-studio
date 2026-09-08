@@ -40,3 +40,10 @@ export function confirmedTranscript(rows: HistoryRow[]): { role: "fan" | "person
 export function confirmedTurnCount(rows: HistoryRow[]): number {
   return confirmedTranscript(rows).length;
 }
+
+/** Filter local-only rows first, then apply the writer limit. */
+export function historyForWriter(rows: HistoryRow[], limit: number): { role: "fan" | "persona"; body: string }[] {
+  const confirmed = confirmedTranscript(rows);
+  if (limit <= 0) return [];
+  return confirmed.slice(-limit);
+}

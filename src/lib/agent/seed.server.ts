@@ -1,7 +1,6 @@
 import { getSql } from "@/lib/db";
 import { demoFixturesAllowed } from "@/lib/runtime";
 import { newId } from "./ids.ts";
-import { DEFAULT_CATALOG, RETIRED_SKUS } from "./catalog.ts";
 import { pickAgentName, pickFromRoster, pickRoster, slugName, TONES, type AgentTone } from "./names.ts";
 
 function bibleFor(name: string): string {
@@ -14,27 +13,9 @@ async function armAutopilot(_sql: Sql, _userId: string, _personaId: string): Pro
   /* Reads and seeding must not rearm sending or watching. */
 }
 
-async function ensureLiveCatalog(sql: Sql, userId: string, personaId: string): Promise<void> {
-  const existing = await sql.query<{ sku: string }>(
-    `select sku from agent_catalog where persona_id = $1`,
-    [personaId],
-  );
-  const have = new Set(existing.map((r) => r.sku));
-  for (const row of DEFAULT_CATALOG) {
-    if (have.has(row.sku)) continue;
-    await sql.query(
-      `insert into agent_catalog (id, user_id, persona_id, sku, title, price_cents, rail, eligibility)
-       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [newId("sku"), userId, personaId, row.sku, row.title, row.priceCents, row.rail, row.eligibility],
-    );
-  }
-  if (RETIRED_SKUS.length > 0) {
-    await sql.query(
-      `update agent_catalog set active = false
-        where persona_id = $1 and sku = any($2::text[])`,
-      [personaId, RETIRED_SKUS],
-    ).catch(() => undefined);
-  }
+async function ensureLiveCatalog(_sql: Sql, _userId: string, _personaId: string): Promise<void> {
+  /* Live desks start with no published commercial defaults. Isolated fixtures
+   * publish through the operator Business path only. */
 }
 
 function deskRoster(userId: string, personaName: string): { name: string; tone: AgentTone }[] {
@@ -155,13 +136,7 @@ export async function ensureSeed(userId: string): Promise<string> {
     );
   }
 
-  for (const row of DEFAULT_CATALOG) {
-    await sql.query(
-      `insert into agent_catalog (id, user_id, persona_id, sku, title, price_cents, rail, eligibility)
-       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
-      [newId("sku"), userId, personaId, row.sku, row.title, row.priceCents, row.rail, row.eligibility],
-    );
-  }
+  /* No commercial catalog on a new live desk. */
 
   await sql.query(
     `insert into agent_seats (id, user_id, persona_id, kind, capacity, held)

@@ -18,7 +18,7 @@ export function AppErrorComponent({ error }: ErrorComponentProps) {
       </span>
       <h1 className="text-lg font-medium tracking-tight">Something went wrong</h1>
       <p className="max-w-md text-sm break-words text-muted" role="alert">
-        {error.message || "An unexpected error occurred. Try reloading the page."}
+        {error instanceof Error ? error.message : "An unexpected error occurred. Try reloading the page."}
       </p>
       <p className="font-mono text-[11px] tracking-wide text-muted">Ref {id}</p>
       <div className="mt-2 flex gap-4 text-sm">

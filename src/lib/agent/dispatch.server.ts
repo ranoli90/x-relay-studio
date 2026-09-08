@@ -72,6 +72,11 @@ async function loadPeerSend(): Promise<PeerSend | null> {
 export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<AutoDispatchResult> {
   const fence = preSendFence(opts);
   if (!fence.allow) return { status: "fail", error: fence.reason };
+  const { loadLiveFinalState, recordDispatchAttempt, finishDispatchAttempt } = await import(
+    "@/lib/operator/persist.server"
+  );
+  const { revalidateForSend } = await import("@/lib/operator/state");
+  const captured = await loadLiveFinalState(opts.userId, opts.threadId);
   let send: PeerSend | null;
   try {
     send = await loadPeerSend();
@@ -79,8 +84,18 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
     return classifyThrown(err);
   }
   if (!send) return { status: "not_live" };
-  const fenceAgain = preSendFence(opts);
-  if (!fenceAgain.allow) return { status: "fail", error: fenceAgain.reason };
+  const live = await loadLiveFinalState(opts.userId, opts.threadId);
+  const check = revalidateForSend(captured, live);
+  if (!check.allow) return { status: "fail", error: check.reason };
+  const conversationId = opts.chat ?? opts.peer;
+  await recordDispatchAttempt({
+    userId: opts.userId,
+    conversationId,
+    body: opts.body,
+    captured,
+    live,
+    status: "sending",
+  });
   try {
     const result = await send({
       userId: opts.userId,
@@ -89,14 +104,35 @@ export async function tryDispatchAutoSend(opts: AutoDispatchInput): Promise<Auto
       body: opts.body,
       agentName: opts.agentName,
       threadId: opts.threadId,
-      accountGeneration: opts.accountGeneration,
-      consentEpoch: opts.consentEpoch,
-      takeover: opts.takeover,
-      optOut: opts.optOut,
-      emergencyStop: opts.emergencyStop,
+      accountGeneration: live.accountGeneration,
+      consentEpoch: live.consentEpoch,
+      takeover: live.takeover,
+      optOut: live.optOut,
+      emergencyStop: live.emergencyStop,
     });
-    return classifyReturned(result);
+    const classified = classifyReturned(result);
+    await finishDispatchAttempt(
+      opts.userId,
+      conversationId,
+      classified.status === "ok" ? "confirmed" : classified.status === "uncertain" ? "uncertain" : "failed",
+      classified.status === "ok" ? null : classified.status === "not_live" ? "not_live" : classified.error,
+      classified.status === "ok" ? classified.telegramMessageId : null,
+    );
+    return classified;
   } catch (err) {
-    return classifyThrown(err);
+    const classified = classifyThrown(err);
+    const failReason =
+      classified.status === "uncertain" || classified.status === "fail"
+        ? classified.error
+        : classified.status === "not_live"
+          ? "not_live"
+          : "failed";
+    await finishDispatchAttempt(
+      opts.userId,
+      conversationId,
+      classified.status === "uncertain" ? "uncertain" : "failed",
+      failReason,
+    );
+    return classified;
   }
 }

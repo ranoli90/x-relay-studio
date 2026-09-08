@@ -80,43 +80,24 @@ async function resolveChat(
     };
   };
 
-  try {
-    const rows = await sql.query<{
-      id: string;
-      kind: "notes" | "bot" | "user";
-      peer_id: string | null;
-      access_hash: string | null;
-      peer_kind: string | null;
-    }>(
-      `select id, kind, peer_id, access_hash, peer_kind
-         from telegram_chats
-        where user_id = $1
-          and (
-            ($2::text is not null and (id = $2 or peer_id = $2))
-            or ($3::text is not null and (id = $3 or peer_id = $3))
-          )
-        limit 1`,
-      [userId, a, b],
-    );
-    return rows[0] ? map(rows[0]) : null;
-  } catch {
-    const rows = await sql.query<{
-      id: string;
-      kind: "notes" | "bot" | "user";
-      peer_id: string | null;
-    }>(
-      `select id, kind, peer_id
-         from telegram_chats
-        where user_id = $1
-          and (
-            ($2::text is not null and (id = $2 or peer_id = $2))
-            or ($3::text is not null and (id = $3 or peer_id = $3))
-          )
-        limit 1`,
-      [userId, a, b],
-    );
-    return rows[0] ? map(rows[0]) : null;
-  }
+  const rows = await sql.query<{
+    id: string;
+    kind: "notes" | "bot" | "user";
+    peer_id: string | null;
+    access_hash: string | null;
+    peer_kind: string | null;
+  }>(
+    `select id, kind, peer_id, access_hash, peer_kind
+       from telegram_chats
+      where user_id = $1
+        and (
+          ($2::text is not null and (id = $2 or peer_id = $2))
+          or ($3::text is not null and (id = $3 or peer_id = $3))
+        )
+      limit 1`,
+    [userId, a, b],
+  );
+  return rows[0] ? map(rows[0]) : null;
 }
 
 async function commitLocal(opts: {
@@ -162,6 +143,16 @@ export async function agentSendToPeer(opts: {
 
   const fence = preSendFence(opts);
   if (!fence.allow) return { ok: false, reason: fence.reason };
+
+  const { loadLiveFinalState } = await import("@/lib/operator/persist.server");
+  const { revalidateForSend } = await import("@/lib/operator/state");
+  const captured = await loadLiveFinalState(opts.userId, opts.threadId);
+  if (captured.emergencyStop) return { ok: false, reason: "emergency_stop" };
+  if (captured.takeover) return { ok: false, reason: "takeover" };
+  if (captured.optOut) return { ok: false, reason: "opt_out" };
+  if (!captured.processingPermission) return { ok: false, reason: "permission_revoked" };
+  if (!captured.conversationPermitted) return { ok: false, reason: "not_permitted" };
+  if (!captured.accountLive) return { ok: false, reason: "not_live" };
 
   const chat = await resolveChat(opts.userId, opts.chatId, opts.peerId);
   if (!chat) return { ok: false, reason: "chat_not_found" };
@@ -271,8 +262,20 @@ export async function agentSendToPeer(opts: {
     return { ok: false, reason: fenceLive.reason };
   }
 
+  const liveBeforeLease = await loadLiveFinalState(opts.userId, opts.threadId);
+  const preLease = revalidateForSend(captured, liveBeforeLease);
+  if (!preLease.allow) {
+    await failSendIntent(intentId, opts.userId, "failed", preLease.reason);
+    return { ok: false, reason: preLease.reason };
+  }
+
   try {
     const sent = await withMtprotoLease(opts.userId, async () => {
+      const live = await loadLiveFinalState(opts.userId, opts.threadId);
+      const check = revalidateForSend(captured, live);
+      if (!check.allow) {
+        throw Object.assign(new Error(check.reason), { code: "stale_fence", reason: check.reason });
+      }
       const result = await sendAsUser({
         apiId: material.apiId,
         apiHash: material.apiHash,
@@ -297,6 +300,12 @@ export async function agentSendToPeer(opts: {
     });
     return { ok: true, status: "sent", telegramMessageId: sent.telegramMessageId };
   } catch (err) {
+    const stale = err && typeof err === "object" && "code" in err && (err as { code?: string }).code === "stale_fence";
+    if (stale) {
+      const reason = (err as { reason?: string }).reason ?? "stale_fence";
+      await failSendIntent(intentId, opts.userId, "failed", reason);
+      return { ok: false, reason };
+    }
     const outcome = sendOutcomeFromError(err);
     await failSendIntent(
       intentId,

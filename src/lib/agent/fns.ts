@@ -618,12 +618,14 @@ export const setAutoSend = createServerFn({ method: "POST" })
     const personaId = await ensureSeed(context.userId);
     const sql = await getSql();
     const on = Boolean(data.on);
-    await sql.query(`update agent_personas set auto_send = $1, automation_mode = $2 where id = $3 and user_id = $4`, [
-      on,
-      on ? "approved_auto" : "draft",
-      personaId,
-      context.userId,
-    ]);
+    await sql.query(
+      `update agent_personas
+          set auto_send = $1,
+              desired_auto_reply = $1,
+              automation_mode = $2
+        where id = $3 and user_id = $4`,
+      [on, on ? "approved_auto" : "draft", personaId, context.userId],
+    );
     kickAgentLoop(context.userId);
     return { ok: true, on };
   });

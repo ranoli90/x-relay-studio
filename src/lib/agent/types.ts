@@ -70,6 +70,10 @@ export type UnderstandResult = {
   wantsSku: string | null;
   gfeNamed: boolean;
   mediaKind: "none" | "photo" | "receipt" | "screenshot";
+  negatedSkus?: string[];
+  quoted?: boolean;
+  answerToPending?: string | null;
+  intents?: Intent[];
 };
 
 export type SafetyResult = {
@@ -98,6 +102,7 @@ export type CatalogRow = {
   priceCents: number;
   rail: string;
   eligibility: string;
+  currency?: string;
 };
 
 export type ClockSlot = {
@@ -120,6 +125,9 @@ export type WriteInput = {
   inbound: string;
   proofAvailable?: boolean;
   deliveryConfirmed?: boolean;
+  memoryFacts?: string[];
+  pendingQuestion?: string | null;
+  quoteSnapshot?: { sku: string; title: string; amountLabel: string } | null;
 };
 
 export type WriteResult = {

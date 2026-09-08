@@ -569,6 +569,8 @@ export const telegramUnlinkFn = createServerFn({ method: "POST" })
     await wipeUserSession(context.userId);
     await deleteCredentials(context.userId);
     await unlinkAccount(context.userId);
+    const { eraseOperatorDerivedData } = await import("@/lib/operator/persist.server");
+    await eraseOperatorDerivedData(context.userId);
     console.info("[telegram]", { event: "disconnect", userId: context.userId });
     return { ok: true as const };
   });

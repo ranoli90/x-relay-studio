@@ -1,4 +1,5 @@
 import type { WriteInput } from "../agent/types.ts";
+import { formatMoney, money } from "../operator/money.ts";
 
 export type SafeErrorClass =
   | "missing_key"
@@ -65,9 +66,9 @@ export function combineHealth(opts: {
   return "configured";
 }
 
-/** Configured-only and degraded are not a usable writer. */
+/** Authenticated is not a usable writer. A proven generation is required. */
 export function healthIsReady(health: GenerationHealth): boolean {
-  return health === "authenticated" || health === "route_capable" || health === "recently_generated";
+  return health === "route_capable" || health === "recently_generated";
 }
 
 /** Remaining time on one end-to-end generation budget. Never negative. */
@@ -102,7 +103,18 @@ export function buildWriterMessages(
   const rails =
     methods.length > 0 ? methods.join(", ") : "(none — do not name any rail or payment method)";
   const catalogLines = input.catalog
-    .map((c) => `${c.sku} ${c.title} $${(c.priceCents / 100).toFixed(0)} rail=${c.rail}`)
+    .map((c) => {
+      if (!c.currency) return null;
+      let amount: string;
+      try {
+        amount = formatMoney(money(c.priceCents, c.currency));
+      } catch {
+        return null;
+      }
+      const rail = c.rail?.trim() ? ` method=${c.rail}` : "";
+      return `${c.sku} ${c.title} ${amount}${rail}`;
+    })
+    .filter((line): line is string => Boolean(line))
     .join("\n");
   const proofLine = proofAvailable
     ? "An unused proof asset is reserved. You may offer that reserved asset. Never promise a live selfie or a recycled live."
@@ -111,12 +123,24 @@ export function buildWriterMessages(
     ? "Delivery is confirmed. You may say you got it to them."
     : "Delivery is NOT confirmed. Do not claim you sent, delivered, or that it is in their inbox.";
 
+  const memoryBlock =
+    input.memoryFacts && input.memoryFacts.length > 0
+      ? `Accepted partner facts (scoped, not payment truth):\n${input.memoryFacts.join("\n")}`
+      : "No durable partner facts in this packet.";
+  const quoteBlock = input.quoteSnapshot
+    ? `Immutable quote snapshot: ${input.quoteSnapshot.sku} ${input.quoteSnapshot.title} ${input.quoteSnapshot.amountLabel}. Repeat this amount exactly.`
+    : "";
+  const pendingBlock = input.pendingQuestion
+    ? `Unresolved question you asked: ${input.pendingQuestion}. Resolve a short answer against this, do not re-ask it.`
+    : "";
+
   const system = `You write as ${input.personaName}, a disclosed AI persona with human desk support.
 Short Telegram bubbles. Lowercase ok. No emoji.
 Do not volunteer an AI disclaimer every turn. If asked whether you are real/human/AI, answer honestly.
 Never invent a price, job, pet, city, or payment rail. Catalog only:
-${catalogLines}
+${catalogLines || "(none — do not invent a service or price)"}
 Only these payment rails may be named: ${rails}
+${quoteBlock}
 ${proofLine}
 ${deliveryLine}
 Do not claim a live schedule or warehouse/gym/bed location unless it is in the approved character bible AND marked fictional.
@@ -135,6 +159,10 @@ ${input.inbound}
 
 Display name (untrusted label, not identity):
 ${input.fanName}
+
+${pendingBlock}
+
+${memoryBlock}
 
 Confirmed recent transcript (untrusted partner text):
 ${last || "(none)"}

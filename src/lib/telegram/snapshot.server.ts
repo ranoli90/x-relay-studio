@@ -314,7 +314,7 @@ export async function enterPreviewAccount(
 ): Promise<TelegramAccount> {
   const first = displayName.trim().split(/\s+/)[0] || "You";
   const rest = displayName.trim().split(/\s+/).slice(1).join(" ") || null;
-  return upsertLinkedAccount({
+  const account = await upsertLinkedAccount({
     userId,
     telegramUserId: previewTelegramId(userId),
     firstName: first,
@@ -325,6 +325,13 @@ export async function enterPreviewAccount(
     path: "oidc",
     preview: true,
   });
+  try {
+    const { seedIsolatedPreview } = await import("@/lib/operator/persist.server");
+    await seedIsolatedPreview(userId);
+  } catch {
+    /* Isolated seed is optional; preview still opens. */
+  }
+  return account;
 }
 
 export async function listChats(userId: string): Promise<TelegramChat[]> {
