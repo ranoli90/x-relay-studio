@@ -11,3 +11,7 @@ export * from "./kernel.ts";
 export * from "./fixtures.ts";
 export * from "./interpret.ts";
 export * from "./effective-state.ts";
+export * from "./debounce.ts";
+export * from "./quotes.ts";
+export * from "./erase.ts";
+export * from "./memory.ts";

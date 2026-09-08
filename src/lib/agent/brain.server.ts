@@ -46,6 +46,39 @@ function colText(row: object, key: string, fallback = ""): string {
   return typeof v === "string" && v.length > 0 ? v : fallback;
 }
 
+function conversationIsPermitted(persona: object, thread: object): boolean {
+  return colBool(persona, "processing_permission") && !colBool(thread, "opt_out");
+}
+
+async function quoteSnapshotForPlan(
+  userId: string,
+  customerId: string,
+  sku: string | null | undefined,
+): Promise<{ sku: string; title: string; amountLabel: string } | null> {
+  if (!sku) return null;
+  const { loadPublishedProjection, snapshotQuote } = await import("@/lib/operator/persist.server");
+  const published = await loadPublishedProjection(userId);
+  const offer = published?.offers.find((o) => o.serviceKey === sku || o.id === sku);
+  if (!published || !offer) return null;
+  const sql = await getSql();
+  const dest = await sql.query<{ id: string }>(
+    `select id from payment_destinations where user_id = $1 order by created_at desc limit 1`,
+    [userId],
+  );
+  const snap = await snapshotQuote(userId, {
+    customerId,
+    bindingId: published.bindingId,
+    offerId: offer.id,
+    serviceKey: offer.serviceKey,
+    title: offer.title,
+    amountMinor: offer.amount.minor,
+    currency: offer.amount.currency,
+    destinationId: dest[0]?.id ?? null,
+    businessRevision: published.revision,
+  });
+  return "error" in snap ? null : snap;
+}
+
 async function thought(
   sql: Awaited<ReturnType<typeof getSql>>,
   userId: string,
@@ -112,14 +145,7 @@ async function commitBubbles(
         (id, user_id, thread_id, role, body, workflow, offer_id, auto, status, agent_name, origin, reply_id, bubble_index)
        values ($1,$2,$3,'draft',$4,$5,$6,false,'held',$7,$8,$9,$10)`,
       [id, opts.userId, opts.threadId, bubble, opts.workflow, opts.offerId, opts.agentName, opts.origin, replyId, i],
-    ).catch(async () => {
-      await sql.query(
-        `insert into agent_messages
-          (id, user_id, thread_id, role, body, workflow, offer_id, auto, status, agent_name)
-         values ($1,$2,$3,'draft',$4,$5,$6,false,'held',$7)`,
-        [id, opts.userId, opts.threadId, bubble, opts.workflow, opts.offerId, opts.agentName],
-      );
-    });
+    );
   }
   await recordActivity(sql, {
     userId: opts.userId,
@@ -175,14 +201,7 @@ async function commitBubbles(
                 transport_message_id = $3
           where id = $1 and user_id = $2`,
         [id, opts.userId, result.telegramMessageId ?? null],
-      ).catch(async () => {
-        await sql.query(
-          `update agent_messages
-              set role = 'persona', status = 'sent', auto = true
-            where id = $1 and user_id = $2`,
-          [id, opts.userId],
-        );
-      });
+      );
       sent += 1;
       continue;
     }
@@ -235,7 +254,7 @@ async function completeIdempotency(
         set status = 'completed', thread_id = $3, result_json = $4, lease_until = null
       where user_id = $1 and key = $2`,
     [userId, key, result.threadId, JSON.stringify(result)],
-  ).catch(() => undefined);
+  );
 }
 
 type InboundResult = { threadId: string; workflow: WorkflowId; held: boolean; killed: boolean; auto: boolean };
@@ -268,17 +287,6 @@ async function claimOrReplayIdempotency(
         `select status, thread_id, result_json, lease_until from agent_idempotency
           where user_id = $1 and key = $2 limit 1`,
         [userId, key],
-      ).catch(async () =>
-        sql.query<{
-          status: string | null;
-          thread_id: string | null;
-          result_json: string | null;
-          lease_until: string | Date | null;
-        }>(
-          `select null as status, thread_id, null as result_json, null as lease_until from agent_idempotency
-            where user_id = $1 and key = $2 limit 1`,
-          [userId, key],
-        ),
       )
     )[0];
 
@@ -305,13 +313,7 @@ async function claimOrReplayIdempotency(
             and (lease_until is null or lease_until < now())
           returning id`,
         [userId, key],
-      ).catch(async () => {
-        await sql.query(
-          `update agent_idempotency set key = key where user_id = $1 and key = $2`,
-          [userId, key],
-        );
-        return [{ id: "reclaimed" }];
-      });
+      );
       if (reclaimed[0]) return "proceed";
       return heldIngest(threadId ?? existing.thread_id ?? "");
     }
@@ -364,26 +366,14 @@ export async function processInbound(opts: {
       quiet_end: number;
       emergency_stop?: boolean;
       automation_mode?: string;
+      processing_permission?: boolean;
     }>(
       `select id, display_name, bible, timezone, auto_send, quiet_start, quiet_end,
               coalesce(emergency_stop, false) as emergency_stop,
-              coalesce(automation_mode, 'draft') as automation_mode
-         from agent_personas where id = $1`,
-      [personaId],
-    ).catch(() =>
-      sql.query<{
-        id: string;
-        display_name: string;
-        bible: string;
-        timezone: string;
-        auto_send: boolean;
-        quiet_start: number;
-        quiet_end: number;
-      }>(
-        `select id, display_name, bible, timezone, auto_send, quiet_start, quiet_end
-           from agent_personas where id = $1`,
-        [personaId],
-      ),
+              coalesce(automation_mode, 'draft') as automation_mode,
+              coalesce(processing_permission, false) as processing_permission
+         from agent_personas where id = $1 and user_id = $2`,
+      [personaId, opts.userId],
     )
   )[0];
   if (!persona) throw new Error("persona missing");
@@ -434,21 +424,8 @@ export async function processInbound(opts: {
               coalesce(adult_eligibility, 'unknown') as adult_eligibility,
               pending_question
          from agent_threads
-        where id = $1`,
-      [threadId],
-    ).catch(() =>
-      sql.query<{
-        takeover: boolean;
-        workflow: string;
-        last_inbound_at: string | Date | null;
-        last_outbound_at: string | Date | null;
-        agent_name: string | null;
-        state?: string;
-      }>(
-        `select takeover, workflow, last_inbound_at, last_outbound_at, agent_name, state from agent_threads
-          where id = $1`,
-        [threadId],
-      ),
+        where id = $1 and user_id = $2`,
+      [threadId, opts.userId],
     )
   )[0];
 
@@ -461,13 +438,7 @@ export async function processInbound(opts: {
     `insert into agent_messages (id, user_id, thread_id, role, body, status, origin)
      values ($1,$2,$3,'fan',$4,'sent','observed_partner')`,
     [newId("msg"), opts.userId, threadId, opts.text],
-  ).catch(async () => {
-    await sql.query(
-      `insert into agent_messages (id, user_id, thread_id, role, body, status)
-       values ($1,$2,$3,'fan',$4,'sent')`,
-      [newId("msg"), opts.userId, threadId, opts.text],
-    );
-  });
+  );
   await sql.query(
     `update agent_threads set last_inbound_at = $1, unread = unread + 1 where id = $2`,
     [now.toISOString(), threadId],
@@ -489,12 +460,7 @@ export async function processInbound(opts: {
     await sql.query(
       `update agent_threads set opt_out = true, opt_out_at = now(), takeover = true, state = 'killed', workflow = 'W15_HANDOFF' where id = $1`,
       [threadId],
-    ).catch(async () => {
-      await sql.query(
-        `update agent_threads set takeover = true, state = 'killed', workflow = 'W15_HANDOFF' where id = $1`,
-        [threadId],
-      );
-    });
+    );
     await thought(sql, opts.userId, threadId, "handoff", "Partner opt-out. No reply.");
     const result = { threadId, workflow: "W15_HANDOFF" as const, held: true, killed: true, auto: false };
     await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
@@ -541,14 +507,9 @@ export async function processInbound(opts: {
     [threadId],
   );
   const turns = Number(countRows[0]?.n ?? 1);
-  let catalogRows: CatalogRow[] = [];
-  try {
-    const { catalogForPlanning } = await import("@/lib/operator/persist.server");
-    catalogRows = await catalogForPlanning(opts.userId);
-  } catch {
-    catalogRows = [];
-  }
-  const pendingQuestion = (thread as { pending_question?: string | null }).pending_question ?? null;
+  const { catalogForPlanning } = await import("@/lib/operator/persist.server");
+  const catalogRows = await catalogForPlanning(opts.userId);
+  const pendingQuestion = thread.pending_question ?? null;
   const u = understandLocal(opts.text, {
     lifetimeCents: fan.lifetime_cents,
     source: (opts.source ?? fan.source) as Source,
@@ -580,13 +541,7 @@ export async function processInbound(opts: {
       `select count(*)::int as n from conversation_reservations
         where persona_id = $1 and partner_id = $2 and kind = 'gfe' and status in ('held','confirmed')`,
       [personaId, fanId],
-    ).catch(async () => {
-      const seats = await sql.query<{ held: number }>(
-        `select held from agent_seats where persona_id = $1 and kind = 'gfe'`,
-        [personaId],
-      );
-      return [{ n: Number(seats[0]?.held ?? 0) > 0 ? 1 : 0 }];
-    })
+    )
   )[0];
   const openCount = (
     await sql.query<{ n: number }>(
@@ -731,20 +686,7 @@ export async function processInbound(opts: {
     return result;
   }
 
-  const catalog = await sql.query<{
-    id: string;
-    sku: string;
-    title: string;
-    price_cents: number;
-    rail: string;
-    eligibility: string;
-  }>(
-    `select id, sku, title, price_cents, rail, eligibility from agent_catalog
-      where persona_id = $1 and active = true`,
-    [personaId],
-  );
-  void catalog;
-  /* Published operator catalog is the only live commercial source. agent_catalog is never a live default. */
+  /* Published operator catalog is the only live commercial source. */
   const diary = await sql.query<{ voice: DiaryVoice; body: string }>(
     `select voice, body from agent_diary where fan_id = $1 order by created_at desc limit 12`,
     [fanId],
@@ -754,13 +696,6 @@ export async function processInbound(opts: {
       where thread_id = $1
       order by created_at desc limit 40`,
     [threadId],
-  ).catch(() =>
-    sql.query<{ role: string; body: string; status: string }>(
-      `select role, body, status from agent_messages
-        where thread_id = $1
-        order by created_at desc limit 40`,
-      [threadId],
-    ),
   );
   const confirmed = confirmedTranscript(last).reverse();
 
@@ -793,19 +728,7 @@ export async function processInbound(opts: {
        on conflict do nothing
        returning id`,
       [newId("rsv"), opts.userId, personaId, fanId],
-    ).catch(async () => {
-      try {
-        return await sql.query<{ id: string }>(
-          `insert into conversation_reservations
-            (id, user_id, persona_id, partner_id, kind, status, expires_at)
-           values ($1,$2,$3,$4,'gfe','held', now() + interval '2 hours')
-           returning id`,
-          [newId("rsv"), opts.userId, personaId, fanId],
-        );
-      } catch {
-        return [] as { id: string }[];
-      }
-    });
+    );
     if (reserved[0]) {
       await sql.query(
         `update agent_seats set held = least(capacity, held + 1), updated_at = now()
@@ -832,19 +755,6 @@ export async function processInbound(opts: {
         )
         returning id, label`,
       [fanId, personaId],
-    ).catch(async () =>
-      sql.query<{ id: string; label: string }>(
-        `update agent_proof_assets
-            set used_fan_id = $1
-          where id = (
-            select id from agent_proof_assets
-             where persona_id = $2 and used_fan_id is null and live = false
-             limit 1
-          )
-            and used_fan_id is null
-          returning id, label`,
-        [fanId, personaId],
-      ),
     );
     if (claimed[0]) {
       await thought(sql, opts.userId, threadId, "plan", `Proof reserved: ${claimed[0].label}. 1 asset / partner.`);
@@ -867,6 +777,7 @@ export async function processInbound(opts: {
     deliveryConfirmed: Number(justDelivered?.n ?? 0) > 0,
     memoryFacts,
     pendingQuestion,
+    quoteSnapshot: await quoteSnapshotForPlan(opts.userId, fanId!, plan.sku),
   });
   await thought(
     sql,
@@ -896,7 +807,7 @@ export async function processInbound(opts: {
       generationOrigin: generationOriginForWrite(written),
       adultEligibility: (colText(thread, "adult_eligibility", "unknown") as "allowed" | "unknown" | "disallowed") ?? "unknown",
       accountLive: Boolean(fan.tg_peer_id),
-      conversationPermitted: true,
+      conversationPermitted: conversationIsPermitted(persona, thread),
     });
 
   if (written.bubbles.length === 0) {
@@ -1056,19 +967,6 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
          from agent_threads
         where id = $1 and user_id = $2`,
       [threadId, userId],
-    ).catch(() =>
-      sql.query<{
-        takeover: boolean;
-        last_outbound_at: string | Date | null;
-        last_inbound_at: string | Date | null;
-        fan_id: string;
-        persona_id: string;
-        agent_name: string | null;
-      }>(
-        `select takeover, last_outbound_at, last_inbound_at, fan_id, persona_id, agent_name from agent_threads
-          where id = $1 and user_id = $2`,
-        [threadId, userId],
-      ),
     )
   )[0];
   if (!thread || thread.takeover || colBool(thread, "opt_out")) return;
@@ -1100,24 +998,14 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
       quiet_end: number;
       emergency_stop?: boolean;
       automation_mode?: string;
+      processing_permission?: boolean;
     }>(
       `select display_name, bible, timezone, auto_send, quiet_start, quiet_end,
               coalesce(emergency_stop, false) as emergency_stop,
-              coalesce(automation_mode, 'draft') as automation_mode
-         from agent_personas where id = $1`,
-      [thread.persona_id],
-    ).catch(() =>
-      sql.query<{
-        display_name: string;
-        bible: string;
-        timezone: string;
-        auto_send: boolean;
-        quiet_start: number;
-        quiet_end: number;
-      }>(
-        `select display_name, bible, timezone, auto_send, quiet_start, quiet_end from agent_personas where id = $1`,
-        [thread.persona_id],
-      ),
+              coalesce(automation_mode, 'draft') as automation_mode,
+              coalesce(processing_permission, false) as processing_permission
+         from agent_personas where id = $1 and user_id = $2`,
+      [thread.persona_id, userId],
     )
   )[0];
   const fan = (
@@ -1128,39 +1016,21 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
       source: string;
       tg_peer_id: string | null;
     }>(
-      `select display_name, lifetime_cents, archetype, source, tg_peer_id from agent_fans where id = $1`,
-      [thread.fan_id],
+      `select display_name, lifetime_cents, archetype, source, tg_peer_id from agent_fans where id = $1 and user_id = $2`,
+      [thread.fan_id, userId],
     )
   )[0];
   if (!persona || !fan) return;
   if (colBool(persona, "emergency_stop")) return;
 
-  const catalog = await sql.query<{
-    id: string;
-    sku: string;
-    title: string;
-    price_cents: number;
-    rail: string;
-    eligibility: string;
-  }>(
-    `select id, sku, title, price_cents, rail, eligibility from agent_catalog
-      where persona_id = $1 and active = true`,
-    [thread.persona_id],
-  );
-  const catalogRows: CatalogRow[] = catalog.map((r) => ({
-    id: r.id,
-    sku: r.sku,
-    title: r.title,
-    priceCents: r.price_cents,
-    rail: r.rail,
-    eligibility: r.eligibility,
-  }));
+  const { catalogForPlanning } = await import("@/lib/operator/persist.server");
+  const catalogRows = await catalogForPlanning(userId);
   const diary = await sql.query<{ voice: DiaryVoice; body: string }>(
     `select voice, body from agent_diary where fan_id = $1 order by created_at desc limit 12`,
     [thread.fan_id],
   );
-  const last = await sql.query<{ role: string; body: string; status?: string }>(
-    `select role, body, status from agent_messages
+  const last = await sql.query<{ role: string; body: string; status?: string; origin?: string | null }>(
+    `select role, body, status, origin from agent_messages
       where thread_id = $1
       order by created_at desc limit 20`,
     [threadId],
@@ -1174,6 +1044,7 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
       diary,
       last: confirmed,
       lifetimeCents: fan.lifetime_cents,
+      userId,
     });
   } catch {
     /* memory must never block jobs */
@@ -1230,6 +1101,7 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     catalog: catalogRows,
     fanName: fan.display_name,
     inbound: "",
+    quoteSnapshot: await quoteSnapshotForPlan(userId, thread.fan_id, plan.sku),
   });
   if (written.bubbles.length === 0) return;
   const agentName = await ensureAgentName(sql, userId, threadId, thread.agent_name);
@@ -1248,7 +1120,7 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     automationMode: parseAutomationMode(colText(persona, "automation_mode", "draft")),
     generationOrigin: generationOriginForWrite(written),
     accountLive: Boolean(fan.tg_peer_id),
-    conversationPermitted: true,
+    conversationPermitted: conversationIsPermitted(persona, thread),
   });
   const committed = await commitBubbles(sql, {
     userId,

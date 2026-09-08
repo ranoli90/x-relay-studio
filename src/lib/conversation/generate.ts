@@ -104,16 +104,17 @@ export function buildWriterMessages(
     methods.length > 0 ? methods.join(", ") : "(none — do not name any rail or payment method)";
   const catalogLines = input.catalog
     .map((c) => {
-      const currency = c.currency || "USD";
+      if (!c.currency) return null;
       let amount: string;
       try {
-        amount = formatMoney(money(c.priceCents, currency));
+        amount = formatMoney(money(c.priceCents, c.currency));
       } catch {
-        amount = `$${(c.priceCents / 100).toFixed(2)}`;
+        return null;
       }
       const rail = c.rail?.trim() ? ` method=${c.rail}` : "";
       return `${c.sku} ${c.title} ${amount}${rail}`;
     })
+    .filter((line): line is string => Boolean(line))
     .join("\n");
   const proofLine = proofAvailable
     ? "An unused proof asset is reserved. You may offer that reserved asset. Never promise a live selfie or a recycled live."

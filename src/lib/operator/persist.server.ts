@@ -17,6 +17,8 @@ import { evaluatePaymentEvidence, publicPaymentView } from "./payments.ts";
 import { money } from "./money.ts";
 import { effectiveAutoReply, type AutoReplyView } from "./effective-state.ts";
 import { healthIsReady, type GenerationHealth } from "@/lib/conversation/generate.ts";
+import { OPERATOR_ERASE_TABLES } from "./erase.ts";
+import { quoteFromOffer, quoteView, type QuoteView } from "./quotes.ts";
 
 function colBool(row: Record<string, unknown>, key: string): boolean {
   const v = row[key];
@@ -394,13 +396,13 @@ export async function seedIsolatedPreview(userId: string): Promise<void> {
       );
       await tx.query(
         `insert into payment_instructions (id, user_id, binding_id, revision_id, public_copy, currency, approved)
-         values ($1,$2,$3,$4,$5,'USD', true)`,
-        [newOperatorId("ins"), userId, bind.id, revId, structured.paymentCopy],
+         values ($1,$2,$3,$4,$5,$6, true)`,
+        [newOperatorId("ins"), userId, bind.id, revId, structured.paymentCopy, fixture.offer.currency],
       );
       await tx.query(
         `insert into payment_destinations (id, user_id, binding_id, provider, destination_ref, currency)
-         values ($1,$2,$3,'manual_handle','@northlight_pay','USD')`,
-        [newOperatorId("dest"), userId, bind.id],
+         values ($1,$2,$3,'manual_handle','@northlight_pay',$4)`,
+        [newOperatorId("dest"), userId, bind.id, fixture.offer.currency],
       );
     });
   }
@@ -690,7 +692,7 @@ export async function publishBusinessFromBrief(
       await sql.query(
         `insert into payment_instructions (id, user_id, binding_id, revision_id, public_copy, currency, approved)
          values ($1,$2,$3,$4,$5,$6,true)`,
-        [newOperatorId("ins"), userId, bind.id, revId, input.paymentCopy.trim(), structuredOffers[0]?.currency ?? "USD"],
+        [newOperatorId("ins"), userId, bind.id, revId, input.paymentCopy.trim(), structuredOffers[0]!.currency],
       );
     }
     if (input.destinationRef.trim()) {
@@ -702,7 +704,7 @@ export async function publishBusinessFromBrief(
           userId,
           bind.id,
           input.destinationRef.trim(),
-          structuredOffers[0]?.currency ?? "USD",
+          structuredOffers[0]!.currency,
         ],
       );
     }
@@ -931,3 +933,117 @@ export async function recordScopedFact(input: {
     ],
   );
 }
+
+export async function forgetScopedFact(userId: string, factId: string): Promise<boolean> {
+  const sql = await getSql();
+  const rows = await sql.query<{ id: string }>(
+    `update memory_facts set status = 'deleted'
+      where id = $1 and user_id = $2 and status <> 'deleted'
+      returning id`,
+    [factId, userId],
+  );
+  return Boolean(rows[0]);
+}
+
+export async function correctScopedFact(
+  userId: string,
+  factId: string,
+  value: string,
+): Promise<boolean> {
+  const sql = await getSql();
+  return withTransaction(async (tx) => {
+    const prev = await tx.query<{
+      customer_id: string;
+      account_id: string | null;
+      subject: string;
+      predicate: string;
+      speaker: string;
+    }>(
+      `select customer_id, account_id, subject, predicate, speaker
+         from memory_facts where id = $1 and user_id = $2 and status = 'active'`,
+      [factId, userId],
+    );
+    if (!prev[0]) return false;
+    await tx.query(`update memory_facts set status = 'superseded' where id = $1 and user_id = $2`, [
+      factId,
+      userId,
+    ]);
+    await tx.query(
+      `insert into memory_facts
+         (id, user_id, customer_id, account_id, subject, predicate, value, speaker, assertion, confidence, status, supersedes)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,'asserted',1,'active',$9)`,
+      [
+        newOperatorId("fact"),
+        userId,
+        prev[0].customer_id,
+        prev[0].account_id,
+        prev[0].subject,
+        prev[0].predicate,
+        value.slice(0, 400),
+        prev[0].speaker,
+        factId,
+      ],
+    );
+    return true;
+  });
+}
+
+export async function snapshotQuote(
+  userId: string,
+  input: {
+    customerId: string;
+    bindingId: string;
+    offerId: string;
+    serviceKey: string;
+    title: string;
+    amountMinor: number;
+    currency: string;
+    destinationId?: string | null;
+    businessRevision: number;
+  },
+): Promise<QuoteView | { error: string }> {
+  const built = quoteFromOffer({
+    sku: input.serviceKey,
+    title: input.title,
+    amountMinor: input.amountMinor,
+    currency: input.currency,
+    destinationId: input.destinationId,
+    businessRevision: input.businessRevision,
+    customerId: input.customerId,
+  });
+  if ("error" in built) return built;
+  const sql = await getSql();
+  await sql.query(
+    `insert into operator_quotes
+       (id, user_id, customer_id, binding_id, offer_id, service_key, amount_minor, currency, destination_id, business_revision, status)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'open')`,
+    [
+      newOperatorId("quo"),
+      userId,
+      input.customerId,
+      input.bindingId,
+      input.offerId,
+      built.sku,
+      built.amount.minor,
+      built.amount.currency,
+      built.destinationId,
+      built.businessRevision,
+    ],
+  );
+  return quoteView(built);
+}
+
+export async function eraseOperatorDerivedData(userId: string): Promise<{ tables: number; rows: number }> {
+  let rows = 0;
+  await withTransaction(async (tx) => {
+    for (const table of OPERATOR_ERASE_TABLES) {
+      const deleted = await tx.query<{ n: number }>(
+        `with gone as (delete from ${table} where user_id = $1 returning 1) select count(*)::int as n from gone`,
+        [userId],
+      );
+      rows += Number(deleted[0]?.n ?? 0);
+    }
+  });
+  return { tables: OPERATOR_ERASE_TABLES.length, rows };
+}
+

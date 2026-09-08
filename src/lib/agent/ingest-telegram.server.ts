@@ -1,4 +1,4 @@
-import { getSql } from "@/lib/db";
+import { getSql, withTransaction } from "@/lib/db";
 import { ensureSeed } from "./seed.server.ts";
 import { processInbound } from "./brain.server.ts";
 import { newId } from "./ids.ts";
@@ -69,12 +69,7 @@ export async function drainQueuedTelegram(limit = 8, userIds?: string[]): Promis
               set ai_status = 'retry_wait', next_attempt_at = $2
             where id = $1 and ai_status = 'processing'`,
           [row.id, wait],
-        ).catch(async () => {
-          await sql.query(
-            `update telegram_messages set ai_status = 'retry_wait' where id = $1 and ai_status = 'processing'`,
-            [row.id],
-          );
-        });
+        );
       }
     }
   }
@@ -89,88 +84,41 @@ async function selectDueIngress(
   const scoped = Boolean(userIds);
   const params: unknown[] = scoped ? [cap, userIds] : [cap];
   const userClause = scoped ? "and m.user_id = any($2::text[])" : "";
-  try {
-    return await sql.query<DrainRow>(
-      `select m.id, m.user_id, m.chat_id, m.body, m.author_name, m.created_at, m.ai_status,
-              coalesce(m.ai_attempt_count, 0) as ai_attempt_count,
-              s.automation_armed, s.auth_dead,
-              coalesce(s.emergency_stop, false) as emergency_stop,
-              s.activation_watermark,
-              coalesce(p.emergency_stop, false) as persona_emergency_stop,
-              coalesce(p.automation_mode, 'draft') as automation_mode,
-              coalesce(p.processing_permission, false) as processing_permission
-         from telegram_messages m
-         left join telegram_user_sessions s on s.user_id = m.user_id
-         left join agent_personas p on p.user_id = m.user_id
-        where m.from_self = false
-          and m.ai_status in ('queued', 'retry_wait')
-          and (m.next_attempt_at is null or m.next_attempt_at <= now())
-          ${userClause}
-        order by m.created_at asc
-        limit $1`,
-      params,
-    );
-  } catch {
-    const fallback = scoped
-      ? await sql.query<DrainRow>(
-          `select m.id, m.user_id, m.chat_id, m.body, m.author_name, m.created_at, m.ai_status,
-                  0 as ai_attempt_count,
-                  s.automation_armed, s.auth_dead,
-                  false as emergency_stop,
-                  null as activation_watermark,
-                  false as persona_emergency_stop,
-                  'draft' as automation_mode
-             from telegram_messages m
-             left join telegram_user_sessions s on s.user_id = m.user_id
-            where m.ai_status = 'queued' and m.from_self = false
-              and m.user_id = any($2::text[])
-            order by m.created_at asc
-            limit $1`,
-          [cap, userIds],
-        )
-      : await sql.query<DrainRow>(
-          `select m.id, m.user_id, m.chat_id, m.body, m.author_name, m.created_at, m.ai_status,
-                  0 as ai_attempt_count,
-                  s.automation_armed, s.auth_dead,
-                  false as emergency_stop,
-                  null as activation_watermark,
-                  false as persona_emergency_stop,
-                  'draft' as automation_mode
-             from telegram_messages m
-             left join telegram_user_sessions s on s.user_id = m.user_id
-            where m.ai_status = 'queued' and m.from_self = false
-            order by m.created_at asc
-            limit $1`,
-          [cap],
-        );
-    return fallback;
-  }
+  return sql.query<DrainRow>(
+    `select m.id, m.user_id, m.chat_id, m.body, m.author_name, m.created_at, m.ai_status,
+            coalesce(m.ai_attempt_count, 0) as ai_attempt_count,
+            s.automation_armed, s.auth_dead,
+            coalesce(s.emergency_stop, false) as emergency_stop,
+            s.activation_watermark,
+            coalesce(p.emergency_stop, false) as persona_emergency_stop,
+            coalesce(p.automation_mode, 'draft') as automation_mode,
+            coalesce(p.processing_permission, false) as processing_permission
+       from telegram_messages m
+       left join telegram_user_sessions s on s.user_id = m.user_id
+       left join agent_personas p on p.user_id = m.user_id
+      where m.from_self = false
+        and m.ai_status in ('queued', 'retry_wait')
+        and (m.next_attempt_at is null or m.next_attempt_at <= now())
+        ${userClause}
+      order by m.created_at asc
+      limit $1`,
+    params,
+  );
 }
 
 async function claimIngressRow(
   sql: Sql,
   id: string,
 ): Promise<{ id: string; ai_attempt_count: number } | null> {
-  try {
-    const rows = await sql.query<{ id: string; ai_attempt_count: number }>(
-      `update telegram_messages
-          set ai_status = 'processing',
-              ai_attempt_count = coalesce(ai_attempt_count, 0) + 1
-        where id = $1 and ai_status in ('queued', 'retry_wait')
-        returning id, ai_attempt_count`,
-      [id],
-    );
-    return rows[0] ?? null;
-  } catch {
-    const rows = await sql.query<{ id: string }>(
-      `update telegram_messages
-          set ai_status = 'processing'
-        where id = $1 and ai_status = 'queued'
-        returning id`,
-      [id],
-    );
-    return rows[0] ? { id: rows[0].id, ai_attempt_count: 1 } : null;
-  }
+  const rows = await sql.query<{ id: string; ai_attempt_count: number }>(
+    `update telegram_messages
+        set ai_status = 'processing',
+            ai_attempt_count = coalesce(ai_attempt_count, 0) + 1
+      where id = $1 and ai_status in ('queued', 'retry_wait')
+      returning id, ai_attempt_count`,
+    [id],
+  );
+  return rows[0] ?? null;
 }
 
 async function findThreadForChat(
@@ -204,20 +152,38 @@ async function ensureThreadForChat(
   const existing = await findThreadForChat(sql, userId, chatId);
   if (existing) return existing;
   const personaId = await ensureSeed(userId);
-  const fanId = newId("fan");
-  const threadId = newId("thr");
-  await sql.query(
-    `insert into agent_fans
-      (id, user_id, persona_id, display_name, handle, source, archetype, tg_peer_id)
-     values ($1,$2,$3,$4,null,'telegram','new',$5)`,
-    [fanId, userId, personaId, authorName || "Telegram", chatId],
-  );
-  await sql.query(
-    `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
-     values ($1,$2,$3,$4,'W1_INGEST','open')`,
-    [threadId, userId, personaId, fanId],
-  );
-  return { fanId, threadId };
+  return withTransaction(async (tx) => {
+    const existingFan = (
+      await tx.query<{ id: string }>(
+        `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
+        [userId, chatId],
+      )
+    )[0];
+    if (existingFan) {
+      const existingThread = (
+        await tx.query<{ id: string }>(
+          `select id from agent_threads where fan_id = $1 and user_id = $2 limit 1`,
+          [existingFan.id, userId],
+        )
+      )[0];
+      if (!existingThread) return null;
+      return { fanId: existingFan.id, threadId: existingThread.id };
+    }
+    const fanId = newId("fan");
+    const threadId = newId("thr");
+    await tx.query(
+      `insert into agent_fans
+        (id, user_id, persona_id, display_name, handle, source, archetype, tg_peer_id)
+       values ($1,$2,$3,$4,null,'telegram','new',$5)`,
+      [fanId, userId, personaId, authorName || "Telegram", chatId],
+    );
+    await tx.query(
+      `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
+       values ($1,$2,$3,$4,'W1_INGEST','open')`,
+      [threadId, userId, personaId, fanId],
+    );
+    return { fanId, threadId };
+  });
 }
 
 /**
@@ -238,23 +204,26 @@ export async function persistManualOutboundMirror(opts: {
   let existing: AgentTransportRow[] = [];
   const transportHint = opts.telegramMessageId == null ? null : String(opts.telegramMessageId);
   if (transportHint && transportHint !== "0") {
-    existing = await sql
-      .query<{ thread_id: string; origin: string | null; transport_message_id: string | null }>(
-        `select thread_id, origin, transport_message_id
-           from agent_messages
-          where user_id = $1 and transport_message_id = $2
-          limit 8`,
-        [opts.userId, transportHint],
-      )
-      .then((rows) =>
-        rows.map((r) => ({
-          userId: opts.userId,
-          threadId: r.thread_id,
-          transportMessageId: r.transport_message_id,
-          origin: r.origin,
-        })),
-      )
-      .catch(() => [] as AgentTransportRow[]);
+    try {
+      existing = await sql
+        .query<{ thread_id: string; origin: string | null; transport_message_id: string | null }>(
+          `select thread_id, origin, transport_message_id
+             from agent_messages
+            where user_id = $1 and transport_message_id = $2
+            limit 8`,
+          [opts.userId, transportHint],
+        )
+        .then((rows) =>
+          rows.map((r) => ({
+            userId: opts.userId,
+            threadId: r.thread_id,
+            transportMessageId: r.transport_message_id,
+            origin: r.origin,
+          })),
+        );
+    } catch {
+      return "skipped";
+    }
   }
 
   const located = await findThreadForChat(sql, opts.userId, opts.chatId);
@@ -330,38 +299,72 @@ async function processClaimedRow(
 
   if (isNonProcessableInbound(row.body, row.author_name)) return "suppressed";
 
+  const { burstDecision, nextBurstRetryAt } = await import("@/lib/operator/debounce.ts");
+  const neighbors = await sql.query<{ created_at: string | Date }>(
+    `select created_at from telegram_messages
+      where user_id = $1 and chat_id = $2 and from_self = false
+        and ai_status in ('queued', 'retry_wait', 'processing')
+      order by created_at asc`,
+    [row.user_id, row.chat_id],
+  );
+  if (neighbors.length > 1) {
+    const first = new Date(neighbors[0]!.created_at).getTime();
+    const last = new Date(neighbors[neighbors.length - 1]!.created_at).getTime();
+    const now = Date.now();
+    if (
+      burstDecision({
+        firstInboundAt: first,
+        lastInboundAt: last,
+        now,
+        pendingAfter: neighbors.length - 1,
+      }) === "wait"
+    ) {
+      await sql.query(
+        `update telegram_messages set ai_status = 'retry_wait', next_attempt_at = $2
+          where id = $1 and ai_status = 'processing'`,
+        [row.id, nextBurstRetryAt(now).toISOString()],
+      );
+      return "retry_wait";
+    }
+  }
+
   const credits = await availableThreads(row.user_id);
 
   const personaId = await ensureSeed(row.user_id);
-  let fan = (
-    await sql.query<{ id: string }>(
-      `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
-      [row.user_id, row.chat_id],
-    )
-  )[0];
-  if (!fan) {
+  const located = await withTransaction(async (tx) => {
+    const existingFan = (
+      await tx.query<{ id: string }>(
+        `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
+        [row.user_id, row.chat_id],
+      )
+    )[0];
+    if (existingFan) {
+      const existingThread = (
+        await tx.query<{ id: string }>(
+          `select id from agent_threads where fan_id = $1 and user_id = $2 limit 1`,
+          [existingFan.id, row.user_id],
+        )
+      )[0];
+      return { fanId: existingFan.id, threadId: existingThread?.id ?? null };
+    }
     const fanId = newId("fan");
     const threadId = newId("thr");
-    await sql.query(
+    await tx.query(
       `insert into agent_fans
         (id, user_id, persona_id, display_name, handle, source, archetype, tg_peer_id)
        values ($1,$2,$3,$4,null,'telegram','new',$5)`,
       [fanId, row.user_id, personaId, row.author_name || "Telegram", row.chat_id],
     );
-    await sql.query(
+    await tx.query(
       `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
        values ($1,$2,$3,$4,'W1_INGEST','open')`,
       [threadId, row.user_id, personaId, fanId],
     );
-    fan = { id: fanId };
-  }
-  const thread = (
-    await sql.query<{ id: string }>(
-      `select id from agent_threads where fan_id = $1 and user_id = $2 limit 1`,
-      [fan.id, row.user_id],
-    )
-  )[0];
-  if (!thread) return "held";
+    return { fanId, threadId };
+  });
+  if (!located.threadId) return "held";
+  const fan = { id: located.fanId };
+  const thread = { id: located.threadId };
 
   const result = await processInbound({
     userId: row.user_id,

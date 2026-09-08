@@ -19,4 +19,4 @@ Authenticated fixture browser tests: NOT_RUN in this environment.
 | Customer opt-out | setPartnerOptOutFn | conversationId | opt_out + consent_epoch++ | busy | switch | revert | sheet | sheet-optout |
 | Composer | telegramSendFn / saveDraftFn | non-empty, IME | telegram_messages / composer_drafts | sending | confirmed label | restore draft | cache | composer-send |
 | Visible ack | ackVisibleFn | conversation visible | unread=0 | — | badge clear | unread stays | sync | unread-ack |
-| Disconnect | telegramUnlinkFn | confirm dialog | session dropped | busy | navigate | error | — | settings-unlink |
+| Disconnect | telegramUnlinkFn | confirm dialog | session dropped + eraseOperatorDerivedData | busy | navigate | error | — | settings-unlink |

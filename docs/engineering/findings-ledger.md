@@ -12,13 +12,15 @@ Baseline still present on main `2e16ef71`. Repair is on `repair/telegram-assista
 | XR-006 | Keyword routing | SOURCE_FIXED | UNIT_VERIFIED | interpretMessage; catalog-only SKU |
 | XR-007 | Yes vs pending question | SOURCE_FIXED | UNIT_VERIFIED | pendingQuestion on interpret + route |
 | XR-008 | Direct question before pitch | SOURCE_FIXED | UNIT_VERIFIED | W6 answers published item; W5 no forced pitch |
-| XR-009 | Memory override of truth | SOURCE_FIXED | NOT_RUN | writer policy + scoped facts; long-history DB tests remaining |
-| XR-010 | Two same-named customers | SOURCE_FIXED | NOT_RUN | memory_facts tenant+customer scope; isolation test remaining |
+| XR-009 | Memory override of truth | SOURCE_FIXED | UNIT_VERIFIED | writer policy + scoped facts; forget/correct/isolation tests |
+| XR-010 | Two same-named customers | SOURCE_FIXED | UNIT_VERIFIED | memory_facts tenant+customer scope; promptLines isolation test |
+
 | XR-011 | Silent truncation | SOURCE_FIXED | UNIT_VERIFIED | unusableFinish / healthIsReady already in generate.ts |
 | XR-012 | Ingress uniqueness | IN_PROGRESS | NOT_RUN | existing idempotency; two-worker PG remaining |
 | XR-013 | Stale send fence | SOURCE_FIXED | UNIT_VERIFIED | revalidateForSend rejects same object; lease rereads FinalState |
 | XR-014 | Uncertain retry | SOURCE_FIXED | UNIT_VERIFIED | canRetryAttempt |
-| XR-015 | Burst debounce | IN_PROGRESS | NOT_RUN | not fully proven under two-worker PG |
+| XR-015 | Burst debounce | SOURCE_FIXED | UNIT_VERIFIED | burstDecision wait/flush; two-worker PG remaining NOT_RUN |
+
 | XR-016 | Claim leases | IN_PROGRESS | NOT_RUN | existing claim path; crash tests remaining |
 | XR-017 | Fair ingest | SOURCE_FIXED | UNIT_VERIFIED | nextIngestBatch |
 | XR-018 | Permission defaults | SOURCE_FIXED | UNIT_VERIFIED | processing_permission default false |
@@ -26,7 +28,8 @@ Baseline still present on main `2e16ef71`. Repair is on `repair/telegram-assista
 | XR-020 | Stop aggregation | SOURCE_FIXED | UNIT_VERIFIED | persona OR session emergency_stop |
 | XR-021 | Outbox aggregation | SOURCE_FIXED | UNIT_VERIFIED | send_attempts + Activity |
 | XR-022 | Background without tab | SOURCE_FIXED | NOT_RUN | background_run already ticked; isolated only |
-| XR-023 | Schema catch-and-fallback | SOURCE_FIXED | UNIT_VERIFIED | persist.server fail-closed; ingest fail-closed on permission |
+| XR-023 | Schema catch-and-fallback | SOURCE_FIXED | UNIT_VERIFIED | persist, ingest, and brain fail-closed; no silent column fallbacks |
+
 | XR-024 | Coverage / SHA drift | SOURCE_FIXED | UNIT_VERIFIED | recorded in telegram-operator-ledger.md |
 | XR-025 | Media bytes vs library | SOURCE_FIXED | UNIT_VERIFIED | proposals approved_not_sent; honest copy |
 | XR-026 | Incoming attachments | SOURCE_FIXED | UNIT_VERIFIED | captionless allowed |
@@ -36,7 +39,8 @@ Baseline still present on main `2e16ef71`. Repair is on `repair/telegram-assista
 | XR-030 | Atomic publish | SOURCE_FIXED | UNIT_VERIFIED | withTransaction + service_key |
 | XR-031 | Writer untrusted context | SOURCE_FIXED | UNIT_VERIFIED | WRITER_UNTRUSTED_POLICY |
 | XR-032 | Separate ledgers | SOURCE_FIXED | UNIT_VERIFIED | mixesCreditWithCustomer |
-| XR-033 | Quote snapshot | SOURCE_FIXED | UNIT_VERIFIED | operator_quotes table + WriteInput.quoteSnapshot |
+| XR-033 | Quote snapshot | SOURCE_FIXED | UNIT_VERIFIED | operator_quotes + writeWithGateway.quoteSnapshot; missing currency fails closed |
+
 | XR-034 | Composer IME | SOURCE_FIXED | UNIT_VERIFIED | isComposing / keyCode 229 |
 | XR-035 | Draft persistence | SOURCE_FIXED | UNIT_VERIFIED | composer_drafts |
 | XR-036 | Unread ack | SOURCE_FIXED | UNIT_VERIFIED | visibility-aware |
@@ -48,10 +52,12 @@ Baseline still present on main `2e16ef71`. Repair is on `repair/telegram-assista
 | XR-042 | N+1 / pagination | IN_PROGRESS | NOT_RUN | ingest batch bounded; load tests remaining |
 | XR-043 | CI build/E2E | SOURCE_FIXED | NOT_RUN | CI now typecheck+test+build; authenticated E2E remaining |
 | XR-044 | Blinded naturalness | NOT_RUN | NOT_RUN | not a GOLD-score claim |
-| XR-045 | Tenant isolation | SOURCE_FIXED | NOT_RUN | queries scoped by user_id; forged-webhook remaining |
+| XR-045 | Tenant isolation | SOURCE_FIXED | UNIT_VERIFIED | rememberFan requires userId; brain/fan/thread queries scoped; forged-webhook remaining |
+
 | XR-046 | Prompt injection / uploads | IN_PROGRESS | UNIT_VERIFIED | safety refuse; upload tests remaining |
 | XR-047 | PR41 review | SOURCE_FIXED | UNIT_VERIFIED | pr41-disposition.md |
-| XR-048 | Deletion / retention | IN_PROGRESS | NOT_RUN | not proven end-to-end |
+| XR-048 | Deletion / retention | SOURCE_FIXED | UNIT_VERIFIED | erase inventory 17 tables; unlink calls eraseOperatorDerivedData; live proof NOT_RUN |
+
 | XR-049 | Route capability | SOURCE_FIXED | UNIT_VERIFIED | healthIsReady |
 | XR-050 | Isolated samples ≠ live | SOURCE_FIXED | UNIT_VERIFIED | isolated=true + filter |
 | XR-051 | Fixture SQL last_at | SOURCE_FIXED | UNIT_VERIFIED | provider_last_at = $6 |

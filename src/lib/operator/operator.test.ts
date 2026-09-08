@@ -522,3 +522,134 @@ describe("writer health is not key presence", () => {
     assert.equal(healthIsReady("recently_generated"), true);
   });
 });
+
+describe("bounded inbound burst", () => {
+  it("waits inside the quiet window and flushes at the cap or when empty", async () => {
+    const { burstDecision, BURST_QUIET_MS, BURST_MAX_MS } = await import("./debounce.ts");
+    const first = 1_000_000;
+    assert.equal(
+      burstDecision({ firstInboundAt: first, lastInboundAt: first + 200, now: first + 200, pendingAfter: 2 }),
+      "wait",
+    );
+    assert.equal(
+      burstDecision({ firstInboundAt: first, lastInboundAt: first, now: first + BURST_QUIET_MS, pendingAfter: 1 }),
+      "flush",
+    );
+    assert.equal(
+      burstDecision({
+        firstInboundAt: first,
+        lastInboundAt: first + 100,
+        now: first + BURST_MAX_MS,
+        pendingAfter: 5,
+      }),
+      "flush",
+    );
+    assert.equal(
+      burstDecision({ firstInboundAt: first, lastInboundAt: first, now: first, pendingAfter: 0 }),
+      "flush",
+    );
+  });
+});
+
+describe("quote snapshots", () => {
+  it("fails closed without currency and formats an exact snapshot", async () => {
+    const { quoteFromOffer, quoteView } = await import("./quotes.ts");
+    const missing = quoteFromOffer({
+      sku: "photo_notes_pack",
+      title: "Photo notes",
+      amountMinor: 1250,
+      currency: "",
+      businessRevision: 1,
+      customerId: "c1",
+    });
+    assert.equal("error" in missing, true);
+    if ("error" in missing) assert.equal(missing.error, "currency_missing");
+    const ok = quoteFromOffer({
+      sku: "photo_notes_pack",
+      title: "Photo notes",
+      amountMinor: 1250,
+      currency: "USD",
+      businessRevision: 1,
+      customerId: "c1",
+    });
+    assert.equal("error" in ok, false);
+    if (!("error" in ok)) {
+      assert.equal(quoteView(ok).amountLabel, "$12.50");
+      assert.equal(ok.amount.currency, "USD");
+    }
+  });
+});
+
+describe("tenant memory", () => {
+  it("does not mix two same-named customers and supports forget/correct", async () => {
+    const { factsForCustomer, forgetFact, correctFact, promptLines } = await import("./memory.ts");
+    const facts = [
+      {
+        id: "f1",
+        userId: "u1",
+        customerId: "alex_a",
+        subject: "partner",
+        predicate: "city",
+        value: "denver",
+        status: "active" as const,
+        speaker: "customer" as const,
+        assertion: "asserted" as const,
+      },
+      {
+        id: "f2",
+        userId: "u2",
+        customerId: "alex_a",
+        subject: "partner",
+        predicate: "city",
+        value: "osaka",
+        status: "active" as const,
+        speaker: "customer" as const,
+        assertion: "asserted" as const,
+      },
+    ];
+    assert.deepEqual(promptLines(facts, "u1", "alex_a"), ["city=denver"]);
+    assert.deepEqual(promptLines(facts, "u2", "alex_a"), ["city=osaka"]);
+    assert.equal(factsForCustomer(facts, "u1", "alex_a").length, 1);
+    const forgottenByOther = forgetFact(facts, "f1", "u2");
+    assert.equal(forgottenByOther.find((f) => f.id === "f1")?.status, "active");
+    const deleted = forgetFact(facts, "f1", "u1");
+    assert.equal(deleted.find((f) => f.id === "f1")?.status, "deleted");
+    const corrected = correctFact(facts, { id: "f1", userId: "u1", value: "boulder", replacementId: "f3" });
+    assert.equal(corrected.find((f) => f.id === "f1")?.status, "superseded");
+    assert.equal(corrected.find((f) => f.id === "f3")?.value, "boulder");
+    assert.equal(corrected.find((f) => f.id === "f3")?.status, "active");
+  });
+});
+
+describe("deletion inventory", () => {
+  it("covers every operator derived table and cannot rehydrate from them", async () => {
+    const { OPERATOR_ERASE_TABLES, eraseStatements, cannotRehydrateFrom } = await import("./erase.ts");
+    assert.equal(OPERATOR_ERASE_TABLES.length, 17);
+    assert.ok(OPERATOR_ERASE_TABLES.includes("memory_facts"));
+    assert.ok(OPERATOR_ERASE_TABLES.includes("operator_quotes"));
+    assert.ok(OPERATOR_ERASE_TABLES.includes("payment_credentials"));
+    assert.ok(OPERATOR_ERASE_TABLES.includes("business_revisions"));
+    const stmts = eraseStatements();
+    assert.equal(stmts.length, 17);
+    assert.ok(stmts.every((s) => s.sql.includes("where user_id")));
+    assert.equal(cannotRehydrateFrom("memory_facts"), true);
+  });
+});
+
+describe("catalog line never infers USD", () => {
+  it("throws without a currency", async () => {
+    const { catalogLine } = await import("./business.ts");
+    assert.throws(() =>
+      catalogLine({
+        id: "1",
+        sku: "x",
+        title: "X",
+        priceCents: 100,
+        currency: "",
+        rail: "",
+        available: true,
+        eligibility: "any",
+      }),
+    );
+  });
+});

@@ -284,7 +284,7 @@ export function planningCatalog(
 }
 
 export function catalogLine(row: PlanningRow): string {
-  const amount = formatMoney(money(row.priceCents, row.currency || "USD"));
+  const amount = formatMoney(money(row.priceCents, row.currency));
   const rail = row.rail?.trim() ? ` method=${row.rail}` : "";
   return `${row.sku} ${row.title} ${amount}${rail}`;
 }

@@ -73,4 +73,8 @@ describe("decideAutoSend", () => {
     assert.equal(decideAutoSend(input({ partnerOptOut: true })), false);
     assert.equal(decideAutoSend(input({ accountLive: false })), false);
   });
+
+  it("processing permission off is not an on switch", () => {
+    assert.equal(decideAutoSend(input({ conversationPermitted: false })), false);
+  });
 });
