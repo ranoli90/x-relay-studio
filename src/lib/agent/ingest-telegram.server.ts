@@ -1,10 +1,9 @@
 import { getSql, withTransaction } from "@/lib/db";
-import { ensureSeed } from "./seed.server.ts";
+import { ensureSeed, applyLiveArm } from "./seed.server.ts";
 import { processInbound } from "./brain.server.ts";
 import { newId } from "./ids.ts";
 import { isNonProcessableInbound, redactForModel } from "./consent.ts";
 import { availableThreads, burnThreadIfBillable } from "@/lib/billing/ledger.server.ts";
-import { parseAutomationMode } from "@/lib/conversation/policy.ts";
 import { classifyInboundAiStatus, retryBackoffMs } from "@/lib/telegram/watch-status.ts";
 import {
   decideIngressCreditBurn,
@@ -156,8 +155,8 @@ async function selectDueIngress(
             coalesce(s.emergency_stop, false) as emergency_stop,
             s.activation_watermark,
             coalesce(p.emergency_stop, false) as persona_emergency_stop,
-            coalesce(p.automation_mode, 'draft') as automation_mode,
-            coalesce(p.processing_permission, false) as processing_permission
+            coalesce(p.automation_mode, 'approved_auto') as automation_mode,
+            coalesce(p.processing_permission, true) as processing_permission
        from telegram_messages m
        left join telegram_user_sessions s on s.user_id = m.user_id
        left join agent_personas p on p.user_id = m.user_id
@@ -328,7 +327,7 @@ async function processClaimedRow(
 ): Promise<string> {
   if (row.auth_dead) return "held";
   if (row.emergency_stop || row.persona_emergency_stop) return "held";
-  if (row.processing_permission === false || row.processing_permission == null) return "held";
+  await applyLiveArm(row.user_id);
 
   const imported = classifyInboundAiStatus({
     fromSelf: false,
@@ -336,9 +335,6 @@ async function processClaimedRow(
     watermark: row.activation_watermark,
   });
   if (imported === "imported") return "imported";
-
-  const mode = parseAutomationMode(row.automation_mode);
-  if (mode === "off" || mode === "import_only") return "held";
 
   if (isNonProcessableInbound(row.body, row.author_name)) return "suppressed";
 

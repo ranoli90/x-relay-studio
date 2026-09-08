@@ -114,6 +114,9 @@ export const setEmergencyStopFn = createServerFn({ method: "POST" })
         `update agent_personas set auto_send = false, automation_mode = 'draft' where user_id = $1`,
         [context.userId],
       );
+    } else {
+      const { applyLiveArm } = await import("@/lib/agent/seed.server");
+      await applyLiveArm(context.userId);
     }
     return { on: data.on };
   });

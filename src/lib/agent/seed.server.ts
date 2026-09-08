@@ -1,6 +1,7 @@
 import { getSql } from "@/lib/db";
 import { demoFixturesAllowed } from "@/lib/runtime";
 import { newId } from "./ids.ts";
+import { applyLiveArmSql } from "./arm.ts";
 import { pickAgentName, pickFromRoster, pickRoster, slugName, TONES, type AgentTone } from "./names.ts";
 
 function bibleFor(name: string): string {
@@ -9,13 +10,19 @@ function bibleFor(name: string): string {
 
 type Sql = Awaited<ReturnType<typeof getSql>>;
 
-async function armAutopilot(_sql: Sql, _userId: string, _personaId: string): Promise<void> {
-  /* Reads and seeding must not rearm sending or watching. */
-}
-
 async function ensureLiveCatalog(_sql: Sql, _userId: string, _personaId: string): Promise<void> {
   /* Live desks start with no published commercial defaults. Isolated fixtures
    * publish through the operator Business path only. */
+}
+
+/** Arm ingest + auto-send. Never clears emergency stop, takeover, or opt-out. */
+export async function applyLiveArm(userId: string, sql?: Sql): Promise<void> {
+  await applyLiveArmSql(userId, sql ?? (await getSql()));
+}
+
+/** Create the desk if needed, then arm it. */
+export async function armLiveOperatorDesk(userId: string): Promise<void> {
+  await ensureSeed(userId);
 }
 
 function deskRoster(userId: string, personaName: string): { name: string; tone: AgentTone }[] {
@@ -99,7 +106,7 @@ export async function ensureSeed(userId: string): Promise<string> {
     const names = await seedRoster(sql, userId, existingMaya.id, existingMaya.display_name);
     await ensureLiveCatalog(sql, userId, existingMaya.id);
     await seedDemoIfEmpty(sql, userId, existingMaya.id, names);
-    await armAutopilot(sql, userId, existingMaya.id);
+    await applyLiveArm(userId);
     return existingMaya.id;
   }
 
@@ -113,7 +120,7 @@ export async function ensureSeed(userId: string): Promise<string> {
     const names = await seedRoster(sql, userId, existingAny.id, existingAny.display_name);
     await ensureLiveCatalog(sql, userId, existingAny.id);
     await seedDemoIfEmpty(sql, userId, existingAny.id, names);
-    await armAutopilot(sql, userId, existingAny.id);
+    await applyLiveArm(userId);
     return existingAny.id;
   }
 
@@ -122,8 +129,9 @@ export async function ensureSeed(userId: string): Promise<string> {
   const personaId = newId("per");
   await sql.query(
     `insert into agent_personas
-      (id, user_id, handle, display_name, bible, timezone, auto_send, background_run)
-     values ($1,$2,$3,$4,$5,'America/Denver', false, false)`,
+      (id, user_id, handle, display_name, bible, timezone, auto_send, background_run,
+       processing_permission, desired_auto_reply, automation_mode)
+     values ($1,$2,$3,$4,$5,'America/Denver', true, true, true, true, 'approved_auto')`,
     [personaId, userId, handle, displayName, bibleFor(displayName)],
   );
 
@@ -181,7 +189,7 @@ export async function ensureSeed(userId: string): Promise<string> {
   if (demoFixturesAllowed()) {
     await seedFans(sql, userId, personaId, rosterNames);
   }
-  await armAutopilot(sql, userId, personaId);
+  await applyLiveArm(userId);
   return personaId;
 }
 

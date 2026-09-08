@@ -16,6 +16,7 @@ Authority: isolated branch only. No production deploy, migration, live Telegram,
 | Latest product migration before repair | 0033_reddit_create_batch.sql |
 | This repair migration | 0034_operator_telegram.sql |
 | Production uniqueness | 0035_operator_production.sql |
+| Live autopilot default | 0036_live_autopilot.sql |
 | Preview fixtures | `XRELAY_ALLOW_SIMULATOR=isolated-fixture` |
 | PR41 | reviewed, not merged |
 
@@ -23,7 +24,7 @@ Authority: isolated branch only. No production deploy, migration, live Telegram,
 
 - Canonical IDs: `newOperatorId(prefix)` → `{prefix}_{hex}`
 - Money: integer minor + ISO-4217 code. Never infer USD.
-- Consent: processing permission defaults false; owner login is not correspondent consent.
+- Consent: processing permission, auto-send, background run, and approved-auto are the live desk default (0036). Emergency stop, takeover, and opt-out still halt sends. Isolated kernel fixtures stay permission-off.
 - Quote: published revision + service_key + amount_minor + currency + destination.
 - Outbox: send_attempts statuses include uncertain; cancel after possible transmission is not non-delivery.
 
@@ -32,7 +33,7 @@ Authority: isolated branch only. No production deploy, migration, live Telegram,
 | Task | Disposition | Evidence |
 |---|---|---|
 | T00 | SOURCE_FIXED | this ledger, ADR, PR41 disposition, deletion-inventory |
-| T01 | SOURCE_FIXED | FinalState + revalidateForSend after lease; permission defaults off; conversationPermitted from live flags |
+| T01 | SOURCE_FIXED | FinalState + revalidateForSend after lease; live desks default armed (0036); isolated kernel still permission-off |
 | T02 | SOURCE_FIXED | ingest processing_permission; fair ingest; burst debounce; send_attempts |
 | T03 | SOURCE_FIXED | atomic publish, isolated flag, Money, catalogForPlanning fail-closed |
 | T04 | SOURCE_FIXED | interpretMessage wired into understandLocal + brain |
@@ -63,13 +64,13 @@ Do not roll this branch onto a live desk that had processing permission or auto-
 
 1. Keep `processing_permission=false`, `desired_auto_reply=false`, `automation_mode='draft'`, `emergency_stop=true`.
 2. Migration `0034_operator_telegram.sql` is additive (`if not exists`). Leave the tables; stop using them.
-3. Migration `0035_operator_production.sql` is additive unique indexes. Drop the indexes to roll back uniqueness; do not drop columns under a running worker.
+3. Migration `0036_live_autopilot.sql` is additive defaults + backfill. Rollback by setting processing_permission/auto_send/desired_auto_reply false and automation_mode='draft'.
 4. Revert the git branch / PR rather than dropping columns under a running worker.
 5. Disconnect already erases operator derived tables; that is irreversible for those rows.
 
 ## Release notes (isolated)
 
-- Processing permission still defaults **off**. Owner login is not correspondent consent.
+- Live desks default **on** for processing permission, auto-send, background run, watching, and approved-auto. Emergency stop, takeover, and opt-out still halt a send.
 - Published business revisions are the only live catalog. `agent_catalog` is never a live default.
 - Money is integer minor + ISO currency. Missing currency fails closed; USD is never inferred.
 - Auto-send reads live `processing_permission && !opt_out`. Hardcoded true is gone.
