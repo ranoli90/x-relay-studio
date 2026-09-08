@@ -1,6 +1,7 @@
 import { Check, ChevronLeft } from "lucide-react";
 import { useEffect, useRef } from "react";
-import type { TelegramChat, TelegramMessage } from "@/lib/telegram/types";
+import type { TelegramChat, TelegramMessage, TelegramMessageStatus } from "@/lib/telegram/types";
+import { publicSendLabel } from "@/lib/operator/state";
 import { mediaLabel, isServicePeer } from "@/lib/telegram/preview";
 import { cn } from "@/lib/utils";
 import { TgAvatar } from "./avatar";
@@ -139,10 +140,10 @@ export function Conversation({
                         msg.fromSelf ? "text-[var(--tg-tick)]" : "text-[var(--tg-text-secondary)]",
                       )}
                     >
-                      {msg.status === "sending" ? (
+                      {statusCaption(msg.status) ? (
                         <>
-                          Sending
-                          <SendingDots />
+                          {statusCaption(msg.status)}
+                          {msg.status === "sending" ? <SendingDots /> : null}
                         </>
                       ) : (
                         <>
@@ -175,6 +176,21 @@ export function Conversation({
       />
     </div>
   );
+}
+
+function statusCaption(status: TelegramMessageStatus): string | null {
+  if (status === "sending") return "Sending";
+  if (status === "sent" || status === "confirmed") return null;
+  if (
+    status === "draft" ||
+    status === "approved_not_sent" ||
+    status === "failed" ||
+    status === "uncertain" ||
+    status === "canceled"
+  ) {
+    return publicSendLabel(status);
+  }
+  return null;
 }
 
 function SendingDots({ bright }: { bright?: boolean }) {

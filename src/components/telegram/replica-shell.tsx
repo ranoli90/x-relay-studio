@@ -4,9 +4,12 @@ import { Logo } from "@/components/logo";
 import { PushScreen } from "@/components/screen-stack";
 import { authEnabled, signOut } from "@/lib/auth/client";
 import { useTelegram } from "@/lib/telegram/store";
+import { BusinessPane } from "./business-pane";
 import { ChatList, useChatQuery } from "./chat-list";
 import { Conversation } from "./conversation";
-import { PeerProfile } from "./peer-profile";
+import { ConversationSheet } from "./conversation-sheet";
+import { MediaPane } from "./media-pane";
+import { OperatorNav } from "./operator-nav";
 import { ProfileEdit } from "./profile-edit";
 import { ProfilePane } from "./profile";
 import { SettingsPane, UnlinkDialog } from "./settings";
@@ -15,6 +18,7 @@ export function ReplicaShell() {
   const loading = useTelegram((s) => s.loading);
   const snapshot = useTelegram((s) => s.snapshot);
   const view = useTelegram((s) => s.view);
+  const shellTab = useTelegram((s) => s.shellTab);
   const selectedChatId = useTelegram((s) => s.selectedChatId);
   const messages = useTelegram((s) => s.messages);
   const messagesLoading = useTelegram((s) => s.messagesLoading);
@@ -31,6 +35,8 @@ export function ReplicaShell() {
   const send = useTelegram((s) => s.send);
   const setDraft = useTelegram((s) => s.setDraft);
   const setView = useTelegram((s) => s.setView);
+  const setShellTab = useTelegram((s) => s.setShellTab);
+  const ackVisibleChat = useTelegram((s) => s.ackVisibleChat);
   const setFolder = useTelegram((s) => s.setFolder);
   const setNotify = useTelegram((s) => s.setNotify);
   const saveProfile = useTelegram((s) => s.saveProfile);
@@ -44,7 +50,6 @@ export function ReplicaShell() {
   const [narrow, setNarrow] = useState(false);
 
   const account = snapshot?.account ?? null;
-  const credential = snapshot?.credential ?? null;
   const watch = snapshot?.watch ?? null;
   const chats = snapshot?.chats ?? [];
   const selected = chats.find((c) => c.id === selectedChatId) ?? null;
@@ -95,10 +100,16 @@ export function ReplicaShell() {
   }, [error, clearError]);
 
   useEffect(() => {
-    if (!narrow && account && !selectedChatId && chats[0]) {
-      void selectChat(chats[0].id);
-    }
-  }, [narrow, account, selectedChatId, chats, selectChat]);
+    if (!selectedChatId) return;
+    if (shellTab !== "inbox") return;
+    if (view !== "chat" && view !== "peer") return;
+    void ackVisibleChat(selectedChatId);
+    const onVis = () => {
+      if (document.visibilityState === "visible") void ackVisibleChat(selectedChatId);
+    };
+    document.addEventListener("visibilitychange", onVis);
+    return () => document.removeEventListener("visibilitychange", onVis);
+  }, [selectedChatId, view, shellTab, ackVisibleChat]);
 
   function requestUnlink() {
     setConfirmUnlink(true);
@@ -126,7 +137,7 @@ export function ReplicaShell() {
       onNotify={setNotify}
       onWatching={(on) => void setWatching(on)}
       onAutomation={(on) => void setAutomationArmed(on)}
-      onBack={() => setView("profile")}
+      onBack={() => setShellTab("inbox")}
       onUnlink={requestUnlink}
     />
   ) : null;
@@ -149,6 +160,24 @@ export function ReplicaShell() {
       onSend={(body) => send(body)}
     />
   );
+
+  const sheet = selected ? (
+    <ConversationSheet
+      chat={selected}
+      showBack={narrow}
+      onBack={() => setView("chat")}
+    />
+  ) : (
+    <div className="hidden place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)] xl:grid">
+      <div>
+        <p className="text-[var(--tg-text)]">{account?.displayName}</p>
+        <p className="mt-2 text-xs">Open a chat to see customer details and assistant context.</p>
+      </div>
+    </div>
+  );
+
+  const nav = <OperatorNav tab={shellTab} onTab={setShellTab} />;
+  const hideNav = narrow && (view === "chat" || view === "peer" || view === "edit");
 
   if (!loading && snapshot && !snapshot.account) {
     return <Navigate to="/telegram" />;
@@ -177,16 +206,10 @@ export function ReplicaShell() {
         ) : account?.preview ? (
           <span className="font-mono text-[11px] uppercase tracking-widest text-subtle">Preview</span>
         ) : null}
-        <Link
-          to="/agents"
-          className="ml-auto flex h-11 min-h-[44px] shrink-0 items-center px-2 text-xs text-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
-        >
-          Agents
-        </Link>
         {authEnabled ? (
           <button
             type="button"
-            className="min-h-[44px] shrink-0 px-2 text-xs text-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
+            className="ml-auto min-h-[44px] shrink-0 px-2 text-xs text-subtle hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-fg/40"
             onClick={() => {
               dropSession();
               void signOut("/");
@@ -215,15 +238,24 @@ export function ReplicaShell() {
             Connect Telegram first.
           </div>
         ) : (
-          <div className="tg-replica h-full min-h-0 min-w-0 overflow-x-hidden">
+          <div className="tg-replica flex h-full min-h-0 min-w-0 flex-col overflow-x-hidden">
+            <div className="relative min-h-0 flex-1 overflow-hidden">
             {narrow ? (
               <div className="relative h-full min-h-0 overflow-hidden">
-                {list}
-                <PushScreen open={view === "chat" || view === "peer"} className="bg-[var(--tg-bg)]">
+                {shellTab === "business" ? (
+                  <BusinessPane />
+                ) : shellTab === "media" ? (
+                  <MediaPane />
+                ) : shellTab === "settings" ? (
+                  settings
+                ) : (
+                  list
+                )}
+                <PushScreen open={shellTab === "inbox" && (view === "chat" || view === "peer")} className="bg-[var(--tg-bg)]">
                   {conversation}
                 </PushScreen>
                 <PushScreen
-                  open={view === "profile" || view === "edit" || view === "settings"}
+                  open={view === "profile" || view === "edit"}
                   className="bg-[var(--tg-bg-secondary)]"
                 >
                   <ProfilePane
@@ -231,19 +263,12 @@ export function ReplicaShell() {
                     showBack
                     onBack={() => setView(selectedChatId ? "chat" : "list")}
                     onEdit={() => setView("edit")}
-                    onSettings={() => setView("settings")}
+                    onSettings={() => setShellTab("settings")}
                     onUnlink={requestUnlink}
                   />
                 </PushScreen>
                 <PushScreen open={view === "peer"} className="bg-[var(--tg-bg-secondary)]" z={20}>
-                  {selected ? (
-                    <PeerProfile
-                      chat={selected}
-                      credential={credential}
-                      showBack
-                      onBack={() => setView("chat")}
-                    />
-                  ) : null}
+                  {sheet}
                 </PushScreen>
                 <PushScreen open={view === "edit"} className="bg-[var(--tg-bg-secondary)]" z={20}>
                   <ProfileEdit
@@ -253,9 +278,12 @@ export function ReplicaShell() {
                     onSave={(d) => void saveProfile(d)}
                   />
                 </PushScreen>
-                <PushScreen open={view === "settings"} className="bg-[var(--tg-bg-secondary)]" z={20}>
-                  {settings}
-                </PushScreen>
+              </div>
+            ) : shellTab !== "inbox" ? (
+              <div className="h-full min-h-0">
+                {shellTab === "business" ? <BusinessPane /> : null}
+                {shellTab === "media" ? <MediaPane /> : null}
+                {shellTab === "settings" ? settings : null}
               </div>
             ) : (
               <div className="grid h-full min-h-0 min-w-0 grid-cols-1 lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)] xl:grid-cols-[minmax(0,380px)_minmax(0,1fr)_minmax(0,320px)]">
@@ -267,21 +295,19 @@ export function ReplicaShell() {
                     onBack={() => setView("profile")}
                     onSave={(d) => void saveProfile(d)}
                   />
-                ) : view === "settings" ? (
-                  settings
                 ) : view === "profile" ? (
                   <ProfilePane
                     account={account}
                     showBack={false}
                     onBack={() => undefined}
                     onEdit={() => setView("edit")}
-                    onSettings={() => setView("settings")}
+                    onSettings={() => setShellTab("settings")}
                     onUnlink={requestUnlink}
                   />
                 ) : (
                   conversation
                 )}
-                {view === "edit" || view === "settings" || view === "profile" ? (
+                {view === "edit" || view === "profile" ? (
                   <div className="hidden place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)] xl:grid">
                     <div>
                       <p className="text-[var(--tg-text)]">{account.displayName}</p>
@@ -289,14 +315,7 @@ export function ReplicaShell() {
                     </div>
                   </div>
                 ) : selected ? (
-                  <div className="hidden min-h-0 xl:block">
-                    <PeerProfile
-                      chat={selected}
-                      credential={credential}
-                      showBack={false}
-                      onBack={() => undefined}
-                    />
-                  </div>
+                  <div className="hidden min-h-0 xl:block">{sheet}</div>
                 ) : (
                   <div className="hidden place-items-center bg-[var(--tg-bg-secondary)] px-6 text-center text-sm text-[var(--tg-text-secondary)] xl:grid">
                     <div>
@@ -307,6 +326,8 @@ export function ReplicaShell() {
                 )}
               </div>
             )}
+            </div>
+            {hideNav ? null : nav}
           </div>
         )}
         {error ? (

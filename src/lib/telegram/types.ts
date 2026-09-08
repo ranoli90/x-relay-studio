@@ -16,7 +16,15 @@ export type TelegramOnboardingStep =
   | "checks"
   | "done";
 
-export type TelegramMessageStatus = "sending" | "sent";
+export type TelegramMessageStatus =
+  | "sending"
+  | "sent"
+  | "draft"
+  | "approved_not_sent"
+  | "failed"
+  | "uncertain"
+  | "canceled"
+  | "confirmed";
 
 export type TelegramAiStatus =
   | "queued"

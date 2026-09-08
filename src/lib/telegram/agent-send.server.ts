@@ -152,9 +152,12 @@ export async function agentSendToPeer(opts: {
   threadId?: string;
   accountGeneration?: number;
   consentEpoch?: number;
+  permissionRevision?: number;
+  businessRevision?: number | null;
   takeover?: boolean;
   optOut?: boolean;
   emergencyStop?: boolean;
+  captured?: import("../operator/state").FinalState;
 }): Promise<AgentSendResult> {
   const body = opts.body.trim();
   if (!body) return { ok: false, reason: "empty" };
@@ -269,6 +272,27 @@ export async function agentSendToPeer(opts: {
   if (!fenceLive.allow) {
     await failSendIntent(intentId, opts.userId, "failed", fenceLive.reason);
     return { ok: false, reason: fenceLive.reason };
+  }
+
+  try {
+    const { loadLiveFinalState } = await import("../operator/persist.server");
+    const { revalidateForSend, cloneFinalState } = await import("../operator/state");
+    const live = await loadLiveFinalState(opts.userId, opts.threadId);
+    const captured = opts.captured ?? cloneFinalState({
+      ...live,
+      emergencyStop: Boolean(opts.emergencyStop),
+      takeover: Boolean(opts.takeover),
+      optOut: Boolean(opts.optOut),
+      conversationPermitted: !Boolean(opts.optOut),
+    });
+    const check = revalidateForSend(captured, live);
+    if (!check.allow) {
+      await failSendIntent(intentId, opts.userId, "failed", check.reason);
+      return { ok: false, reason: check.reason };
+    }
+  } catch {
+    await failSendIntent(intentId, opts.userId, "failed", "state_unavailable");
+    return { ok: false, reason: "state_unavailable" };
   }
 
   try {

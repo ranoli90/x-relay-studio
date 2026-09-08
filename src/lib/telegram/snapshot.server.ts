@@ -314,7 +314,7 @@ export async function enterPreviewAccount(
 ): Promise<TelegramAccount> {
   const first = displayName.trim().split(/\s+/)[0] || "You";
   const rest = displayName.trim().split(/\s+/).slice(1).join(" ") || null;
-  return upsertLinkedAccount({
+  const account = await upsertLinkedAccount({
     userId,
     telegramUserId: previewTelegramId(userId),
     firstName: first,
@@ -325,6 +325,13 @@ export async function enterPreviewAccount(
     path: "oidc",
     preview: true,
   });
+  try {
+    const { seedIsolatedPreview } = await import("@/lib/operator/persist.server");
+    await seedIsolatedPreview(userId);
+  } catch {
+    /* preview still works without operator tables */
+  }
+  return account;
 }
 
 export async function listChats(userId: string): Promise<TelegramChat[]> {
@@ -428,7 +435,6 @@ export async function listMessages(
     [userId, chatId],
   );
   if (!owned[0]) return [];
-  await markChatRead(userId, chatId);
   const rows = await sql.query<{
     id: string;
     chat_id: string;
@@ -455,8 +461,23 @@ export async function listMessages(
     authorName: row.author_name,
     body: redactSecretText(row.body),
     createdAt: iso(row.created_at) ?? new Date().toISOString(),
-    status: row.status === "sending" ? "sending" : "sent",
+    status: mapMessageStatus(row.status),
   }));
+}
+
+function mapMessageStatus(status: string | null | undefined): TelegramMessageStatus {
+  if (status === "sending" || status === "queued") return "sending";
+  if (
+    status === "draft" ||
+    status === "approved_not_sent" ||
+    status === "failed" ||
+    status === "uncertain" ||
+    status === "canceled" ||
+    status === "confirmed"
+  ) {
+    return status;
+  }
+  return "sent";
 }
 
 export async function getChatKind(

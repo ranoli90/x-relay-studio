@@ -16,7 +16,8 @@ import { pickAgentName, pickFromRoster } from "./names.ts";
 import { recordActivity } from "./activity.server.ts";
 import { tryDispatchAutoSend } from "./dispatch.server.ts";
 import { parseAutomationMode, generationOriginForWrite, type GenerationOrigin } from "@/lib/conversation/policy.ts";
-import { confirmedTranscript } from "@/lib/conversation/history.ts";
+import type { FinalState } from "@/lib/operator/state.ts";
+import { confirmedTranscriptLimited } from "@/lib/conversation/history.ts";
 import { resolveIdempotencyHit } from "@/lib/conversation/outbox.ts";
 import type {
   Archetype,
@@ -99,6 +100,7 @@ async function commitBubbles(
     optOut?: boolean;
     emergencyStop?: boolean;
     origin: GenerationOrigin;
+    captured?: FinalState;
   },
 ): Promise<{ auto: boolean; partial: boolean }> {
   const ids: string[] = [];
@@ -167,6 +169,7 @@ async function commitBubbles(
       takeover: opts.takeover,
       optOut: opts.optOut,
       emergencyStop: opts.emergencyStop,
+      captured: opts.captured,
     });
     if (result.status === "ok") {
       await sql.query(
@@ -729,7 +732,7 @@ export async function processInbound(opts: {
       where persona_id = $1 and active = true`,
     [personaId],
   );
-  const catalogRows: CatalogRow[] = catalog.map((r) => ({
+  let catalogRows: CatalogRow[] = catalog.map((r) => ({
     id: r.id,
     sku: r.sku,
     title: r.title,
@@ -737,6 +740,12 @@ export async function processInbound(opts: {
     rail: r.rail,
     eligibility: r.eligibility,
   }));
+  try {
+    const { catalogForPlanning } = await import("../operator/persist.server.ts");
+    catalogRows = await catalogForPlanning(opts.userId, catalogRows);
+  } catch {
+    catalogRows = [];
+  }
   const diary = await sql.query<{ voice: DiaryVoice; body: string }>(
     `select voice, body from agent_diary where fan_id = $1 order by created_at desc limit 12`,
     [fanId],
@@ -744,17 +753,17 @@ export async function processInbound(opts: {
   const last = await sql.query<{ role: string; body: string; status: string; origin?: string | null }>(
     `select role, body, status, origin from agent_messages
       where thread_id = $1
-      order by created_at desc limit 40`,
+      order by created_at desc limit 200`,
     [threadId],
   ).catch(() =>
     sql.query<{ role: string; body: string; status: string }>(
       `select role, body, status from agent_messages
         where thread_id = $1
-        order by created_at desc limit 40`,
+        order by created_at desc limit 200`,
       [threadId],
     ),
   );
-  const confirmed = confirmedTranscript(last).reverse();
+  const confirmed = confirmedTranscriptLimited(last.slice().reverse(), 40);
 
   try {
     const { rememberFan } = await import("./memory.server.ts");
@@ -924,6 +933,9 @@ export async function processInbound(opts: {
     optOut: colBool(thread, "opt_out"),
     emergencyStop: colBool(persona, "emergency_stop"),
     origin: generationOriginForWrite(written),
+    captured: await import("../operator/persist.server.ts")
+      .then((m) => m.loadLiveFinalState(opts.userId, threadId))
+      .catch(() => undefined),
   });
   const auto = committed.auto;
   const state: ThreadState = fulfilling ? "fulfilling" : auto ? "open" : "held";
@@ -1129,7 +1141,7 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
       where persona_id = $1 and active = true`,
     [thread.persona_id],
   );
-  const catalogRows: CatalogRow[] = catalog.map((r) => ({
+  let catalogRows: CatalogRow[] = catalog.map((r) => ({
     id: r.id,
     sku: r.sku,
     title: r.title,
@@ -1137,17 +1149,30 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     rail: r.rail,
     eligibility: r.eligibility,
   }));
+  try {
+    const { catalogForPlanning } = await import("../operator/persist.server.ts");
+    catalogRows = await catalogForPlanning(userId, catalogRows);
+  } catch {
+    catalogRows = [];
+  }
   const diary = await sql.query<{ voice: DiaryVoice; body: string }>(
     `select voice, body from agent_diary where fan_id = $1 order by created_at desc limit 12`,
     [thread.fan_id],
   );
-  const last = await sql.query<{ role: string; body: string; status?: string }>(
-    `select role, body, status from agent_messages
+  const last = await sql.query<{ role: string; body: string; status?: string; origin?: string | null }>(
+    `select role, body, status, origin from agent_messages
       where thread_id = $1
-      order by created_at desc limit 20`,
+      order by created_at desc limit 200`,
     [threadId],
+  ).catch(() =>
+    sql.query<{ role: string; body: string; status?: string }>(
+      `select role, body, status from agent_messages
+        where thread_id = $1
+        order by created_at desc limit 200`,
+      [threadId],
+    ),
   );
-  const confirmed = confirmedTranscript(last).reverse();
+  const confirmed = confirmedTranscriptLimited(last.slice().reverse(), 40);
   try {
     const { rememberFan } = await import("./memory.server.ts");
     await rememberFan({
@@ -1246,6 +1271,9 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     optOut: colBool(thread, "opt_out"),
     emergencyStop: colBool(persona, "emergency_stop"),
     origin: generationOriginForWrite(written),
+    captured: await import("../operator/persist.server.ts")
+      .then((m) => m.loadLiveFinalState(userId, threadId))
+      .catch(() => undefined),
   });
   if (committed.auto) {
     await sql.query(

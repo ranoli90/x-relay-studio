@@ -303,10 +303,6 @@ export const loadThread = createServerFn({ method: "POST" })
     const threads = await listThreads(sql, context.userId);
     const thread = threads.find((t) => t.id === data.threadId);
     if (!thread) throw new Error("Thread not found.");
-    await sql.query(
-      `update agent_threads set unread = 0 where id = $1 and user_id = $2`,
-      [data.threadId, context.userId],
-    );
     const messages = await sql.query<{
       id: string;
       role: OperatorMessage["role"];
