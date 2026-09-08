@@ -80,43 +80,24 @@ async function resolveChat(
     };
   };
 
-  try {
-    const rows = await sql.query<{
-      id: string;
-      kind: "notes" | "bot" | "user";
-      peer_id: string | null;
-      access_hash: string | null;
-      peer_kind: string | null;
-    }>(
-      `select id, kind, peer_id, access_hash, peer_kind
-         from telegram_chats
-        where user_id = $1
-          and (
-            ($2::text is not null and (id = $2 or peer_id = $2))
-            or ($3::text is not null and (id = $3 or peer_id = $3))
-          )
-        limit 1`,
-      [userId, a, b],
-    );
-    return rows[0] ? map(rows[0]) : null;
-  } catch {
-    const rows = await sql.query<{
-      id: string;
-      kind: "notes" | "bot" | "user";
-      peer_id: string | null;
-    }>(
-      `select id, kind, peer_id
-         from telegram_chats
-        where user_id = $1
-          and (
-            ($2::text is not null and (id = $2 or peer_id = $2))
-            or ($3::text is not null and (id = $3 or peer_id = $3))
-          )
-        limit 1`,
-      [userId, a, b],
-    );
-    return rows[0] ? map(rows[0]) : null;
-  }
+  const rows = await sql.query<{
+    id: string;
+    kind: "notes" | "bot" | "user";
+    peer_id: string | null;
+    access_hash: string | null;
+    peer_kind: string | null;
+  }>(
+    `select id, kind, peer_id, access_hash, peer_kind
+       from telegram_chats
+      where user_id = $1
+        and (
+          ($2::text is not null and (id = $2 or peer_id = $2))
+          or ($3::text is not null and (id = $3 or peer_id = $3))
+        )
+      limit 1`,
+    [userId, a, b],
+  );
+  return rows[0] ? map(rows[0]) : null;
 }
 
 async function commitLocal(opts: {
