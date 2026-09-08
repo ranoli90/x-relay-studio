@@ -280,4 +280,42 @@ describe("F08 fan payment settlement", () => {
     assert.equal(pays.n, 0);
     await pg.close();
   });
+
+  it("requires destinationId when the offer names a destination", async () => {
+    const pg = new PGlite();
+    await pg.waitReady;
+    await pg.exec(SCHEMA);
+    await seed(pg);
+    await pg.exec(`update agent_offers set destination_id = 'dest_live' where id = 'off_aaaaaaaaaaaaaaaa'`);
+    const sql = toSql(pg);
+    const omitted = await applyMarkPaid(sql, null, {
+      offerId: "off_aaaaaaaaaaaaaaaa",
+      rail: "throne",
+      externalId: "wh_nodest",
+      amountCents: 5000,
+      currency: "USD",
+    });
+    assert.equal(omitted.ok, false);
+    if (!omitted.ok) assert.equal(omitted.reason, "wrong_destination");
+    const wrong = await applyMarkPaid(sql, null, {
+      offerId: "off_aaaaaaaaaaaaaaaa",
+      rail: "throne",
+      externalId: "wh_wrongdest",
+      amountCents: 5000,
+      currency: "USD",
+      destinationId: "dest_other",
+    });
+    assert.equal(wrong.ok, false);
+    if (!wrong.ok) assert.equal(wrong.reason, "wrong_destination");
+    const ok = await applyMarkPaid(sql, null, {
+      offerId: "off_aaaaaaaaaaaaaaaa",
+      rail: "throne",
+      externalId: "wh_dest",
+      amountCents: 5000,
+      currency: "USD",
+      destinationId: "dest_live",
+    });
+    assert.equal(ok.ok, true);
+    await pg.close();
+  });
 });

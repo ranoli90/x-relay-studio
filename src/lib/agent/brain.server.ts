@@ -18,6 +18,7 @@ import { tryDispatchAutoSend } from "./dispatch.server.ts";
 import { parseAutomationMode, generationOriginForWrite, type GenerationOrigin } from "@/lib/conversation/policy.ts";
 import { confirmedTranscript } from "@/lib/conversation/history.ts";
 import { resolveIdempotencyHit } from "@/lib/conversation/outbox.ts";
+import type { PublishedProjection } from "@/lib/operator/business.ts";
 import type {
   Archetype,
   CatalogRow,
@@ -54,16 +55,18 @@ async function quoteSnapshotForPlan(
   userId: string,
   customerId: string,
   sku: string | null | undefined,
+  published: PublishedProjection | null,
 ): Promise<{ sku: string; title: string; amountLabel: string } | null> {
-  if (!sku) return null;
-  const { loadPublishedProjection, snapshotQuote } = await import("@/lib/operator/persist.server");
-  const published = await loadPublishedProjection(userId);
-  const offer = published?.offers.find((o) => o.serviceKey === sku || o.id === sku);
-  if (!published || !offer) return null;
+  if (!sku || !published) return null;
+  const { snapshotQuote } = await import("@/lib/operator/persist.server");
+  const offer = published.offers.find((o) => o.serviceKey === sku || o.id === sku);
+  if (!offer) return null;
   const sql = await getSql();
   const dest = await sql.query<{ id: string }>(
-    `select id from payment_destinations where user_id = $1 order by created_at desc limit 1`,
-    [userId],
+    `select id from payment_destinations
+      where user_id = $1 and binding_id = $2 and currency = $3
+      order by created_at desc limit 1`,
+    [userId, published.bindingId, offer.amount.currency],
   );
   const snap = await snapshotQuote(userId, {
     customerId,
@@ -507,8 +510,9 @@ export async function processInbound(opts: {
     [threadId],
   );
   const turns = Number(countRows[0]?.n ?? 1);
-  const { catalogForPlanning } = await import("@/lib/operator/persist.server");
-  const catalogRows = await catalogForPlanning(opts.userId);
+  const { catalogForPlanning, loadPublishedProjection } = await import("@/lib/operator/persist.server");
+  const published = await loadPublishedProjection(opts.userId);
+  const catalogRows = await catalogForPlanning(opts.userId, undefined, published);
   const pendingQuestion = thread.pending_question ?? null;
   const u = understandLocal(opts.text, {
     lifetimeCents: fan.lifetime_cents,
@@ -777,7 +781,7 @@ export async function processInbound(opts: {
     deliveryConfirmed: Number(justDelivered?.n ?? 0) > 0,
     memoryFacts,
     pendingQuestion,
-    quoteSnapshot: await quoteSnapshotForPlan(opts.userId, fanId!, plan.sku),
+    quoteSnapshot: await quoteSnapshotForPlan(opts.userId, fanId!, plan.sku, published),
   });
   await thought(
     sql,
@@ -1023,8 +1027,9 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   if (!persona || !fan) return;
   if (colBool(persona, "emergency_stop")) return;
 
-  const { catalogForPlanning } = await import("@/lib/operator/persist.server");
-  const catalogRows = await catalogForPlanning(userId);
+  const { catalogForPlanning, loadPublishedProjection } = await import("@/lib/operator/persist.server");
+  const published = await loadPublishedProjection(userId);
+  const catalogRows = await catalogForPlanning(userId, undefined, published);
   const diary = await sql.query<{ voice: DiaryVoice; body: string }>(
     `select voice, body from agent_diary where fan_id = $1 order by created_at desc limit 12`,
     [thread.fan_id],
@@ -1101,7 +1106,7 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     catalog: catalogRows,
     fanName: fan.display_name,
     inbound: "",
-    quoteSnapshot: await quoteSnapshotForPlan(userId, thread.fan_id, plan.sku),
+    quoteSnapshot: await quoteSnapshotForPlan(userId, thread.fan_id, plan.sku, published),
   });
   if (written.bubbles.length === 0) return;
   const agentName = await ensureAgentName(sql, userId, threadId, thread.agent_name);

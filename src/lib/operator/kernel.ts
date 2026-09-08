@@ -149,8 +149,8 @@ export function defaultFlags(): FinalState {
     takeover: false,
     optOut: false,
     automationMode: "draft",
-    processingPermission: true,
-    conversationPermitted: true,
+    processingPermission: false,
+    conversationPermitted: false,
     accountLive: true,
     assetApprovalOk: true,
   };
@@ -205,7 +205,7 @@ export function submitBrief(world: OperatorWorld, plain: string): BusinessRevisi
     briefId,
     revision: (world.revisions.at(-1)?.revision ?? 0) + 1,
     status: "draft",
-    isolated: false,
+    isolated: true,
     structured,
   };
   world.revisions.push(revision);
@@ -305,10 +305,28 @@ export async function dispatchAttempt(
     }
   }
 
+  const pre = revalidateForSend(input.captured, liveFlags(world));
+  if (!pre.allow) {
+    const canceled = applyTransportOutcome(attempt, {
+      kind: "canceled_stale",
+      reason: pre.reason,
+    });
+    Object.assign(attempt, canceled);
+    return attempt;
+  }
+
   const outcome = await world.transport.send(input.conversationId, input.body, input.assetId);
   const live = liveFlags(world);
   const check = revalidateForSend(input.captured, live);
   if (!check.allow) {
+    if (outcome.kind === "sent_confirmed" || outcome.kind === "uncertain") {
+      const uncertain = applyTransportOutcome(attempt, {
+        kind: "uncertain",
+        reason: `possible_transmission:${check.reason}`,
+      });
+      Object.assign(attempt, uncertain);
+      return attempt;
+    }
     const canceled = applyTransportOutcome(attempt, {
       kind: "canceled_stale",
       reason: check.reason,

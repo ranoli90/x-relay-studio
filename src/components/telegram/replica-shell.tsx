@@ -103,7 +103,7 @@ export function ReplicaShell() {
   useEffect(() => {
     if (!selectedChatId) return;
     if (shellTab !== "inbox") return;
-    if (view !== "chat" && view !== "peer") return;
+    if (view !== "chat") return;
     void ackVisibleChat(selectedChatId);
     const onVis = () => {
       if (document.visibilityState === "visible") void ackVisibleChat(selectedChatId);

@@ -34,7 +34,7 @@ export function quoteFromOffer(input: {
 }): QuoteSnapshot | { error: string } {
   const currency = parseCurrency(input.currency);
   if (!currency) return { error: "currency_missing" };
-  if (!Number.isInteger(input.amountMinor) || input.amountMinor <= 0) {
+  if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0) {
     return { error: "amount_invalid" };
   }
   if (!input.sku.trim()) return { error: "sku_required" };

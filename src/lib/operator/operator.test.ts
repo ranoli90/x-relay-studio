@@ -32,7 +32,13 @@ import {
 } from "./kernel.ts";
 
 function flags(extra: Partial<FinalState> = {}): FinalState {
-  return { ...defaultFlags(), automationMode: "approved_auto", ...extra };
+  return {
+    ...defaultFlags(),
+    automationMode: "approved_auto",
+    processingPermission: true,
+    conversationPermitted: extra.optOut === true ? false : true,
+    ...extra,
+  };
 }
 
 function attempt(status: SendAttempt["status"], extra: Partial<SendAttempt> = {}): SendAttempt {
@@ -87,8 +93,8 @@ describe("TG-14 stop/takeover/opt-out/permission during blocked transport", () =
     world.flags = { ...world.flags, emergencyStop: true };
     world.transport.releaseHang({ kind: "sent_confirmed", transportMessageId: "should_not_count" });
     const result = await pending;
-    assert.equal(result.status, "canceled");
-    assert.equal(result.uncertainReason, "emergency_stop");
+    assert.equal(result.status, "uncertain");
+    assert.match(result.uncertainReason ?? "", /possible_transmission:emergency_stop/);
     assert.equal(world.transport.sent.length, 1);
     assert.equal(world.history.filter((h) => h.kind === "confirmed_outbound").length, 0);
   });
@@ -107,7 +113,9 @@ describe("TG-14 stop/takeover/opt-out/permission during blocked transport", () =
       world.flags = { ...world.flags, ...change };
       world.transport.releaseHang({ kind: "sent_confirmed", transportMessageId: "x" });
       const result = await pending;
-      assert.equal(result.status, "canceled", JSON.stringify(change));
+      assert.equal(result.status, "uncertain", JSON.stringify(change));
+      assert.match(result.uncertainReason ?? "", /possible_transmission/);
+      assert.equal(world.history.filter((h) => h.kind === "confirmed_outbound").length, 0);
     }
   });
 });
@@ -651,5 +659,142 @@ describe("catalog line never infers USD", () => {
         eligibility: "any",
       }),
     );
+  });
+});
+
+describe("production fail-closed contracts", () => {
+  it("does not revive a deleted fact via correctFact", async () => {
+    const { forgetFact, correctFact } = await import("./memory.ts");
+    const facts = [
+      {
+        id: "f1",
+        userId: "u1",
+        customerId: "c1",
+        subject: "partner",
+        predicate: "city",
+        value: "denver",
+        status: "active" as const,
+        speaker: "customer" as const,
+        assertion: "asserted" as const,
+      },
+    ];
+    const deleted = forgetFact(facts, "f1", "u1");
+    const revived = correctFact(deleted, { id: "f1", userId: "u1", value: "boulder", replacementId: "f9" });
+    assert.equal(revived.find((f) => f.id === "f1")?.status, "deleted");
+    assert.equal(revived.some((f) => f.id === "f9"), false);
+  });
+
+  it("clamps promptLines to a non-negative limit", async () => {
+    const { promptLines } = await import("./memory.ts");
+    const facts = Array.from({ length: 4 }, (_, i) => ({
+      id: `f${i}`,
+      userId: "u1",
+      customerId: "c1",
+      subject: "partner",
+      predicate: `p${i}`,
+      value: `v${i}`,
+      status: "active" as const,
+      speaker: "customer" as const,
+      assertion: "asserted" as const,
+    }));
+    assert.deepEqual(promptLines(facts, "u1", "c1", -3), []);
+    assert.equal(promptLines(facts, "u1", "c1", 1.9).length, 1);
+  });
+
+  it("never schedules a burst retry past the hard cap", async () => {
+    const { nextBurstRetryAt, BURST_MAX_MS } = await import("./debounce.ts");
+    const first = 1_000_000;
+    const now = first + BURST_MAX_MS - 200;
+    const at = nextBurstRetryAt(now, { firstInboundAt: first }).getTime();
+    assert.ok(at <= first + BURST_MAX_MS);
+    assert.ok(at >= now);
+  });
+
+  it("rejects unsafe integers as money", () => {
+    assert.throws(() => money(Number.MAX_SAFE_INTEGER + 1, "USD"));
+    assert.throws(() => money(1.5, "USD"));
+  });
+
+  it("formats JPY and KWD without assuming two decimals", async () => {
+    const { minorToFractionalString } = await import("./money.ts");
+    assert.equal(minorToFractionalString(1250, "JPY"), "1250");
+    assert.equal(minorToFractionalString(1234, "KWD"), "1.234");
+    assert.equal(minorToFractionalString(1250, "USD"), "12.50");
+  });
+
+  it("does not report an approved payment view without a matching destination", () => {
+    const missing = publicPaymentView({
+      instruction: {
+        id: "ins_1",
+        creatorId: "c",
+        bindingId: "b",
+        revisionId: "r",
+        publicCopy: "Send USD to the listed handle.",
+        currency: "USD",
+        approved: true,
+      },
+      destination: null,
+    });
+    assert.equal(missing.approved, false);
+    assert.equal(missing.destinationRef, null);
+    const mismatched = publicPaymentView({
+      instruction: {
+        id: "ins_1",
+        creatorId: "c",
+        bindingId: "b",
+        revisionId: "r",
+        publicCopy: "Send USD to the listed handle.",
+        currency: "USD",
+        approved: true,
+      },
+      destination: {
+        id: "dest_1",
+        creatorId: "c",
+        bindingId: "b",
+        provider: "manual_handle",
+        destinationRef: "@yen_pay",
+        currency: "JPY",
+        hasCredential: true,
+      },
+    });
+    assert.equal(mismatched.approved, false);
+    assert.equal(mismatched.destinationRef, null);
+  });
+
+  it("createWorld starts with processing permission off", async () => {
+    const world = createWorld();
+    assert.equal(world.flags.processingPermission, false);
+    assert.equal(world.flags.conversationPermitted, false);
+    const captured = liveFlags(world);
+    const result = await dispatchAttempt(world, {
+      conversationId: "c1",
+      body: "hi",
+      captured,
+    });
+    assert.equal(result.status, "canceled");
+    assert.equal(world.transport.sent.length, 0);
+  });
+
+  it("resolves catalog aliases with Unicode word boundaries", async () => {
+    const { resolveCatalogSku } = await import("./interpret.ts");
+    const catalog = [
+      {
+        id: "1",
+        sku: "photo_notes_pack",
+        title: "фото набор",
+        priceCents: 1250,
+        rail: "",
+        eligibility: "any",
+        currency: "USD",
+      },
+    ];
+    assert.equal(resolveCatalogSku("сколько стоит фото набор?", catalog), "photo_notes_pack");
+    assert.equal(resolveCatalogSku("фотонабор", catalog), null);
+  });
+
+  it("isolated drafts stay isolated until publish", () => {
+    const world = createWorld();
+    const draft = submitBrief(world, "Northlight");
+    assert.equal(draft.isolated, true);
   });
 });

@@ -11,6 +11,9 @@ function requestId(): string {
 
 export function AppErrorComponent({ error }: ErrorComponentProps) {
   const id = requestId();
+  if (typeof console !== "undefined" && error instanceof Error) {
+    console.error("app-error", id, error);
+  }
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center gap-3 bg-bg px-6 text-center text-fg">
       <span className="text-down" aria-hidden="true">
@@ -18,7 +21,7 @@ export function AppErrorComponent({ error }: ErrorComponentProps) {
       </span>
       <h1 className="text-lg font-medium tracking-tight">Something went wrong</h1>
       <p className="max-w-md text-sm break-words text-muted" role="alert">
-        {error instanceof Error ? error.message : "An unexpected error occurred. Try reloading the page."}
+        An unexpected error occurred. Try reloading the page.
       </p>
       <p className="font-mono text-[11px] tracking-wide text-muted">Ref {id}</p>
       <div className="mt-2 flex gap-4 text-sm">

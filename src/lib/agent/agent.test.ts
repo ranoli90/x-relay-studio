@@ -107,6 +107,13 @@ describe("catalog + validator", () => {
     assert.equal(inventedPrice("video call is $25", DEFAULT_CATALOG, 12000), 25);
     assert.equal(inventedPrice("that's $25.49", DEFAULT_CATALOG, 2500), 25.49);
   });
+  it("does not divide KWD or KRW by 100", async () => {
+    const { inventedPrice } = await import("./catalog.ts");
+    const kwd = [{ id: "k", sku: "kwd_item", title: "KWD item", priceCents: 1234, rail: "throne", eligibility: "any", currency: "KWD" }];
+    assert.equal(inventedPrice("that is 12.34 KWD", kwd, 1), 12.34);
+    const krw = [{ id: "r", sku: "krw_item", title: "KRW item", priceCents: 1500, rail: "throne", eligibility: "any", currency: "KRW" }];
+    assert.equal(inventedPrice("that is 1500 KRW", krw, 1), 1500);
+  });
   it("drops leaked strategy fields", () => {
     const drop = validateDraft("strategy=one_sku trust_score 9", DEFAULT_CATALOG, 16, []);
     assert.ok(drop);

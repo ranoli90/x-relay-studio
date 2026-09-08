@@ -16,10 +16,10 @@ Baseline still present on main `2e16ef71`. Repair is on `repair/telegram-assista
 | XR-010 | Two same-named customers | SOURCE_FIXED | UNIT_VERIFIED | memory_facts tenant+customer scope; promptLines isolation test |
 
 | XR-011 | Silent truncation | SOURCE_FIXED | UNIT_VERIFIED | unusableFinish / healthIsReady already in generate.ts |
-| XR-012 | Ingress uniqueness | IN_PROGRESS | NOT_RUN | existing idempotency; two-worker PG remaining |
+| XR-012 | Ingress uniqueness | SOURCE_FIXED | UNIT_VERIFIED | unique (user_id, tg_peer_id) + insert recovery; two-worker PG remaining NOT_RUN |
 | XR-013 | Stale send fence | SOURCE_FIXED | UNIT_VERIFIED | revalidateForSend rejects same object; lease rereads FinalState |
 | XR-014 | Uncertain retry | SOURCE_FIXED | UNIT_VERIFIED | canRetryAttempt |
-| XR-015 | Burst debounce | SOURCE_FIXED | UNIT_VERIFIED | burstDecision wait/flush; two-worker PG remaining NOT_RUN |
+| XR-015 | Burst debounce | SOURCE_FIXED | UNIT_VERIFIED | burstDecision + nextBurstRetryAt clamped to BURST_MAX_MS; two-worker PG remaining NOT_RUN |
 
 | XR-016 | Claim leases | IN_PROGRESS | NOT_RUN | existing claim path; crash tests remaining |
 | XR-017 | Fair ingest | SOURCE_FIXED | UNIT_VERIFIED | nextIngestBatch |
@@ -36,14 +36,14 @@ Baseline still present on main `2e16ef71`. Repair is on `repair/telegram-assista
 | XR-027 | Fulfillment evidence | IN_PROGRESS | NOT_RUN | deliveryAfterTransport; live transport NOT_RUN |
 | XR-028 | Partial multi-bubble | IN_PROGRESS | NOT_RUN | commitBubbles already tracks partial |
 | XR-029 | Quoted / negated product | SOURCE_FIXED | UNIT_VERIFIED | interpret tests |
-| XR-030 | Atomic publish | SOURCE_FIXED | UNIT_VERIFIED | withTransaction + service_key |
+| XR-030 | Atomic publish | SOURCE_FIXED | UNIT_VERIFIED | withTransaction + FOR UPDATE on operator_bindings + service_key |
 | XR-031 | Writer untrusted context | SOURCE_FIXED | UNIT_VERIFIED | WRITER_UNTRUSTED_POLICY |
 | XR-032 | Separate ledgers | SOURCE_FIXED | UNIT_VERIFIED | mixesCreditWithCustomer |
 | XR-033 | Quote snapshot | SOURCE_FIXED | UNIT_VERIFIED | operator_quotes + writeWithGateway.quoteSnapshot; missing currency fails closed |
 
 | XR-034 | Composer IME | SOURCE_FIXED | UNIT_VERIFIED | isComposing / keyCode 229 |
 | XR-035 | Draft persistence | SOURCE_FIXED | UNIT_VERIFIED | composer_drafts |
-| XR-036 | Unread ack | SOURCE_FIXED | UNIT_VERIFIED | visibility-aware |
+| XR-036 | Unread ack | SOURCE_FIXED | UNIT_VERIFIED | visibility-aware; CAS unread=$observed; chat view only |
 | XR-037 | Business editor | SOURCE_FIXED | NOT_RUN | Business pane; authenticated browser remaining |
 | XR-038 | Media pane | SOURCE_FIXED | NOT_RUN | Media pane present; browser remaining |
 | XR-039 | Context sheet | SOURCE_FIXED | NOT_RUN | ConversationSheet |
@@ -69,4 +69,4 @@ Baseline still present on main `2e16ef71`. Repair is on `repair/telegram-assista
 | XR-057 | Binding scope | SOURCE_FIXED | UNIT_VERIFIED | operator_bindings unique (user, account) |
 | XR-058 | Platform ADR | SOURCE_FIXED | UNIT_VERIFIED | telegram-platform-adr.md |
 
-Release-critical live integrations remain NOT_RUN. This branch is not production-ready.
+Release-critical live integrations remain NOT_RUN. This merge is production *code* readiness, not a live Telegram or invoice go-live.

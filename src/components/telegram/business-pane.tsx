@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { loadOperatorDeskFn, publishBusinessFn } from "@/lib/operator/fns";
-import { formatMoney, moneyFromFractional } from "@/lib/operator/money";
+import { formatMoney, moneyFromFractional, minorToFractionalString } from "@/lib/operator/money";
 import { cn } from "@/lib/utils";
 import { tgFocusClass } from "./format";
 
@@ -33,7 +33,7 @@ export function BusinessPane() {
             setOffers(
               desk.projection.offers.map((o) => ({
                 title: o.title,
-                amount: (o.amount.minor / 100).toFixed(2),
+                amount: minorToFractionalString(o.amount.minor, o.amount.currency),
                 currency: o.amount.currency,
                 available: o.available,
               })),

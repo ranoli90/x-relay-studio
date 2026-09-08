@@ -23,6 +23,17 @@ export function burstDecision(input: BurstInput): BurstDecision {
   return "wait";
 }
 
-export function nextBurstRetryAt(now: number, quietMs = BURST_QUIET_MS): Date {
-  return new Date(now + Math.max(250, quietMs));
+/** Never schedule a retry past the hard cap for this burst. */
+export function nextBurstRetryAt(
+  now: number,
+  opts?: { firstInboundAt?: number; quietMs?: number; maxMs?: number },
+): Date {
+  const quietMs = opts?.quietMs ?? BURST_QUIET_MS;
+  const maxMs = opts?.maxMs ?? BURST_MAX_MS;
+  const wait = Math.max(250, quietMs);
+  let at = now + wait;
+  if (opts?.firstInboundAt != null) {
+    at = Math.min(at, opts.firstInboundAt + maxMs);
+  }
+  return new Date(Math.max(now + 50, at));
 }

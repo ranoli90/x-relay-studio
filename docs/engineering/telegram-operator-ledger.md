@@ -15,6 +15,7 @@ Authority: isolated branch only. No production deploy, migration, live Telegram,
 | Package manager | npm (lockfile present) |
 | Latest product migration before repair | 0033_reddit_create_batch.sql |
 | This repair migration | 0034_operator_telegram.sql |
+| Production uniqueness | 0035_operator_production.sql |
 | Preview fixtures | `XRELAY_ALLOW_SIMULATOR=isolated-fixture` |
 | PR41 | reviewed, not merged |
 
@@ -62,8 +63,9 @@ Do not roll this branch onto a live desk that had processing permission or auto-
 
 1. Keep `processing_permission=false`, `desired_auto_reply=false`, `automation_mode='draft'`, `emergency_stop=true`.
 2. Migration `0034_operator_telegram.sql` is additive (`if not exists`). Leave the tables; stop using them.
-3. Revert the git branch / PR rather than dropping columns under a running worker.
-4. Disconnect already erases operator derived tables; that is irreversible for those rows.
+3. Migration `0035_operator_production.sql` is additive unique indexes. Drop the indexes to roll back uniqueness; do not drop columns under a running worker.
+4. Revert the git branch / PR rather than dropping columns under a running worker.
+5. Disconnect already erases operator derived tables; that is irreversible for those rows.
 
 ## Release notes (isolated)
 
@@ -73,4 +75,5 @@ Do not roll this branch onto a live desk that had processing permission or auto-
 - Auto-send reads live `processing_permission && !opt_out`. Hardcoded true is gone.
 - Inbound bursts wait 1.5s quiet / 8s cap. Poll rate is not raised to catch up.
 - Telegram unlink erases the 17 operator derived tables listed in `deletion-inventory.md`.
+- Unique `(user_id, tg_peer_id)` fans, active memory-fact dedup, destination required when the offer names one, and hang+stop records uncertain possible transmission.
 - This merge is **not** a production go-live. Live Telegram, invoices, and production migrations remain unauthorized.

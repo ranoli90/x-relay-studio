@@ -34,6 +34,71 @@ type DrainRow = {
 
 type Sql = Awaited<ReturnType<typeof getSql>>;
 
+function isUniqueViolation(err: unknown): boolean {
+  const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
+  const msg = err instanceof Error ? err.message : "";
+  return code === "23505" || /unique|duplicate/i.test(msg);
+}
+
+async function locateOrCreateFanThread(
+  tx: Sql,
+  opts: { userId: string; chatId: string; personaId: string; displayName: string },
+): Promise<{ fanId: string; threadId: string | null }> {
+  const existingFan = (
+    await tx.query<{ id: string }>(
+      `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
+      [opts.userId, opts.chatId],
+    )
+  )[0];
+  let fanId = existingFan?.id;
+  if (!fanId) {
+    fanId = newId("fan");
+    try {
+      await tx.query(
+        `insert into agent_fans
+          (id, user_id, persona_id, display_name, handle, source, archetype, tg_peer_id)
+         values ($1,$2,$3,$4,null,'telegram','new',$5)`,
+        [fanId, opts.userId, opts.personaId, opts.displayName, opts.chatId],
+      );
+    } catch (err) {
+      if (!isUniqueViolation(err)) throw err;
+      const raced = (
+        await tx.query<{ id: string }>(
+          `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
+          [opts.userId, opts.chatId],
+        )
+      )[0];
+      if (!raced) throw err;
+      fanId = raced.id;
+    }
+  }
+  const existingThread = (
+    await tx.query<{ id: string }>(
+      `select id from agent_threads where user_id = $1 and fan_id = $2 limit 1`,
+      [opts.userId, fanId],
+    )
+  )[0];
+  if (existingThread) return { fanId, threadId: existingThread.id };
+  const threadId = newId("thr");
+  try {
+    await tx.query(
+      `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
+       values ($1,$2,$3,$4,'W1_INGEST','open')`,
+      [threadId, opts.userId, opts.personaId, fanId],
+    );
+    return { fanId, threadId };
+  } catch (err) {
+    if (!isUniqueViolation(err)) throw err;
+    const raced = (
+      await tx.query<{ id: string }>(
+        `select id from agent_threads where user_id = $1 and fan_id = $2 limit 1`,
+        [opts.userId, fanId],
+      )
+    )[0];
+    return { fanId, threadId: raced?.id ?? null };
+  }
+}
+
 /**
  * Drain Telegram messages marked queued / due retry_wait into the conversation
  * brain. Historical imports are not actionable. Claims are per-row CAS.
@@ -153,36 +218,14 @@ async function ensureThreadForChat(
   if (existing) return existing;
   const personaId = await ensureSeed(userId);
   return withTransaction(async (tx) => {
-    const existingFan = (
-      await tx.query<{ id: string }>(
-        `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
-        [userId, chatId],
-      )
-    )[0];
-    if (existingFan) {
-      const existingThread = (
-        await tx.query<{ id: string }>(
-          `select id from agent_threads where fan_id = $1 and user_id = $2 limit 1`,
-          [existingFan.id, userId],
-        )
-      )[0];
-      if (!existingThread) return null;
-      return { fanId: existingFan.id, threadId: existingThread.id };
-    }
-    const fanId = newId("fan");
-    const threadId = newId("thr");
-    await tx.query(
-      `insert into agent_fans
-        (id, user_id, persona_id, display_name, handle, source, archetype, tg_peer_id)
-       values ($1,$2,$3,$4,null,'telegram','new',$5)`,
-      [fanId, userId, personaId, authorName || "Telegram", chatId],
-    );
-    await tx.query(
-      `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
-       values ($1,$2,$3,$4,'W1_INGEST','open')`,
-      [threadId, userId, personaId, fanId],
-    );
-    return { fanId, threadId };
+    const located = await locateOrCreateFanThread(tx, {
+      userId,
+      chatId,
+      personaId,
+      displayName: authorName || "Telegram",
+    });
+    if (!located.threadId) return null;
+    return { fanId: located.fanId, threadId: located.threadId };
   });
 }
 
@@ -322,7 +365,7 @@ async function processClaimedRow(
       await sql.query(
         `update telegram_messages set ai_status = 'retry_wait', next_attempt_at = $2
           where id = $1 and ai_status = 'processing'`,
-        [row.id, nextBurstRetryAt(now).toISOString()],
+        [row.id, nextBurstRetryAt(now, { firstInboundAt: first }).toISOString()],
       );
       return "retry_wait";
     }
@@ -331,37 +374,14 @@ async function processClaimedRow(
   const credits = await availableThreads(row.user_id);
 
   const personaId = await ensureSeed(row.user_id);
-  const located = await withTransaction(async (tx) => {
-    const existingFan = (
-      await tx.query<{ id: string }>(
-        `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
-        [row.user_id, row.chat_id],
-      )
-    )[0];
-    if (existingFan) {
-      const existingThread = (
-        await tx.query<{ id: string }>(
-          `select id from agent_threads where fan_id = $1 and user_id = $2 limit 1`,
-          [existingFan.id, row.user_id],
-        )
-      )[0];
-      return { fanId: existingFan.id, threadId: existingThread?.id ?? null };
-    }
-    const fanId = newId("fan");
-    const threadId = newId("thr");
-    await tx.query(
-      `insert into agent_fans
-        (id, user_id, persona_id, display_name, handle, source, archetype, tg_peer_id)
-       values ($1,$2,$3,$4,null,'telegram','new',$5)`,
-      [fanId, row.user_id, personaId, row.author_name || "Telegram", row.chat_id],
-    );
-    await tx.query(
-      `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
-       values ($1,$2,$3,$4,'W1_INGEST','open')`,
-      [threadId, row.user_id, personaId, fanId],
-    );
-    return { fanId, threadId };
-  });
+  const located = await withTransaction(async (tx) =>
+    locateOrCreateFanThread(tx, {
+      userId: row.user_id,
+      chatId: row.chat_id,
+      personaId,
+      displayName: row.author_name || "Telegram",
+    }),
+  );
   if (!located.threadId) return "held";
   const fan = { id: located.fanId };
   const thread = { id: located.threadId };
