@@ -1,4 +1,5 @@
 import type { ReplyPlan, SafetyResult, UnderstandResult, WorkflowId } from "./types.ts";
+import { isBareYes, isDecline } from "../conversation/text.ts";
 
 export type RouteCtx = {
   lifetimeCents: number;
@@ -13,7 +14,10 @@ export type RouteCtx = {
   activeFulfillment?: boolean;
   pendingQuestion?: string | null;
   optOut?: boolean;
+  inboundText?: string;
 };
+
+const SAFETY_FIRST: WorkflowId[] = ["W15_HANDOFF", "W2_SAFETY"];
 
 export function routeWorkflow(
   safety: SafetyResult,
@@ -26,22 +30,39 @@ export function routeWorkflow(
   if (safety.codes.includes("irl")) return "W2_SAFETY";
   if (safety.codes.includes("injection")) return "W2_SAFETY";
   if (ctx.takeover) return "W15_HANDOFF";
-  if (ctx.overflow) return "W16_QUEUE";
-  if (u.intent === "identity_ask") return "W5_DAY_ARC";
-  if (u.mediaKind === "receipt" || u.intent === "receipt") return "W14_MEDIA_IN";
-  if (u.intent === "payment_claim") return "W8_OFFER";
-  if (u.intent === "are_you_real") return "W13_PROOF";
-  if (u.intent === "anger") return "W15_HANDOFF";
+
+  const intents = u.intents ?? [u.intent];
+  const payment = intents.includes("payment_claim") || intents.includes("receipt") || u.mediaKind === "receipt";
+  const complaint = intents.includes("anger") || intents.includes("objection_burned");
+  const identity = intents.includes("identity_ask");
+  const explicitAsk =
+    intents.includes("price_ask") ||
+    intents.includes("content_ask") ||
+    intents.includes("menu") ||
+    intents.includes("custom");
+
   if (u.intent === "crisis") return "W15_HANDOFF";
+  if (payment) return u.mediaKind === "receipt" || u.intent === "receipt" ? "W14_MEDIA_IN" : "W8_OFFER";
+  if (intents.includes("anger")) return "W15_HANDOFF";
+  if (complaint) return "W12_OBJECTION";
+  if (identity) return "W5_DAY_ARC";
+
+  if (ctx.pendingQuestion && ctx.inboundText && (isBareYes(ctx.inboundText) || isDecline(ctx.inboundText))) {
+    const pending = ctx.pendingQuestion.toLowerCase();
+    if (/\b(pay|method|rail|cash|venmo|paypal)\b/.test(pending)) return "W8_OFFER";
+    if (isDecline(ctx.inboundText)) return "W5_DAY_ARC";
+    return "W6_CLOSE_NOW";
+  }
+
+  if (u.intent === "are_you_real") return "W13_PROOF";
   if (u.intent === "custom" || ctx.whale) return "W15_HANDOFF";
-  if (u.intent === "objection_burned" || u.objection === "burned") return "W12_OBJECTION";
-  if (u.intent === "objection_price" || u.objection === "price") return "W12_OBJECTION";
+  if (u.gfeNamed || u.intent === "gfe_ask") return "W7_GFE";
+  if (explicitAsk) return "W6_CLOSE_NOW";
   if (ctx.activeFulfillment && (u.intent === "greeting" || u.intent === "other" || u.intent === "aftercare")) {
     return "W10_AFTERCARE";
   }
-  if (ctx.justDelivered) return "W10_AFTERCARE";
-  if (u.gfeNamed || u.intent === "gfe_ask") return "W7_GFE";
-  if (u.intent === "price_ask" || u.intent === "content_ask" || u.intent === "menu") return "W6_CLOSE_NOW";
+  if (ctx.justDelivered && !explicitAsk) return "W10_AFTERCARE";
+  if (ctx.overflow) return "W16_QUEUE";
   if (ctx.silentDays >= 5) return "W11_REACTIVATE";
   if ((u.source === "reddit_sugar" || u.archetype === "reddit_sugar") && ctx.lifetimeCents === 0) {
     return "W4_QUALIFY";
@@ -51,20 +72,28 @@ export function routeWorkflow(
   return "W5_DAY_ARC";
 }
 
-const AUTO: WorkflowId[] = ["W5_DAY_ARC", "W10_AFTERCARE", "W11_REACTIVATE", "W16_QUEUE"];
 const ALWAYS_DRAFT: WorkflowId[] = [
-  "W6_CLOSE_NOW",
   "W7_GFE",
-  "W8_OFFER",
   "W12_OBJECTION",
   "W13_PROOF",
   "W15_HANDOFF",
   "W2_SAFETY",
+  "W4_QUALIFY",
+];
+
+const AUTO_WHEN_ENABLED: WorkflowId[] = [
+  "W5_DAY_ARC",
+  "W6_CLOSE_NOW",
+  "W8_OFFER",
+  "W10_AFTERCARE",
+  "W11_REACTIVATE",
+  "W14_MEDIA_IN",
+  "W16_QUEUE",
 ];
 
 export function autonomyFor(workflow: WorkflowId, autoSendEnabled: boolean): "auto" | "draft" {
   if (ALWAYS_DRAFT.includes(workflow)) return "draft";
-  if (AUTO.includes(workflow) && autoSendEnabled) return "auto";
+  if (AUTO_WHEN_ENABLED.includes(workflow) && autoSendEnabled) return "auto";
   return "draft";
 }
 
@@ -75,10 +104,11 @@ export function buildPlan(
   autoSendEnabled: boolean,
 ): ReplyPlan {
   const hold = autonomyFor(workflow, autoSendEnabled) === "draft";
+  const sku = u.wantsSku;
   const base = {
     workflow,
     offerId: null as string | null,
-    sku: u.wantsSku,
+    sku,
     hold,
     doors: [] as string[],
     checkInHours: null as number | null,
@@ -91,9 +121,9 @@ export function buildPlan(
         ...base,
         strategy: "qualify_not_free",
         tactic: "one_door_menu",
-        sku: "custom_clip",
-        reason: "Reddit/sugar and $0. Do not work the thread for free.",
-        doors: ["custom_clip", "park"],
+        sku: sku,
+        reason: "Reddit/sugar and $0. Do not work the thread for free. Do not invent a SKU.",
+        doors: sku ? [sku, "park"] : ["park"],
       };
     case "W5_DAY_ARC":
       return {
@@ -106,17 +136,19 @@ export function buildPlan(
     case "W6_CLOSE_NOW":
       return {
         ...base,
-        strategy: "one_sku",
-        tactic: "ask_close",
-        sku: u.wantsSku ?? "custom_clip",
-        reason: "Explicit content or price. Send one SKU, nothing else.",
+        strategy: sku ? "one_sku" : "clarify_catalog",
+        tactic: sku ? "answer_question" : "clarify_which",
+        sku,
+        reason: sku
+          ? "Explicit named published service. Quote that item only."
+          : "Explicit question with no resolved published service. Clarify; do not invent a SKU.",
       };
     case "W7_GFE":
       return {
         ...base,
         strategy: ctx.gfeHeld ? "gfe_invite" : "gfe_hold",
         tactic: ctx.gfeHeld ? "human_on_contract" : "hold_early",
-        sku: "gfe_week",
+        sku: sku,
         hold: true,
         autonomy: "draft",
         reason: "Named GFE. Hold a seat. First contract is human.",
@@ -126,9 +158,7 @@ export function buildPlan(
         ...base,
         strategy: "payment_truth",
         tactic: "wait_webhook",
-        reason: "Payment claim. Webhook is truth, not a screenshot.",
-        hold: true,
-        autonomy: "draft",
+        reason: "Payment claim. Acknowledge pending. Provider confirmation is truth, not a screenshot.",
       };
     case "W10_AFTERCARE":
       return {
@@ -151,7 +181,7 @@ export function buildPlan(
         strategy: "reframe_one_door",
         tactic: u.objection === "burned" ? "not_her" : "price_anchor",
         reason: "Objection table. One reframe, one door.",
-        doors: [u.wantsSku ?? "custom_clip"],
+        doors: sku ? [sku] : [],
         hold: true,
         autonomy: "draft",
       };
@@ -160,7 +190,7 @@ export function buildPlan(
         ...base,
         strategy: "unused_proof",
         tactic: "same_outfit_or_vn",
-        reason: "Are-you-real. Unused proof asset, never reuse live.",
+        reason: "Are-you-real. Unused proof asset, never reuse live. Stored media is not live proof.",
         hold: true,
         autonomy: "draft",
       };
@@ -170,8 +200,6 @@ export function buildPlan(
         strategy: "vision_then_verify",
         tactic: "receipt_not_truth",
         reason: "Inbound media. Type it. Webhook still has to land.",
-        hold: true,
-        autonomy: "draft",
       };
     case "W15_HANDOFF":
       return {
@@ -214,3 +242,5 @@ function safetyTactic(u: UnderstandResult): string {
   if (u.intent === "injection") return "ignore_payload";
   return "closed_door";
 }
+
+void SAFETY_FIRST;

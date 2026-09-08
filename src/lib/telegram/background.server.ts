@@ -29,17 +29,16 @@ export async function tickBackgroundDesks(
               coalesce(bool_or(s.watching), false) as watching,
               bool_or(s.session_enc is not null) as has_session,
               coalesce(bool_or(s.auth_dead), false) as auth_dead,
-              coalesce(bool_or(s.emergency_stop), bool_or(p.emergency_stop), false) as emergency_stop,
-              coalesce(bool_or(p.background_run), false) as background_run
+              bool_or(coalesce(s.emergency_stop, false) or coalesce(p.emergency_stop, false)) as emergency_stop,
+              coalesce(bool_or(p.background_run), false) as background_run,
+              min(s.last_sync_at) as last_sync_at
          from agent_personas p
          left join telegram_user_sessions s on s.user_id = p.user_id
         group by p.user_id
-        order by min(s.last_sync_at) nulls first, p.user_id
-        limit $1`,
-      [Math.max(cap, extraUserIds.length + cap)],
+        order by min(s.last_sync_at) nulls first, p.user_id`,
     );
-  } catch {
-    desks = [];
+  } catch (err) {
+    throw err;
   }
 
   const extras = extraUserIds.filter(Boolean);

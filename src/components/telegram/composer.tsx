@@ -69,6 +69,7 @@ export function Composer({
           rows={1}
           placeholder="Message"
           aria-label={kind === "notes" ? "Studio note" : "Message"}
+          data-testid="composer-input"
           className={cn(
             "max-h-32 min-h-[44px] min-w-0 w-full resize-none rounded-xl bg-[var(--tg-item-hover)] px-3 py-2.5 text-base text-[var(--tg-text)] placeholder:text-[var(--tg-text-secondary)] disabled:opacity-50",
             tgFocusClass,
@@ -81,7 +82,9 @@ export function Composer({
             e.currentTarget.style.height = `${Math.min(e.currentTarget.scrollHeight, 128)}px`;
           }}
           onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.shiftKey) {
+            const composing =
+              e.nativeEvent.isComposing || e.keyCode === 229 || (e as { isComposing?: boolean }).isComposing;
+            if (e.key === "Enter" && !e.shiftKey && !composing) {
               e.preventDefault();
               submit();
             }

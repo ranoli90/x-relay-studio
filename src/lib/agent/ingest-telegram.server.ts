@@ -29,6 +29,7 @@ type DrainRow = {
   activation_watermark: string | Date | null;
   persona_emergency_stop: boolean | null;
   automation_mode: string | null;
+  processing_permission?: boolean | null;
 };
 
 type Sql = Awaited<ReturnType<typeof getSql>>;
@@ -96,7 +97,8 @@ async function selectDueIngress(
               coalesce(s.emergency_stop, false) as emergency_stop,
               s.activation_watermark,
               coalesce(p.emergency_stop, false) as persona_emergency_stop,
-              coalesce(p.automation_mode, 'draft') as automation_mode
+              coalesce(p.automation_mode, 'draft') as automation_mode,
+              coalesce(p.processing_permission, false) as processing_permission
          from telegram_messages m
          left join telegram_user_sessions s on s.user_id = m.user_id
          left join agent_personas p on p.user_id = m.user_id
@@ -314,6 +316,7 @@ async function processClaimedRow(
 ): Promise<string> {
   if (row.auth_dead) return "held";
   if (row.emergency_stop || row.persona_emergency_stop) return "held";
+  if (row.processing_permission === false || row.processing_permission == null) return "held";
 
   const imported = classifyInboundAiStatus({
     fromSelf: false,

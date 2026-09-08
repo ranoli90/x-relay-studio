@@ -427,10 +427,12 @@ export async function processInbound(opts: {
       state?: string;
       opt_out?: boolean;
       adult_eligibility?: string;
+      pending_question?: string | null;
     }>(
       `select takeover, workflow, last_inbound_at, last_outbound_at, agent_name, state,
               coalesce(opt_out, false) as opt_out,
-              coalesce(adult_eligibility, 'unknown') as adult_eligibility
+              coalesce(adult_eligibility, 'unknown') as adult_eligibility,
+              pending_question
          from agent_threads
         where id = $1`,
       [threadId],
@@ -539,11 +541,21 @@ export async function processInbound(opts: {
     [threadId],
   );
   const turns = Number(countRows[0]?.n ?? 1);
+  let catalogRows: CatalogRow[] = [];
+  try {
+    const { catalogForPlanning } = await import("@/lib/operator/persist.server");
+    catalogRows = await catalogForPlanning(opts.userId);
+  } catch {
+    catalogRows = [];
+  }
+  const pendingQuestion = (thread as { pending_question?: string | null }).pending_question ?? null;
   const u = understandLocal(opts.text, {
     lifetimeCents: fan.lifetime_cents,
     source: (opts.source ?? fan.source) as Source,
     archetype: fan.archetype as Archetype,
     turns,
+    pendingQuestion,
+    catalog: catalogRows,
   });
   await thought(
     sql,
@@ -605,7 +617,9 @@ export async function processInbound(opts: {
     whale: fan.lifetime_cents >= 20000 || u.archetype === "whale",
     firstOfferSent: Number(firstOffer?.n ?? 0) > 0,
     activeFulfillment: fulfilling,
+    pendingQuestion,
     optOut: colBool(thread, "opt_out"),
+    inboundText: opts.text,
   });
   const plan = buildPlan(workflow, u, {
     lifetimeCents: fan.lifetime_cents,
@@ -729,14 +743,8 @@ export async function processInbound(opts: {
       where persona_id = $1 and active = true`,
     [personaId],
   );
-  const catalogRows: CatalogRow[] = catalog.map((r) => ({
-    id: r.id,
-    sku: r.sku,
-    title: r.title,
-    priceCents: r.price_cents,
-    rail: r.rail,
-    eligibility: r.eligibility,
-  }));
+  void catalog;
+  /* Published operator catalog is the only live commercial source. agent_catalog is never a live default. */
   const diary = await sql.query<{ voice: DiaryVoice; body: string }>(
     `select voice, body from agent_diary where fan_id = $1 order by created_at desc limit 12`,
     [fanId],
@@ -764,9 +772,17 @@ export async function processInbound(opts: {
       diary,
       last: confirmed,
       lifetimeCents: fan.lifetime_cents,
+      userId: opts.userId,
     });
   } catch {
     /* memory must never block inbound */
+  }
+  let memoryFacts: string[] = [];
+  try {
+    const { loadScopedFacts } = await import("@/lib/operator/persist.server");
+    memoryFacts = await loadScopedFacts(opts.userId, fanId!, 12);
+  } catch {
+    memoryFacts = [];
   }
 
   if (workflow === "W7_GFE") {
@@ -849,6 +865,8 @@ export async function processInbound(opts: {
     inbound: opts.text,
     proofAvailable: proofReady,
     deliveryConfirmed: Number(justDelivered?.n ?? 0) > 0,
+    memoryFacts,
+    pendingQuestion,
   });
   await thought(
     sql,

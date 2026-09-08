@@ -489,7 +489,7 @@ describe("XR-021 ping health is not a nonempty key", () => {
     assert.equal(healthIsReady("configured"), false);
     assert.equal(healthIsReady("unconfigured"), false);
     assert.equal(healthIsReady("degraded"), false);
-    assert.equal(healthIsReady("authenticated"), true);
+    assert.equal(healthIsReady("authenticated"), false);
     assert.equal(healthIsReady("route_capable"), true);
     assert.equal(healthIsReady("recently_generated"), true);
     assert.equal(
