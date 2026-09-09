@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
 import { loadOperatorDeskFn, publishBusinessFn } from "@/lib/operator/fns";
 import { formatMoney, moneyFromFractional, minorToFractionalString } from "@/lib/operator/money";
 import { cn } from "@/lib/utils";
@@ -8,15 +9,16 @@ type OfferDraft = { title: string; amount: string; currency: string; available: 
 
 export function BusinessPane() {
   const [plain, setPlain] = useState("");
-  const [offers, setOffers] = useState<OfferDraft[]>([
-    { title: "Photo notes pack", amount: "12.50", currency: "USD", available: true },
-  ]);
-  const [paymentCopy, setPaymentCopy] = useState(
-    "Approved USD instructions: send to the listed handle. Workspace credits never settle this.",
-  );
-  const [destinationRef, setDestinationRef] = useState("@studio_pay");
+  const [offers, setOffers] = useState<OfferDraft[]>([{ title: "", amount: "", currency: "USD", available: true }]);
+  const [paymentCopy, setPaymentCopy] = useState("");
+  const [destinationRef, setDestinationRef] = useState("");
+  const [voice, setVoice] = useState("");
+  const [boundaries, setBoundaries] = useState("");
   const [busy, setBusy] = useState(false);
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const dirtyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
+
   const [published, setPublished] = useState<string | null>(null);
   const [revision, setRevision] = useState<number | null>(null);
 
@@ -25,9 +27,16 @@ export function BusinessPane() {
     void loadOperatorDeskFn()
       .then((desk) => {
         if (cancelled) return;
+        if (dirtyRef.current) {
+          setLoadState("ready");
+          return;
+        }
+
         if (desk.projection) {
           setPlain(`${desk.projection.displayName}\n${desk.projection.about}`.trim());
-          setPaymentCopy(desk.projection.paymentCopy || paymentCopy);
+          setPaymentCopy(desk.projection.paymentCopy || "");
+          setVoice(desk.projection.voice || "");
+          setBoundaries(desk.projection.boundaries || "");
           setRevision(desk.projection.revision);
           if (desk.projection.offers.length) {
             setOffers(
@@ -47,12 +56,18 @@ export function BusinessPane() {
         }
         if (desk.payment.destinationRef) setDestinationRef(desk.payment.destinationRef);
         if (desk.payment.copy) setPaymentCopy(desk.payment.copy);
+        setLoadState("ready");
       })
-      .catch(() => undefined);
+      .catch(() => {
+        if (cancelled) return;
+        setLoadState("error");
+        setError("Could not load the published business. Retry before publishing.");
+      });
     return () => {
       cancelled = true;
     };
   }, []);
+
 
   async function publish() {
     setBusy(true);
@@ -72,9 +87,13 @@ export function BusinessPane() {
           offers: parsed,
           paymentCopy,
           destinationRef,
+          voice,
+          boundaries,
         },
       });
       setRevision(result.revision);
+      setVoice(result.voice || voice);
+      setBoundaries(result.boundaries || boundaries);
       setPublished(
         `${result.displayName} · revision ${result.revision} · ${result.offers
           .map((o) => `${o.title} ${formatMoney(o.amount)}`)
@@ -97,7 +116,17 @@ export function BusinessPane() {
           Write a short brief. Review the priced offers. Publish. The assistant only uses that
           published revision — it will not invent a catalog.
         </p>
+        {loadState === "loading" ? (
+          <p className="mt-3 text-sm text-[var(--tg-text-secondary)]" data-testid="business-load">
+            Loading published business…
+          </p>
+        ) : (
+          <p className="sr-only" data-testid="business-ready">
+            ready
+          </p>
+        )}
         {published ? (
+
           <p className="mt-3 rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-sm">{published}</p>
         ) : (
           <p className="mt-3 text-sm text-[var(--tg-text-secondary)]">No published revision yet.</p>
@@ -106,11 +135,47 @@ export function BusinessPane() {
           Brief
           <textarea
             value={plain}
-            onChange={(e) => setPlain(e.target.value)}
+            onChange={(e) => {
+              dirtyRef.current = true;
+              setPlain(e.target.value);
+            }}
+
             rows={4}
             data-testid="business-brief"
             className={cn(
               "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base text-[var(--tg-text)]",
+              tgFocusClass,
+            )}
+          />
+        </label>
+        <label className="mt-4 block text-sm">
+          Voice
+          <textarea
+            value={voice}
+            data-testid="business-voice"
+            onChange={(e) => {
+              dirtyRef.current = true;
+              setVoice(e.target.value);
+            }}
+            rows={2}
+            className={cn(
+              "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base",
+              tgFocusClass,
+            )}
+          />
+        </label>
+        <label className="mt-3 block text-sm">
+          Boundaries
+          <textarea
+            value={boundaries}
+            data-testid="business-boundaries"
+            onChange={(e) => {
+              dirtyRef.current = true;
+              setBoundaries(e.target.value);
+            }}
+            rows={2}
+            className={cn(
+              "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base",
               tgFocusClass,
             )}
           />
@@ -122,9 +187,11 @@ export function BusinessPane() {
               <input
                 value={offer.title}
                 data-testid={`offer-title-${i}`}
-                onChange={(e) =>
-                  setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, title: e.target.value } : r)))
-                }
+                onChange={(e) => {
+                  dirtyRef.current = true;
+                  setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, title: e.target.value } : r)));
+                }}
+
                 className={cn(
                   "mt-1 h-11 w-full rounded-lg bg-[var(--tg-bg)] px-3 text-base",
                   tgFocusClass,
@@ -138,9 +205,11 @@ export function BusinessPane() {
                   inputMode="decimal"
                   value={offer.amount}
                   data-testid={`offer-amount-${i}`}
-                  onChange={(e) =>
-                    setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, amount: e.target.value } : r)))
-                  }
+                  onChange={(e) => {
+                    dirtyRef.current = true;
+                    setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, amount: e.target.value } : r)));
+                  }}
+
                   className={cn("mt-1 h-11 w-full rounded-lg bg-[var(--tg-bg)] px-3 text-base", tgFocusClass)}
                 />
               </label>
@@ -148,11 +217,13 @@ export function BusinessPane() {
                 Currency
                 <input
                   value={offer.currency}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    dirtyRef.current = true;
                     setOffers((rows) =>
                       rows.map((r, j) => (j === i ? { ...r, currency: e.target.value.toUpperCase() } : r)),
-                    )
-                  }
+                    );
+                  }}
+
                   className={cn("mt-1 h-11 w-full rounded-lg bg-[var(--tg-bg)] px-3 text-base", tgFocusClass)}
                 />
               </label>
@@ -161,9 +232,11 @@ export function BusinessPane() {
               <input
                 type="checkbox"
                 checked={offer.available}
-                onChange={(e) =>
-                  setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, available: e.target.checked } : r)))
-                }
+                onChange={(e) => {
+                  dirtyRef.current = true;
+                  setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, available: e.target.checked } : r)));
+                }}
+
               />
               Available
             </label>
@@ -172,9 +245,11 @@ export function BusinessPane() {
         <button
           type="button"
           className={cn("mt-3 min-h-[44px] text-sm text-[var(--tg-primary)]", tgFocusClass)}
-          onClick={() =>
-            setOffers((rows) => [...rows, { title: "", amount: "", currency: "USD", available: true }])
-          }
+          onClick={() => {
+            dirtyRef.current = true;
+            setOffers((rows) => [...rows, { title: "", amount: "", currency: "USD", available: true }]);
+          }}
+
         >
           Add offer
         </button>
@@ -182,7 +257,12 @@ export function BusinessPane() {
           Public payment instructions
           <textarea
             value={paymentCopy}
-            onChange={(e) => setPaymentCopy(e.target.value)}
+            data-testid="business-payment-copy"
+            onChange={(e) => {
+              dirtyRef.current = true;
+              setPaymentCopy(e.target.value);
+            }}
+
             rows={3}
             className={cn(
               "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base",
@@ -194,7 +274,12 @@ export function BusinessPane() {
           Destination handle
           <input
             value={destinationRef}
-            onChange={(e) => setDestinationRef(e.target.value)}
+            data-testid="business-destination"
+            onChange={(e) => {
+              dirtyRef.current = true;
+              setDestinationRef(e.target.value);
+            }}
+
             className={cn(
               "mt-1 h-11 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 text-base",
               tgFocusClass,
@@ -211,9 +296,10 @@ export function BusinessPane() {
         ) : null}
         <button
           type="button"
-          disabled={busy}
+          disabled={busy || loadState !== "ready"}
           data-testid="business-publish"
           onClick={() => void publish()}
+
           className={cn(
             "mt-4 h-12 w-full rounded-xl bg-[var(--tg-primary)] text-[var(--tg-own-text)]",
             tgFocusClass,

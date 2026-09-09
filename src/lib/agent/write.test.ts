@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  LOCAL_NOTICE_MODEL,
   LOCAL_WRITER_MODEL,
   shouldSkipRemoteWrite,
   settleRemoteWrite,
@@ -8,6 +9,7 @@ import {
   writeCapsFor,
   writeLocal,
 } from "./write.ts";
+
 import { safetyBlocksGenerate } from "./safety.ts";
 import { goldSummary } from "./eval.ts";
 import { DEFAULT_CATALOG } from "./catalog.ts";
@@ -69,6 +71,20 @@ describe("D04 local writer claims", () => {
     assert.equal(out.dropped, false);
     assert.equal(/gift card|if the app flags|paypal/.test(text), false);
     assert.match(text, /screenshot isn't the receipt|listed rail/i);
+  });
+
+  it("catalog menu fallback quotes published items and prices", () => {
+    const out = writeLocal(
+      input("W6_CLOSE_NOW", {
+        inbound: "what do you offer?",
+        plan: plan("W6_CLOSE_NOW", { strategy: "catalog_menu", tactic: "list_published" }),
+      }),
+    );
+    const text = out.bubbles.join(" ").toLowerCase();
+    assert.equal(out.dropped, false);
+    assert.match(text, /custom is \$25/);
+    assert.match(text, /sexting is \$60/);
+    assert.equal(/paypal/.test(text), false);
   });
 
   it("names only the offer sku rail on a priced close", () => {
@@ -332,8 +348,35 @@ describe("remote skip and caps", () => {
     const text = local.bubbles.join(" ").toLowerCase();
     assert.equal(local.dropped, false);
     assert.equal(/paypal/.test(text), false);
-    assert.match(text, /throne|handle|desk/);
+    assert.match(text, /throne|handle|listed/);
     assert.equal(shouldSkipRemoteWrite(src, local), true);
+    assert.equal(local.model, LOCAL_NOTICE_MODEL);
+
+  });
+
+  it("uses published payment copy on an unpublished rail ask", () => {
+    const src = input("W5_DAY_ARC", {
+      inbound: "do you take paypal?",
+      paymentCopy: "Send USD to the listed handle @northlight_pay.",
+    });
+    const local = writeLocal(src);
+    const text = local.bubbles.join(" ");
+    assert.equal(local.dropped, false);
+    assert.equal(/paypal/i.test(text), false);
+    assert.match(text, /@northlight_pay/);
+    assert.equal(local.model, LOCAL_NOTICE_MODEL);
+  });
+
+  it("classifies empty and gateway drops as retryable", async () => {
+    const { isRetryableWriteDrop } = await import("./write.ts");
+    assert.equal(isRetryableWriteDrop("timeout"), true);
+    assert.equal(isRetryableWriteDrop("provider 429"), true);
+    assert.equal(isRetryableWriteDrop("generation_failed"), true);
+    assert.equal(isRetryableWriteDrop("provider_unavailable"), true);
+    assert.equal(isRetryableWriteDrop("empty"), true);
+    assert.equal(isRetryableWriteDrop(null), true);
+    assert.equal(isRetryableWriteDrop("leaked internal field"), false);
+    assert.equal(isRetryableWriteDrop("handoff"), false);
   });
 
   it("clarifies a close with no resolved sku instead of dumping the custom menu", () => {
@@ -352,7 +395,8 @@ describe("remote skip and caps", () => {
     const settled = settleRemoteWrite("yeah paypal works", local, src, caps, "x-ai/grok-4.5");
     assert.equal(settled.dropped, false);
     assert.equal(/paypal/.test(settled.bubbles.join(" ").toLowerCase()), false);
-    assert.equal(settled.model, LOCAL_WRITER_MODEL);
+    assert.equal(settled.model, LOCAL_NOTICE_MODEL);
+
   });
 
   it("falls back to local when a priced close omits the quoted amount", () => {

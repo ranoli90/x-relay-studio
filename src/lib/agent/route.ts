@@ -19,6 +19,10 @@ export type RouteCtx = {
 
 const SAFETY_FIRST: WorkflowId[] = ["W15_HANDOFF", "W2_SAFETY"];
 
+function pendingLooksLikePayment(pending: string): boolean {
+  return /\b(pay|method|rail|cash|venmo|paypal|handle)\b/.test(pending.toLowerCase());
+}
+
 export function routeWorkflow(
   safety: SafetyResult,
   u: UnderstandResult,
@@ -48,8 +52,7 @@ export function routeWorkflow(
   if (identity) return "W5_DAY_ARC";
 
   if (ctx.pendingQuestion && ctx.inboundText && (isBareYes(ctx.inboundText) || isDecline(ctx.inboundText))) {
-    const pending = ctx.pendingQuestion.toLowerCase();
-    if (/\b(pay|method|rail|cash|venmo|paypal)\b/.test(pending)) return "W8_OFFER";
+    if (pendingLooksLikePayment(ctx.pendingQuestion)) return "W5_DAY_ARC";
     if (isDecline(ctx.inboundText)) return "W5_DAY_ARC";
     return "W6_CLOSE_NOW";
   }
@@ -105,6 +108,7 @@ export function buildPlan(
 ): ReplyPlan {
   const hold = autonomyFor(workflow, autoSendEnabled) === "draft";
   const sku = u.wantsSku;
+  const menu = (u.intents ?? []).includes("menu") && !sku;
   const base = {
     workflow,
     offerId: null as string | null,
@@ -134,6 +138,15 @@ export function buildPlan(
         checkInHours: 4,
       };
     case "W6_CLOSE_NOW":
+      if (menu) {
+        return {
+          ...base,
+          strategy: "catalog_menu",
+          tactic: "list_published",
+          sku: null,
+          reason: "Direct menu question. List currently published items. Do not force a sale.",
+        };
+      }
       return {
         ...base,
         strategy: sku ? "one_sku" : "clarify_catalog",

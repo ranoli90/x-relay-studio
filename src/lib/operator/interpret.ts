@@ -54,6 +54,7 @@ const CUSTOM = /\b(custom (vid|clip|photo|video)|specific request|something cust
 const AVAIL = /\b(still (have|available)|can i get it (today|now)|do you (still )?have)\b/i;
 const THIRD_PARTY = /\b(my (friend|sister|brother|mom|dad|wife|husband)|a friend|someone)\b/i;
 
+
 function slug(title: string): string {
   return title
     .toLowerCase()
@@ -71,24 +72,32 @@ export function catalogAliases(row: CatalogRow): string[] {
   const title = row.title.toLowerCase();
   const sku = row.sku.toLowerCase();
   const out = new Set<string>([title, sku, slug(row.title).replace(/_/g, " ")]);
-  if (/\bvideo call\b/.test(title) || sku.includes("video_call") || sku.includes("call")) {
+  const isPhoto = /\bphotos?\b|\bpics?\b|\bpictures?\b/.test(title) || /photo|pics?/.test(sku);
+  const isPack = /\bpack\b/.test(title) || sku.includes("pack");
+  const isCall = /\bvideo call\b/.test(title) || sku.includes("video_call") || /\b(vid )?call\b/.test(title);
+  if (isCall) {
     out.add("video call");
     out.add("vid call");
     out.add("facetime");
     out.add("cam call");
   }
-  if (/\bpack\b/.test(title) || sku.includes("pack") || /\bphoto/.test(title) || /\bpics?\b/.test(title)) {
-    out.add("pack");
-    out.add("photo pack");
-    out.add("landscape pack");
-    out.add("landscape photo pack");
-    out.add("photo notes pack");
+  if (isPhoto) {
     out.add("pics");
     out.add("pic");
     out.add("pictures");
     out.add("photos");
     out.add("photo");
+    if (isPack) {
+      out.add("photo pack");
+      out.add("pack");
+      if (/\bnotes\b/.test(title) || sku.includes("notes")) out.add("photo notes pack");
+      if (/\blandscape\b/.test(title) || sku.includes("landscape")) {
+        out.add("landscape pack");
+        out.add("landscape photo pack");
+      }
+    }
   }
+
   if (/\bsext/.test(title) || sku.includes("sext")) out.add("sexting");
   if (/\bdropbox|premade/.test(title) || sku.includes("dropbox") || sku.includes("premade")) {
     out.add("dropbox");
@@ -98,29 +107,69 @@ export function catalogAliases(row: CatalogRow): string[] {
 }
 
 export function resolveCatalogSku(text: string, catalog: CatalogRow[]): string | null {
+  const ranked = rankCatalogHits(text, catalog);
+  if (ranked.length === 0) return null;
+  if (ranked.length > 1 && ranked[0]!.score === ranked[1]!.score) return null;
+  return ranked[0]!.sku;
+}
+
+function rankCatalogHits(text: string, catalog: CatalogRow[]): Array<{ sku: string; score: number; aliases: string[] }> {
   const body = normalizeAnalysisText(text).toLowerCase();
-  const hits: Array<{ sku: string; score: number }> = [];
+  const bySku = new Map<string, { sku: string; score: number; aliases: string[] }>();
   for (const row of catalog) {
     for (const alias of catalogAliases(row)) {
       if (!alias) continue;
-      const re = aliasPattern(alias);
-      if (re.test(body)) hits.push({ sku: row.sku, score: alias.length });
+      if (!aliasPattern(alias).test(body)) continue;
+      const prev = bySku.get(row.sku);
+      if (!prev || alias.length > prev.score) {
+        bySku.set(row.sku, {
+          sku: row.sku,
+          score: alias.length,
+          aliases: [...(prev?.aliases ?? []), alias],
+        });
+      } else {
+        prev.aliases.push(alias);
+      }
     }
   }
-  hits.sort((a, b) => b.score - a.score);
-  return hits[0]?.sku ?? null;
+  return [...bySku.values()].sort((a, b) => b.score - a.score);
+}
+
+function clauseAt(text: string, index: number): string {
+  const breaks = /[.;]|\b(?:but|however)\b/gi;
+  let start = 0;
+  let m: RegExpExecArray | null;
+  const re = new RegExp(breaks.source, "gi");
+  while ((m = re.exec(text))) {
+    const end = m.index + m[0].length;
+    if (index < m.index) break;
+    start = end;
+  }
+  const rest = text.slice(start);
+  const next = rest.search(/[.;]|\b(?:but|however)\b/i);
+  return (next >= 0 ? rest.slice(0, next) : rest).trim();
 }
 
 function collectProductRefs(text: string, catalog: CatalogRow[]): ProductRef[] {
   const body = normalizeAnalysisText(text);
-  const quoted = isQuoted(text) || THIRD_PARTY.test(body);
-  const negated = isNegated(body) || /\b(don't want|do not want|no more|not the)\b/i.test(body);
-  const refs: ProductRef[] = [];
-  const sku = resolveCatalogSku(body, catalog);
-  if (sku) {
-    refs.push({ raw: text, sku, negated, quoted });
+  const best = new Map<string, ProductRef & { score: number }>();
+  for (const row of catalog) {
+    const aliases = [...catalogAliases(row)].sort((a, b) => b.length - a.length);
+    for (const alias of aliases) {
+      const re = new RegExp(aliasPattern(alias).source, "giu");
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(body))) {
+        const clause = clauseAt(body, m.index);
+        const negated = isNegated(clause) || /\b(don't want|do not want|no more|not the)\b/i.test(clause);
+        const quoted = isQuoted(clause) || (THIRD_PARTY.test(clause) && !/\bi (want|need|ll take)\b/i.test(clause));
+        const prev = best.get(row.sku);
+        if (!prev || alias.length > prev.score) {
+          best.set(row.sku, { raw: m[0], sku: row.sku, negated, quoted, score: alias.length });
+        }
+      }
+    }
   }
-  return refs;
+  return [...best.values()].map(({ raw, sku, negated, quoted }) => ({ raw, sku, negated, quoted }));
 }
 
 export function interpretMessage(
@@ -144,7 +193,11 @@ export function interpretMessage(
   const productRefs = collectProductRefs(text, catalog);
   const negatedSkus = productRefs.filter((p) => p.negated && !p.quoted).map((p) => p.sku).filter((s): s is string => Boolean(s));
   const quoted = productRefs.some((p) => p.quoted) || isQuoted(text);
-  const primarySku = productRefs.find((p) => !p.negated && !p.quoted)?.sku ?? null;
+  const positive = productRefs.filter((p) => p.sku && !p.negated && !p.quoted);
+  const primarySku = positive.length === 1 ? positive[0]!.sku : resolveCatalogSku(text, catalog);
+  const genericTie = positive.length > 1 && resolveCatalogSku(text, catalog) == null;
+
+
 
   const intents: Intent[] = [];
   const questions: Interpretation["questions"] = [];
@@ -182,14 +235,16 @@ export function interpretMessage(
   if (primarySku && !intents.includes("price_ask") && !intents.includes("menu") && !negatedSkus.includes(primarySku)) {
     intents.push("content_ask");
   }
-  if (negatedSkus.length && !intents.includes("price_ask")) {
-    /* decline is recorded; do not treat as a request */
-  }
 
+  let pendingSku: string | null = null;
   if (pending && (isBareYes(body) || isDecline(body))) {
     answerToPending = { kind: pending.kind, affirmed: isBareYes(body) };
-    if (pending.kind === "payment_method") intents.unshift(isBareYes(body) ? "payment_claim" : "other");
-    else if (pending.kind === "offer_confirm") intents.unshift(isBareYes(body) ? "content_ask" : "other");
+    if (pending.kind === "offer_confirm") {
+      intents.unshift(isBareYes(body) ? "content_ask" : "other");
+      if (isBareYes(body) && pending.sku) pendingSku = pending.sku;
+    } else if (pending.kind === "payment_method") {
+      intents.unshift("other");
+    }
   }
 
   if (intents.length === 0) {
@@ -204,7 +259,11 @@ export function interpretMessage(
   if (objection === "burned") archetype = "burned_daddy";
 
   const primary: Intent = intents[0] ?? "other";
-  const wantsSku = quoted || negatedSkus.includes(primarySku ?? "") ? null : primarySku;
+  const primaryQuoted = Boolean(productRefs.find((p) => p.sku === primarySku)?.quoted);
+  const wantsSku =
+    pendingSku ?? (primaryQuoted || negatedSkus.includes(primarySku ?? "") || genericTie ? null : primarySku);
+
+
 
   const result: UnderstandResult = {
     intent: primary,
@@ -228,7 +287,8 @@ export function interpretMessage(
     quoted,
     candidateFacts: [],
     answerToPending,
-    needsClarification: Boolean(PRICE.test(body) && catalog.length > 1 && !primarySku),
+    needsClarification: Boolean((PRICE.test(body) && catalog.length > 1 && !wantsSku) || genericTie),
+
     optOut: intents.includes("opt_out"),
     identityAsk: intents.includes("identity_ask"),
     paymentClaim: intents.includes("payment_claim") || intents.includes("receipt"),

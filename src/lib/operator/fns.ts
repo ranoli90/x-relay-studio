@@ -18,6 +18,8 @@ export const publishBusinessFn = createServerFn({ method: "POST" })
       offers?: Array<{ title?: string; amountMinor?: number; currency?: string; available?: boolean }>;
       paymentCopy?: string;
       destinationRef?: string;
+      voice?: string;
+      boundaries?: string;
     };
     const plainText = String(d.plainText ?? "").trim();
     if (!plainText) throw new Error("Write a short brief first.");
@@ -35,6 +37,8 @@ export const publishBusinessFn = createServerFn({ method: "POST" })
       offers,
       paymentCopy: String(d.paymentCopy ?? "").trim(),
       destinationRef: String(d.destinationRef ?? "").trim(),
+      voice: String(d.voice ?? "").trim(),
+      boundaries: String(d.boundaries ?? "").trim(),
     };
   })
   .handler(async ({ context, data }) => {
@@ -45,14 +49,17 @@ export const publishBusinessFn = createServerFn({ method: "POST" })
 export const saveDraftFn = createServerFn({ method: "POST" })
   .middleware([authMiddleware])
   .validator((input: unknown) => {
-    const d = input as { conversationId?: string; body?: string };
+    const d = input as { conversationId?: string; body?: string; version?: number };
     if (!d.conversationId) throw new Error("conversation required");
-    return { conversationId: String(d.conversationId), body: String(d.body ?? "") };
+    return {
+      conversationId: String(d.conversationId),
+      body: String(d.body ?? ""),
+      version: typeof d.version === "number" ? d.version : undefined,
+    };
   })
   .handler(async ({ context, data }) => {
     const { saveComposerDraft } = await import("./persist.server");
-    await saveComposerDraft(context.userId, data.conversationId, data.body);
-    return { ok: true };
+    return saveComposerDraft(context.userId, data.conversationId, data.body, data.version);
   });
 
 export const ackVisibleFn = createServerFn({ method: "POST" })
@@ -63,6 +70,7 @@ export const ackVisibleFn = createServerFn({ method: "POST" })
       conversationVisible?: boolean;
       documentVisible?: boolean;
       chatListOnly?: boolean;
+      lastSeenMessageId?: string;
     };
     if (!d.conversationId) throw new Error("conversation required");
     return {
@@ -71,6 +79,7 @@ export const ackVisibleFn = createServerFn({ method: "POST" })
       documentVisible: d.documentVisible !== false,
       chatListOnly: Boolean(d.chatListOnly),
       explicitAck: true,
+      lastSeenMessageId: d.lastSeenMessageId ? String(d.lastSeenMessageId) : null,
     };
   })
   .handler(async ({ context, data }) => {
@@ -129,25 +138,27 @@ export const setTakeoverFn = createServerFn({ method: "POST" })
     return { conversationId: String(d.conversationId), on: Boolean(d.on) };
   })
   .handler(async ({ context, data }) => {
-    const { getSql } = await import("@/lib/db");
-    const sql = await getSql();
-    const rows = await sql.query<{ id: string }>(
-      `update agent_threads
-          set takeover = $3
-        where user_id = $1
-          and (
-            id = $2
-            or telegram_account_id = $2
-            or fan_id in (select id from agent_fans where user_id = $1 and tg_peer_id = $2)
-          )
-       returning id`,
-      [context.userId, data.conversationId, data.on],
-    );
-    if (!rows[0]) throw new Error("conversation not found");
-    await sql.query(
-      `update telegram_chats set muted = $3 where user_id = $1 and id = $2`,
-      [context.userId, data.conversationId, data.on],
-    );
+    const { withTransaction } = await import("@/lib/db");
+    await withTransaction(async (sql) => {
+      const updated = await sql.query<{ id: string }>(
+        `update agent_threads
+            set takeover = $3
+          where user_id = $1
+            and (
+              id = $2
+              or telegram_account_id = $2
+              or fan_id in (select id from agent_fans where user_id = $1 and tg_peer_id = $2)
+            )
+         returning id`,
+        [context.userId, data.conversationId, data.on],
+      );
+      if (!updated[0]) throw new Error("conversation not found");
+      await sql.query(
+        `update telegram_chats set muted = $3 where user_id = $1 and id = $2`,
+        [context.userId, data.conversationId, data.on],
+      );
+      return updated;
+    });
     return { on: data.on };
   });
 
@@ -261,3 +272,58 @@ export const loadConversationControlsFn = createServerFn({ method: "POST" })
 export const labAllowedFn = createServerFn({ method: "GET" })
   .middleware([authMiddleware])
   .handler(async () => ({ allowed: demoFixturesAllowed() }));
+
+export const setAdultEligibilityFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => {
+    const d = input as { conversationId?: string; status?: string; evidence?: string };
+    if (!d.conversationId) throw new Error("conversation required");
+    const status: "allowed" | "unknown" | "disallowed" =
+      d.status === "allowed" || d.status === "disallowed" ? d.status : "unknown";
+    return { conversationId: String(d.conversationId), status, evidence: String(d.evidence ?? "") };
+  })
+  .handler(async ({ context, data }) => {
+    const { setAdultEligibility } = await import("./persist.server");
+    return setAdultEligibility(context.userId, data.conversationId, data.status, data.evidence);
+  });
+
+export const uploadMediaFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => {
+    const d = input as { title?: string; mime?: string; bytesBase64?: string };
+    const mime = String(d.mime ?? "");
+    const raw = String(d.bytesBase64 ?? "");
+    if (!raw) throw new Error("file required");
+    return { title: String(d.title ?? "Still"), mime, bytesBase64: raw };
+  })
+  .handler(async ({ context, data }) => {
+    const { uploadMediaAsset } = await import("./persist.server");
+    const bytes = Buffer.from(data.bytesBase64, "base64");
+    return uploadMediaAsset(context.userId, { title: data.title, mime: data.mime, bytes });
+  });
+
+export const setMediaApprovalFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => {
+    const d = input as { assetId?: string; approval?: string };
+    if (!d.assetId) throw new Error("asset required");
+    const approval = d.approval === "revoked" ? "revoked" : "approved";
+    return { assetId: String(d.assetId), approval: approval as "approved" | "revoked" };
+  })
+  .handler(async ({ context, data }) => {
+    const { setMediaApproval } = await import("./persist.server");
+    return setMediaApproval(context.userId, data.assetId, data.approval);
+  });
+
+export const sendMediaFn = createServerFn({ method: "POST" })
+  .middleware([authMiddleware])
+  .validator((input: unknown) => {
+    const d = input as { proposalId?: string };
+    if (!d.proposalId) throw new Error("proposal required");
+    return { proposalId: String(d.proposalId) };
+  })
+  .handler(async ({ context, data }) => {
+    const { sendMediaProposal } = await import("./persist.server");
+    return sendMediaProposal(context.userId, data.proposalId);
+  });
+

@@ -36,14 +36,18 @@ describe("live autopilot arming", () => {
         updated_at timestamptz
       );
       insert into agent_personas values
-        ('desk_live', false, false, false, false, 'draft', false),
+        ('desk_live', false, false, true, false, 'draft', false),
+        ('desk_revoked', true, true, false, true, 'approved_auto', false),
         ('desk_stop', false, false, false, false, 'draft', true);
       insert into telegram_user_sessions values
         ('desk_live', 'sess', false, false, false, false, now()),
+        ('desk_revoked', 'sess', true, true, false, false, now()),
         ('desk_stop', 'sess', false, false, false, true, now());
+
     `);
     const sql = toSql(pg);
     await applyLiveArmSql("desk_live", sql);
+    await applyLiveArmSql("desk_revoked", sql);
     await applyLiveArmSql("desk_stop", sql);
 
     const live = (
@@ -56,6 +60,17 @@ describe("live autopilot arming", () => {
     assert.equal(live.auto_send, true);
     assert.equal(live.processing_permission, true);
     assert.equal(live.automation_mode, "approved_auto");
+
+    const revoked = (
+      await pg.query<{
+        auto_send: boolean;
+        processing_permission: boolean;
+        automation_mode: string;
+      }>(`select auto_send, processing_permission, automation_mode from agent_personas where user_id = 'desk_revoked'`)
+    ).rows[0]!;
+    assert.equal(revoked.processing_permission, false);
+    assert.equal(revoked.auto_send, true);
+    assert.equal(revoked.automation_mode, "approved_auto");
 
     const stopped = (
       await pg.query<{ auto_send: boolean; automation_mode: string }>(

@@ -1,6 +1,7 @@
 import { formatMoney, parseCurrency, type Money } from "./money.ts";
 
 export type QuoteSnapshot = {
+  id?: string;
   sku: string;
   title: string;
   amount: Money;
@@ -10,16 +11,24 @@ export type QuoteSnapshot = {
 };
 
 export type QuoteView = {
+  id: string;
   sku: string;
   title: string;
   amountLabel: string;
+  currency: string;
+  destinationId: string | null;
+  businessRevision: number;
 };
 
-export function quoteView(snapshot: QuoteSnapshot): QuoteView {
+export function quoteView(snapshot: QuoteSnapshot, id: string): QuoteView {
   return {
+    id,
     sku: snapshot.sku,
     title: snapshot.title,
     amountLabel: formatMoney(snapshot.amount),
+    currency: snapshot.amount.currency,
+    destinationId: snapshot.destinationId,
+    businessRevision: snapshot.businessRevision,
   };
 }
 

@@ -106,9 +106,9 @@ export async function ensureSeed(userId: string): Promise<string> {
     const names = await seedRoster(sql, userId, existingMaya.id, existingMaya.display_name);
     await ensureLiveCatalog(sql, userId, existingMaya.id);
     await seedDemoIfEmpty(sql, userId, existingMaya.id, names);
-    await applyLiveArm(userId);
     return existingMaya.id;
   }
+
 
   const existingAny = (
     await sql.query<{ id: string; display_name: string }>(
@@ -120,9 +120,9 @@ export async function ensureSeed(userId: string): Promise<string> {
     const names = await seedRoster(sql, userId, existingAny.id, existingAny.display_name);
     await ensureLiveCatalog(sql, userId, existingAny.id);
     await seedDemoIfEmpty(sql, userId, existingAny.id, names);
-    await applyLiveArm(userId);
     return existingAny.id;
   }
+
 
   const displayName = pickAgentName(userId);
   const handle = slugName(displayName);

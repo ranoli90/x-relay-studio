@@ -1,5 +1,6 @@
 import { getSql, withTransaction } from "@/lib/db";
-import { ensureSeed, applyLiveArm } from "./seed.server.ts";
+import { ensureSeed } from "./seed.server.ts";
+
 import { processInbound } from "./brain.server.ts";
 import { newId } from "./ids.ts";
 import { isNonProcessableInbound, redactForModel } from "./consent.ts";
@@ -29,15 +30,13 @@ type DrainRow = {
   persona_emergency_stop: boolean | null;
   automation_mode: string | null;
   processing_permission?: boolean | null;
+  claim_owner?: string | null;
 };
+
 
 type Sql = Awaited<ReturnType<typeof getSql>>;
 
-function isUniqueViolation(err: unknown): boolean {
-  const code = err && typeof err === "object" && "code" in err ? String((err as { code: unknown }).code) : "";
-  const msg = err instanceof Error ? err.message : "";
-  return code === "23505" || /unique|duplicate/i.test(msg);
-}
+const CLAIM_LEASE_MS = 2 * 60_000;
 
 async function locateOrCreateFanThread(
   tx: Sql,
@@ -52,25 +51,28 @@ async function locateOrCreateFanThread(
   let fanId = existingFan?.id;
   if (!fanId) {
     fanId = newId("fan");
-    try {
-      await tx.query(
-        `insert into agent_fans
+    const inserted = await tx.query<{ id: string }>(
+      `insert into agent_fans
           (id, user_id, persona_id, display_name, handle, source, archetype, tg_peer_id)
-         values ($1,$2,$3,$4,null,'telegram','new',$5)`,
-        [fanId, opts.userId, opts.personaId, opts.displayName, opts.chatId],
-      );
-    } catch (err) {
-      if (!isUniqueViolation(err)) throw err;
+         values ($1,$2,$3,$4,null,'telegram','new',$5)
+         on conflict (user_id, tg_peer_id) where tg_peer_id is not null do nothing
+         returning id`,
+      [fanId, opts.userId, opts.personaId, opts.displayName, opts.chatId],
+    );
+    if (inserted[0]?.id) {
+      fanId = inserted[0].id;
+    } else {
       const raced = (
         await tx.query<{ id: string }>(
           `select id from agent_fans where user_id = $1 and tg_peer_id = $2 limit 1`,
           [opts.userId, opts.chatId],
         )
       )[0];
-      if (!raced) throw err;
+      if (!raced) throw new Error("fan_create_failed");
       fanId = raced.id;
     }
   }
+
   const existingThread = (
     await tx.query<{ id: string }>(
       `select id from agent_threads where user_id = $1 and fan_id = $2 limit 1`,
@@ -79,23 +81,22 @@ async function locateOrCreateFanThread(
   )[0];
   if (existingThread) return { fanId, threadId: existingThread.id };
   const threadId = newId("thr");
-  try {
-    await tx.query(
-      `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
-       values ($1,$2,$3,$4,'W1_INGEST','open')`,
-      [threadId, opts.userId, opts.personaId, fanId],
-    );
-    return { fanId, threadId };
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err;
-    const raced = (
-      await tx.query<{ id: string }>(
-        `select id from agent_threads where user_id = $1 and fan_id = $2 limit 1`,
-        [opts.userId, fanId],
-      )
-    )[0];
-    return { fanId, threadId: raced?.id ?? null };
-  }
+  const inserted = await tx.query<{ id: string }>(
+    `insert into agent_threads (id, user_id, persona_id, fan_id, workflow, state)
+       values ($1,$2,$3,$4,'W1_INGEST','open')
+       on conflict (user_id, fan_id) do nothing
+       returning id`,
+    [threadId, opts.userId, opts.personaId, fanId],
+  );
+  if (inserted[0]?.id) return { fanId, threadId: inserted[0].id };
+  const raced = (
+    await tx.query<{ id: string }>(
+      `select id from agent_threads where user_id = $1 and fan_id = $2 limit 1`,
+      [opts.userId, fanId],
+    )
+  )[0];
+  return { fanId, threadId: raced?.id ?? null };
+
 }
 
 /**
@@ -114,28 +115,33 @@ export async function drainQueuedTelegram(limit = 8, userIds?: string[]): Promis
     if (!claimed) continue;
     try {
       const status = await processClaimedRow(sql, { ...row, ...claimed });
-      await sql.query(`update telegram_messages set ai_status = $1 where id = $2 and ai_status = 'processing'`, [
-        status,
-        row.id,
-      ]);
+      await sql.query(
+        `update telegram_messages
+            set ai_status = $1, claim_owner = null, claim_expires_at = null
+          where id = $2 and claim_owner = $3 and ai_status = 'processing'`,
+        [status, row.id, claimed.claim_owner],
+      );
       n += 1;
     } catch {
       const attempts = Number(row.ai_attempt_count ?? 0) + 1;
       if (attempts >= MAX_INGRESS_ATTEMPTS) {
         await sql.query(
-          `update telegram_messages set ai_status = 'held' where id = $1 and ai_status = 'processing'`,
-          [row.id],
+          `update telegram_messages
+              set ai_status = 'held', claim_owner = null, claim_expires_at = null
+            where id = $1 and claim_owner = $2 and ai_status = 'processing'`,
+          [row.id, claimed.claim_owner],
         );
       } else {
         const wait = new Date(Date.now() + retryBackoffMs(attempts)).toISOString();
         await sql.query(
           `update telegram_messages
-              set ai_status = 'retry_wait', next_attempt_at = $2
-            where id = $1 and ai_status = 'processing'`,
-          [row.id, wait],
+              set ai_status = 'retry_wait', next_attempt_at = $2, claim_owner = null, claim_expires_at = null
+            where id = $1 and claim_owner = $3 and ai_status = 'processing'`,
+          [row.id, wait, claimed.claim_owner],
         );
       }
     }
+
   }
   return n;
 }
@@ -161,8 +167,12 @@ async function selectDueIngress(
        left join telegram_user_sessions s on s.user_id = m.user_id
        left join agent_personas p on p.user_id = m.user_id
       where m.from_self = false
-        and m.ai_status in ('queued', 'retry_wait')
-        and (m.next_attempt_at is null or m.next_attempt_at <= now())
+        and (
+          m.ai_status in ('queued', 'retry_wait')
+          or (m.ai_status = 'processing' and m.claim_expires_at is not null and m.claim_expires_at < now())
+        )
+        and (m.next_attempt_at is null or m.next_attempt_at <= now() or m.ai_status = 'processing')
+
         ${userClause}
       order by m.created_at asc
       limit $1`,
@@ -173,17 +183,27 @@ async function selectDueIngress(
 async function claimIngressRow(
   sql: Sql,
   id: string,
-): Promise<{ id: string; ai_attempt_count: number } | null> {
-  const rows = await sql.query<{ id: string; ai_attempt_count: number }>(
+): Promise<{ id: string; ai_attempt_count: number; claim_owner: string } | null> {
+  const owner = newId("wrk");
+  const expires = new Date(Date.now() + CLAIM_LEASE_MS).toISOString();
+  const rows = await sql.query<{ id: string; ai_attempt_count: number; claim_owner: string }>(
     `update telegram_messages
         set ai_status = 'processing',
-            ai_attempt_count = coalesce(ai_attempt_count, 0) + 1
-      where id = $1 and ai_status in ('queued', 'retry_wait')
-      returning id, ai_attempt_count`,
-    [id],
+            ai_attempt_count = coalesce(ai_attempt_count, 0) + 1,
+            claim_owner = $2,
+            claim_expires_at = $3
+      where id = $1
+        and (
+          ai_status in ('queued', 'retry_wait')
+          or (ai_status = 'processing' and claim_expires_at is not null and claim_expires_at < now())
+        )
+      returning id, ai_attempt_count, claim_owner`,
+    [id, owner, expires],
   );
   return rows[0] ?? null;
 }
+
+
 
 async function findThreadForChat(
   sql: Sql,
@@ -327,7 +347,7 @@ async function processClaimedRow(
 ): Promise<string> {
   if (row.auth_dead) return "held";
   if (row.emergency_stop || row.persona_emergency_stop) return "held";
-  await applyLiveArm(row.user_id);
+
 
   const imported = classifyInboundAiStatus({
     fromSelf: false,
@@ -338,14 +358,31 @@ async function processClaimedRow(
 
   if (isNonProcessableInbound(row.body, row.author_name)) return "suppressed";
 
-  const { burstDecision, nextBurstRetryAt } = await import("@/lib/operator/debounce.ts");
-  const neighbors = await sql.query<{ created_at: string | Date }>(
-    `select created_at from telegram_messages
+  const { burstDecision, nextBurstRetryAt, coalesceInboundBodies } = await import("@/lib/operator/debounce.ts");
+  const neighbors = await sql.query<{
+    id: string;
+    body: string;
+    created_at: string | Date;
+    ai_status: string;
+    claim_owner: string | null;
+  }>(
+    `select id, body, created_at, ai_status, claim_owner from telegram_messages
       where user_id = $1 and chat_id = $2 and from_self = false
         and ai_status in ('queued', 'retry_wait', 'processing')
       order by created_at asc`,
     [row.user_id, row.chat_id],
   );
+  const foreign = neighbors.some(
+    (n) => n.id !== row.id && n.ai_status === "processing" && n.claim_owner && n.claim_owner !== row.claim_owner,
+  );
+  if (foreign) {
+    await sql.query(
+      `update telegram_messages set ai_status = 'retry_wait', next_attempt_at = $2
+        where id = $1 and ai_status = 'processing' and claim_owner is not distinct from $3`,
+      [row.id, nextBurstRetryAt(Date.now()).toISOString(), row.claim_owner ?? null],
+    );
+    return "retry_wait";
+  }
   if (neighbors.length > 1) {
     const first = new Date(neighbors[0]!.created_at).getTime();
     const last = new Date(neighbors[neighbors.length - 1]!.created_at).getTime();
@@ -360,12 +397,29 @@ async function processClaimedRow(
     ) {
       await sql.query(
         `update telegram_messages set ai_status = 'retry_wait', next_attempt_at = $2
-          where id = $1 and ai_status = 'processing'`,
-        [row.id, nextBurstRetryAt(now, { firstInboundAt: first }).toISOString()],
+          where id = $1 and ai_status = 'processing' and claim_owner is not distinct from $3`,
+        [row.id, nextBurstRetryAt(now, { firstInboundAt: first }).toISOString(), row.claim_owner ?? null],
       );
+
       return "retry_wait";
     }
   }
+
+  const siblingIds = neighbors.filter((n) => n.id !== row.id).map((n) => n.id);
+  const burstKey = neighbors[0]?.id ?? row.id;
+  if (siblingIds.length > 0 && row.claim_owner) {
+    await sql.query(
+      `update telegram_messages
+          set ai_status = 'processing', claim_owner = $2, coalesced_into = $3
+        where user_id = $4 and chat_id = $5
+          and id = any($1::text[])
+          and ai_status in ('queued', 'retry_wait')`,
+      [siblingIds, row.claim_owner, burstKey, row.user_id, row.chat_id],
+    );
+  }
+  const combined = coalesceInboundBodies(
+    neighbors.length ? neighbors.map((n) => n.body) : [row.body],
+  );
 
   const credits = await availableThreads(row.user_id);
 
@@ -386,14 +440,34 @@ async function processClaimedRow(
     userId: row.user_id,
     threadId: thread.id,
     fanId: fan.id,
-    text: redactForModel(row.body),
+    text: redactForModel(combined || row.body),
     source: "telegram",
-    idempotencyKey: `tg:${row.id}`,
+    idempotencyKey: `tg:${burstKey}`,
     forceHold: credits <= 0,
   });
+  const groupIds = [row.id, ...siblingIds];
+  if (result.retryable) {
+    const wait = new Date(Date.now() + retryBackoffMs(Number(row.ai_attempt_count ?? 1))).toISOString();
+    await sql.query(
+      `update telegram_messages
+          set ai_status = 'retry_wait', next_attempt_at = $2, claim_owner = null, claim_expires_at = null
+        where id = any($1::text[]) and user_id = $3`,
+      [groupIds, wait, row.user_id],
+    );
+    return "retry_wait";
+  }
   const burn = decideIngressCreditBurn(result, credits);
   if (burn.shouldBurn) {
     await burnThreadIfBillable(row.user_id, thread.id, burn.event);
   }
-  return result.auto ? "outbound" : "held";
+  const status = result.auto ? "outbound" : "held";
+  if (siblingIds.length > 0) {
+    await sql.query(
+      `update telegram_messages
+          set ai_status = $1, coalesced_into = $2, claim_owner = null, claim_expires_at = null
+        where id = any($3::text[]) and user_id = $4`,
+      [status, burstKey, siblingIds, row.user_id],
+    );
+  }
+  return status;
 }

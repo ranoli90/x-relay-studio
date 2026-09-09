@@ -44,7 +44,11 @@ export function publicPaymentView(input: {
   }
   const instC = parseCurrency(instruction.currency);
   const destC = destination ? parseCurrency(destination.currency) : null;
-  if (!destination || !instC || !destC || instC !== destC) {
+  const sameOwner =
+    !!destination &&
+    instruction.creatorId === destination.creatorId &&
+    instruction.bindingId === destination.bindingId;
+  if (!destination || !sameOwner || !instC || !destC || instC !== destC) {
     return {
       copy: instruction.publicCopy,
       provider: destination?.provider ?? null,

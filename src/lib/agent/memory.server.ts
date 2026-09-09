@@ -1,6 +1,8 @@
 import { getSql } from "@/lib/db";
 import { buildFanMemory, extractFacts, serializeMemory, type FanMemory } from "./memory.ts";
+import { extractProposedFacts } from "@/lib/conversation/facts.ts";
 import type { DiaryVoice } from "./types.ts";
+
 
 export async function loadFanNotes(fanId: string, userId: string): Promise<string | null> {
   const sql = await getSql();
@@ -44,7 +46,8 @@ export async function rememberFan(opts: {
     /* never break inbound */
   }
   try {
-    const { recordScopedFact } = await import("@/lib/operator/persist.server");
+    const { recordScopedFact, retractScopedPredicate } = await import("@/lib/operator/persist.server");
+
     const facts = extractFacts(opts.inbound);
     for (const [predicate, value] of Object.entries(facts)) {
       if (value === undefined || value === false || value === "") continue;
@@ -59,6 +62,16 @@ export async function rememberFan(opts: {
         confidence: 0.7,
       });
     }
+    for (const proposed of extractProposedFacts(opts.inbound, { voice: "inbound" })) {
+      if (proposed.assertion !== "negated" || proposed.thirdParty || proposed.subject !== "partner") continue;
+      await retractScopedPredicate({
+        userId: opts.userId,
+        customerId: opts.fanId,
+        predicate: proposed.predicate,
+        value: proposed.value,
+      });
+    }
+
   } catch {
     /* scoped facts must never block inbound */
   }

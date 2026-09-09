@@ -41,7 +41,7 @@ import {
 export type TransportKind =
   | { kind: "sent_confirmed"; transportMessageId: string }
   | { kind: "failed_definitive"; reason: string }
-  | { kind: "uncertain"; reason: string }
+  | { kind: "uncertain"; reason: string; transportMessageId?: string }
   | { kind: "blocked"; reason: string }
   | { kind: "canceled_stale"; reason: string }
   | { kind: "not_live"; reason: string };
@@ -131,6 +131,7 @@ export type OperatorWorld = {
   conversations: Conversation[];
   history: HistoryItem[];
   drafts: Record<string, string>;
+  draftVersions?: Record<string, number>;
   attachments: IncomingAttachment[];
   assets: LibraryAsset[];
   proposals: MediaProposal[];
@@ -142,6 +143,8 @@ export type OperatorWorld = {
 export function defaultFlags(): FinalState {
   return {
     accountGeneration: 1,
+    sessionGeneration: 1,
+    telegramAccountId: null,
     consentEpoch: 1,
     permissionRevision: 1,
     businessRevision: null,
@@ -323,6 +326,7 @@ export async function dispatchAttempt(
       const uncertain = applyTransportOutcome(attempt, {
         kind: "uncertain",
         reason: `possible_transmission:${check.reason}`,
+        transportMessageId: "transportMessageId" in outcome ? outcome.transportMessageId : undefined,
       });
       Object.assign(attempt, uncertain);
       return attempt;
@@ -359,13 +363,29 @@ export function retryAttempt(world: OperatorWorld, attemptId: string): SendAttem
 export function ackVisible(world: OperatorWorld, conversationId: string, ack: ReadAckInput): number {
   const chat = world.conversations.find((c) => c.id === conversationId);
   if (!chat) return 0;
-  chat.unread = applyReadAck(chat.unread, ack);
+  chat.unread = applyReadAck(chat.unread, ack, 0);
   return chat.unread;
 }
 
-export function saveDraft(world: OperatorWorld, conversationId: string, body: string): void {
-  if (!body.trim()) delete world.drafts[conversationId];
-  else world.drafts[conversationId] = body;
+export function saveDraft(
+  world: OperatorWorld,
+  conversationId: string,
+  body: string,
+  expectedVersion?: number,
+): { ok: boolean; version: number } {
+  const current = world.draftVersions?.[conversationId] ?? 0;
+  if (expectedVersion != null && expectedVersion !== current) {
+    return { ok: false, version: current };
+  }
+  if (!world.draftVersions) world.draftVersions = {};
+  if (!body.trim()) {
+    delete world.drafts[conversationId];
+    world.draftVersions[conversationId] = current + 1;
+    return { ok: true, version: current + 1 };
+  }
+  world.drafts[conversationId] = body;
+  world.draftVersions[conversationId] = current + 1;
+  return { ok: true, version: current + 1 };
 }
 
 export function historyForModel(world: OperatorWorld, limit: number): HistoryItem[] {

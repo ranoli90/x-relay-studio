@@ -66,6 +66,7 @@ export type PublishedProjection = {
   paymentCopy: string;
   destinationHint: string;
   boundaries: string;
+  voice: string;
 };
 
 const OFFER_TITLE = /^[\p{L}\p{N} ,.'&/-]{2,80}$/u;
@@ -130,11 +131,12 @@ export function draftFromBrief(plain: string): StructuredBusiness {
   const destinationHint = extractDestination(text);
   const boundaries = extractBoundaries(text);
   const about = rest.slice(0, 2000) || displayName;
+  const voice = extractVoice(text);
 
   return {
     displayName,
     about,
-    voice: "",
+    voice,
     boundaries,
     offers,
     paymentCopy,
@@ -171,6 +173,11 @@ function extractDestination(text: string): string {
 function extractBoundaries(text: string): string {
   const lines = text.split(/\n+/).filter((l) => /\b(no |do not |don't |never |must not )\b/i.test(l));
   return lines.join(" ").slice(0, 500);
+}
+
+function extractVoice(text: string): string {
+  const line = text.split(/\n+/).find((l) => /^voice\s*:/i.test(l));
+  return line ? line.replace(/^voice\s*:/i, "").trim().slice(0, 400) : "";
 }
 
 export function addOfferToDraft(
@@ -232,6 +239,7 @@ export function projectPublished(
     paymentCopy: revision.structured.paymentCopy,
     destinationHint: revision.structured.destinationHint,
     boundaries: revision.structured.boundaries,
+    voice: revision.structured.voice,
   };
 }
 

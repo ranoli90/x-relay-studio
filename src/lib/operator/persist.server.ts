@@ -8,11 +8,13 @@ import { cloneFinalState, type FinalState } from "./state.ts";
 import { shouldMarkRead, type ReadAckInput } from "./unread.ts";
 import {
   canPublish,
+  draftFromBrief,
   planningCatalog,
   serviceKeyFromTitle,
   type PublishedProjection,
   type StructuredBusiness,
 } from "./business.ts";
+
 import { evaluatePaymentEvidence, publicPaymentView } from "./payments.ts";
 import { money } from "./money.ts";
 import { effectiveAutoReply, type AutoReplyView } from "./effective-state.ts";
@@ -99,8 +101,28 @@ export async function loadLiveFinalState(
   const emergencyStop = colBool(persona, "emergency_stop") || colBool(session, "emergency_stop");
   const accountLive = Boolean(session.session_enc) && !colBool(session, "auth_dead");
   const processingPermission = colBool(persona, "processing_permission");
+  const sessionPresent = Boolean(session.session_enc);
+  const sessionGeneration = sessionPresent
+    ? colInt(session, "account_generation", 1)
+    : 0;
+  const telegramAccountId =
+    (typeof thread.telegram_account_id === "string" && thread.telegram_account_id) ||
+    null;
+  if (threadId && sessionPresent) {
+    const threadGen = colInt(thread, "account_generation", 1);
+    if (threadGen !== sessionGeneration) {
+      await sql.query(
+        `update agent_threads
+            set account_generation = $2
+          where id = $1 and user_id = $3 and account_generation is distinct from $2`,
+        [threadId, sessionGeneration, userId],
+      );
+    }
+  }
   return {
-    accountGeneration: colInt(thread, "account_generation", colInt(session, "account_generation", 1)),
+    accountGeneration: sessionPresent ? sessionGeneration : colInt(thread, "account_generation", 1),
+    sessionGeneration,
+    telegramAccountId,
     consentEpoch: colInt(thread, "consent_epoch", 1),
     permissionRevision: colInt(persona, "permission_revision", 1),
     businessRevision: published[0]?.revision ?? null,
@@ -172,6 +194,7 @@ export async function loadPublishedProjection(
     paymentCopy: structured.paymentCopy,
     destinationHint: structured.destinationHint ?? "",
     boundaries: structured.boundaries ?? "",
+    voice: structured.voice ?? "",
     offers: offers.map((o) => ({
       id: o.id,
       serviceKey: o.service_key || o.id,
@@ -196,14 +219,18 @@ export async function catalogForPlanning(
   const proj = published === undefined ? await loadPublishedProjection(userId) : published;
   const sql = await getSql();
   const dest = proj
-    ? await sql.query<{ provider: string }>(
-        `select provider from payment_destinations
+    ? await sql.query<{ provider: string; destination_ref: string }>(
+        `select provider, destination_ref from payment_destinations
           where user_id = $1 and binding_id = $2
+            and revoked_at is null
+            and (revision_id is null or revision_id = $3)
           order by created_at desc limit 1`,
-        [userId, proj.bindingId],
+        [userId, proj.bindingId, proj.revisionId],
       )
     : [];
-  const rail = dest[0]?.provider ?? proj?.destinationHint ?? "";
+  const handle = dest[0]?.destination_ref?.trim() || proj?.destinationHint?.trim() || "";
+  const rail = handle && handle !== "manual_handle" ? handle : "";
+
   return planningCatalog(proj, rail).map((r) => ({
     id: r.id,
     sku: r.sku,
@@ -238,42 +265,106 @@ export async function ensureBinding(userId: string): Promise<{ id: string; creat
   return { id: again[0].id, creatorId: again[0].creator_id };
 }
 
-export async function saveComposerDraft(userId: string, conversationId: string, body: string): Promise<void> {
+export async function saveComposerDraft(
+  userId: string,
+  conversationId: string,
+  body: string,
+  expectedVersion?: number,
+): Promise<{ ok: boolean; version: number; body: string }> {
   const sql = await getSql();
   if (!body.trim()) {
+    if (expectedVersion != null) {
+      const deleted = await sql.query<{ version: number }>(
+        `delete from composer_drafts
+          where user_id = $1 and conversation_id = $2 and version = $3
+          returning version`,
+        [userId, conversationId, expectedVersion],
+      );
+      if (deleted[0]) return { ok: true, version: expectedVersion + 1, body: "" };
+      const current = await sql.query<{ version: number; body: string }>(
+        `select version, body from composer_drafts where user_id = $1 and conversation_id = $2`,
+        [userId, conversationId],
+      );
+      if (!current[0]) return { ok: true, version: 0, body: "" };
+      return { ok: false, version: current[0].version, body: current[0].body };
+    }
     await sql.query(
       `delete from composer_drafts where user_id = $1 and conversation_id = $2`,
       [userId, conversationId],
     );
-    return;
+    return { ok: true, version: 0, body: "" };
+  }
+  const clipped = body.slice(0, 4000);
+  if (expectedVersion != null) {
+    if (expectedVersion === 0) {
+      try {
+        await sql.query(
+          `insert into composer_drafts (user_id, conversation_id, body, version, updated_at)
+           values ($1,$2,$3,1, now())`,
+          [userId, conversationId, clipped],
+        );
+        return { ok: true, version: 1, body: clipped };
+      } catch (err) {
+        if (!isUniqueViolation(err)) throw err;
+      }
+    } else {
+      const updated = await sql.query<{ version: number; body: string }>(
+        `update composer_drafts
+            set body = $4, version = version + 1, updated_at = now()
+          where user_id = $1 and conversation_id = $2 and version = $3
+          returning version, body`,
+        [userId, conversationId, expectedVersion, clipped],
+      );
+      if (updated[0]) return { ok: true, version: updated[0].version, body: updated[0].body };
+    }
+    const current = await sql.query<{ version: number; body: string }>(
+      `select version, body from composer_drafts where user_id = $1 and conversation_id = $2`,
+      [userId, conversationId],
+    );
+    if (!current[0]) return { ok: false, version: 0, body: "" };
+    return { ok: false, version: current[0].version, body: current[0].body };
   }
   await sql.query(
     `insert into composer_drafts (user_id, conversation_id, body, updated_at)
      values ($1,$2,$3, now())
      on conflict (user_id, conversation_id)
      do update set body = excluded.body, updated_at = now(), version = composer_drafts.version + 1`,
-    [userId, conversationId, body.slice(0, 4000)],
+    [userId, conversationId, clipped],
   );
+  const row = await sql.query<{ version: number }>(
+    `select version from composer_drafts where user_id = $1 and conversation_id = $2`,
+    [userId, conversationId],
+  );
+  return { ok: true, version: row[0]?.version ?? 1, body: clipped };
 }
 
-export async function loadComposerDrafts(userId: string): Promise<Record<string, string>> {
+export async function loadComposerDrafts(
+  userId: string,
+): Promise<Record<string, { body: string; version: number }>> {
   const sql = await getSql();
-  const rows = await sql.query<{ conversation_id: string; body: string }>(
-    `select conversation_id, body from composer_drafts where user_id = $1`,
+  const rows = await sql.query<{ conversation_id: string; body: string; version: number }>(
+    `select conversation_id, body, version from composer_drafts where user_id = $1`,
     [userId],
   );
-  const out: Record<string, string> = {};
-  for (const row of rows) out[row.conversation_id] = row.body;
+  const out: Record<string, { body: string; version: number }> = {};
+  for (const row of rows) out[row.conversation_id] = { body: row.body, version: Number(row.version) || 1 };
   return out;
 }
 
 export async function loadConversationControls(
   userId: string,
   conversationId: string,
-): Promise<{ takeover: boolean; optOut: boolean }> {
+): Promise<{
+  takeover: boolean;
+  optOut: boolean;
+  adultEligibility: "allowed" | "unknown" | "disallowed";
+  holdReason: string | null;
+}> {
   const sql = await getSql();
   const rows = await sql.query<Record<string, unknown>>(
-    `select coalesce(t.takeover, false) as takeover, coalesce(t.opt_out, false) as opt_out
+    `select coalesce(t.takeover, false) as takeover,
+            coalesce(t.opt_out, false) as opt_out,
+            coalesce(t.adult_eligibility, 'unknown') as adult_eligibility
        from agent_threads t
       where t.user_id = $1
         and (
@@ -285,10 +376,20 @@ export async function loadConversationControls(
     [userId, conversationId],
   );
   const row = rows[0];
-  return {
-    takeover: row ? colBool(row, "takeover") : false,
-    optOut: row ? colBool(row, "opt_out") : false,
-  };
+  const adult = row?.adult_eligibility;
+  const adultEligibility =
+    adult === "allowed" || adult === "disallowed" ? adult : "unknown";
+  const takeover = row ? colBool(row, "takeover") : false;
+  const optOut = row ? colBool(row, "opt_out") : false;
+  let holdReason: string | null = null;
+  if (optOut) holdReason = "They asked to stop. The assistant will not write.";
+  else if (takeover) holdReason = "You have this chat. The assistant will not send.";
+  else if (adultEligibility === "unknown") {
+    holdReason = "Eligibility is not recorded. Standard prices stay held until you mark this customer allowed or disallowed.";
+  } else if (adultEligibility === "disallowed") {
+    holdReason = "This customer is not eligible for restricted offers.";
+  }
+  return { takeover, optOut, adultEligibility, holdReason };
 }
 
 export async function acknowledgeVisibleChat(
@@ -303,27 +404,35 @@ export async function acknowledgeVisibleChat(
   );
   const unread = Number(rows[0]?.unread ?? 0);
   if (!shouldMarkRead(ack)) return unread;
+  const lastSeen = ack.lastSeenMessageId?.trim() || "";
+  if (!lastSeen) return unread;
+  const seen = await sql.query<{ created_at: string | Date }>(
+    `select created_at from telegram_messages where user_id = $1 and chat_id = $2 and id = $3`,
+    [userId, conversationId, lastSeen],
+  );
+  if (!seen[0]) return unread;
   await sql.query(
-    `insert into conversation_read_acks (user_id, conversation_id, last_visible_at)
-     values ($1,$2, now())
+    `insert into conversation_read_acks (user_id, conversation_id, last_visible_at, last_visible_seq)
+     values ($1,$2, now(), $3)
      on conflict (user_id, conversation_id)
-     do update set last_visible_at = now()`,
-    [userId, conversationId],
+     do update set last_visible_at = now(), last_visible_seq = excluded.last_visible_seq
+       where conversation_read_acks.last_visible_seq is distinct from excluded.last_visible_seq
+          or conversation_read_acks.last_visible_seq is null`,
+    [userId, conversationId, lastSeen],
   );
-  const cleared = await sql.query<{ unread: number }>(
-    `update telegram_chats set unread = 0
-      where user_id = $1 and id = $2 and unread = $3
-      returning unread`,
-    [userId, conversationId, unread],
+  const remaining = await sql.query<{ n: number }>(
+    `select count(*)::int as n from telegram_messages
+      where user_id = $1 and chat_id = $2 and from_self = false
+        and created_at > $3`,
+    [userId, conversationId, seen[0].created_at],
   );
-  if (!cleared[0]) {
-    const again = await sql.query<{ unread: number }>(
-      `select unread from telegram_chats where user_id = $1 and id = $2`,
-      [userId, conversationId],
-    );
-    return again[0]?.unread ?? unread;
-  }
-  return 0;
+  const next = Number(remaining[0]?.n ?? 0);
+  await sql.query(
+    `update telegram_chats set unread = $3
+      where user_id = $1 and id = $2`,
+    [userId, conversationId, next],
+  );
+  return next;
 }
 
 export async function seedIsolatedPreview(userId: string): Promise<void> {
@@ -501,6 +610,7 @@ export async function loadOperatorDesk(userId: string): Promise<{
   projection: PublishedProjection | null;
   payment: ReturnType<typeof publicPaymentView>;
   drafts: Record<string, string>;
+  draftVersions: Record<string, number>;
   autoSend: boolean;
   desiredAutoReply: boolean;
   backgroundRun: boolean;
@@ -555,10 +665,12 @@ export async function loadOperatorDesk(userId: string): Promise<{
     projection
       ? `select id, provider, destination_ref, currency, credential_id from payment_destinations
           where user_id = $1 and binding_id = $2
+            and revoked_at is null
             and ($3::text is null or currency = $3)
           order by created_at desc limit 1`
       : `select id, provider, destination_ref, currency, credential_id from payment_destinations
-          where user_id = $1 order by created_at desc limit 1`,
+          where user_id = $1 and revoked_at is null order by created_at desc limit 1`,
+
     projection
       ? [userId, projection.bindingId, ins[0]?.currency ?? projection.offers[0]?.amount.currency ?? null]
       : [userId],
@@ -608,6 +720,7 @@ export async function loadOperatorDesk(userId: string): Promise<{
     awaitingPaymentVerification: false,
     lastSuccessAt: persona[0]?.writer_last_at ? String(persona[0].writer_last_at) : null,
   });
+  const loadedDrafts = await loadComposerDrafts(userId);
   return {
     bindingId: bind.id,
     creatorId: bind.creatorId,
@@ -637,7 +750,8 @@ export async function loadOperatorDesk(userId: string): Promise<{
           }
         : null,
     }),
-    drafts: await loadComposerDrafts(userId),
+    drafts: Object.fromEntries(Object.entries(loadedDrafts).map(([id, row]) => [id, row.body])),
+    draftVersions: Object.fromEntries(Object.entries(loadedDrafts).map(([id, row]) => [id, row.version])),
     autoSend: Boolean(persona[0]?.auto_send) && flags.automationMode === "approved_auto",
     desiredAutoReply,
     backgroundRun: Boolean(persona[0]?.background_run),
@@ -674,6 +788,8 @@ export async function publishBusinessFromBrief(
     offers: Array<{ title: string; amountMinor: number; currency: string; available: boolean; serviceKey?: string }>;
     paymentCopy: string;
     destinationRef: string;
+    voice?: string;
+    boundaries?: string;
   },
 ): Promise<PublishedProjection> {
   const bind = await ensureBinding(userId);
@@ -685,17 +801,25 @@ export async function publishBusinessFromBrief(
     available: offer.available,
     description: "",
   }));
+  const fromBrief = (() => {
+    try {
+      return input.plainText.trim() ? draftFromBrief(input.plainText) : null;
+    } catch {
+      return null;
+    }
+  })();
   const structured: StructuredBusiness = {
     displayName: input.plainText.trim().split("\n")[0]?.slice(0, 80) || "Business",
     about: input.plainText.trim().split("\n").slice(1).join(" ").slice(0, 500),
-    voice: "",
-    boundaries: "",
+    voice: input.voice?.trim() || fromBrief?.voice || "",
+    boundaries: input.boundaries?.trim() || fromBrief?.boundaries || "",
     paymentCopy: input.paymentCopy.trim(),
     destinationHint: input.destinationRef.trim(),
-    reviewQuestions: [],
+    reviewQuestions: fromBrief?.reviewQuestions ?? [],
     sourceBrief: input.plainText,
     offers: structuredOffers,
   };
+
   const gate = canPublish(structured);
   if (!gate.ok) throw new Error(gate.reason);
 
@@ -753,19 +877,27 @@ export async function publishBusinessFromBrief(
         [newOperatorId("ins"), userId, bind.id, revId, input.paymentCopy.trim(), structuredOffers[0]!.currency],
       );
     }
+    await sql.query(
+      `update payment_destinations
+          set revoked_at = now()
+        where user_id = $1 and binding_id = $2 and revoked_at is null`,
+      [userId, bind.id],
+    );
     if (input.destinationRef.trim()) {
       await sql.query(
-        `insert into payment_destinations (id, user_id, binding_id, provider, destination_ref, currency)
-         values ($1,$2,$3,'manual_handle',$4,$5)`,
+        `insert into payment_destinations (id, user_id, binding_id, provider, destination_ref, currency, revision_id)
+         values ($1,$2,$3,'manual_handle',$4,$5,$6)`,
         [
           newOperatorId("dest"),
           userId,
           bind.id,
           input.destinationRef.trim(),
           structuredOffers[0]!.currency,
+          revId,
         ],
       );
     }
+
     await sql.query(
       `update agent_personas set permission_revision = permission_revision where user_id = $1`,
       [userId],
@@ -785,17 +917,22 @@ export async function recordPaymentEvidence(
     amount_minor: number;
     currency: string;
     binding_id: string | null;
-  }>(`select amount_minor, currency, binding_id from business_offers where id = $1 and user_id = $2`, [
+    revision_id: string | null;
+  }>(`select amount_minor, currency, binding_id, revision_id from business_offers where id = $1 and user_id = $2`, [
     input.offerId,
     userId,
   ]);
   const dest = await sql.query<{ id: string }>(
     `select id from payment_destinations
       where user_id = $1
+        and revoked_at is null
         and ($2::text is null or binding_id = $2)
         and ($3::text is null or currency = $3)
+        and ($4::text is null or revision_id is null or revision_id = $4)
+        and ($5::text is null or id = $5)
       order by created_at desc limit 1`,
-    [userId, offer[0]?.binding_id ?? null, offer[0]?.currency ?? null],
+
+    [userId, offer[0]?.binding_id ?? null, offer[0]?.currency ?? null, offer[0]?.revision_id ?? null, input.destinationId],
   );
   if (!offer[0] || !dest[0]) return { accepted: false, reason: "missing", provenance: "evidence_candidate" };
   const decision = evaluatePaymentEvidence({
@@ -837,6 +974,8 @@ export function capturedFromOpts(opts: {
   const processingPermission = Boolean(opts.processingPermission);
   return cloneFinalState({
     accountGeneration: opts.accountGeneration ?? 1,
+    sessionGeneration: opts.accountGeneration ?? 1,
+    telegramAccountId: null,
     consentEpoch: opts.consentEpoch ?? 1,
     permissionRevision: opts.permissionRevision ?? 1,
     businessRevision: null,
@@ -858,24 +997,66 @@ export async function recordDispatchAttempt(input: {
   captured: FinalState;
   live: FinalState;
   status: string;
-}): Promise<string> {
+  replyPartId?: string | null;
+}): Promise<{ id: string; inserted: boolean }> {
   const sql = await getSql();
+  if (input.replyPartId) {
+    const existing = await findOpenDispatchAttempt(input.userId, input.conversationId, input.replyPartId);
+    if (existing) return { id: existing.id, inserted: false };
+  }
   const id = newOperatorId("att");
-  await sql.query(
-    `insert into send_attempts
-       (id, user_id, conversation_id, body, status, captured_json, live_json)
-     values ($1,$2,$3,$4,$5,$6,$7)`,
-    [
-      id,
-      input.userId,
-      input.conversationId,
-      input.body.slice(0, 4000),
-      input.status,
-      JSON.stringify(input.captured),
-      JSON.stringify(input.live),
-    ],
+  try {
+    await sql.query(
+      `insert into send_attempts
+         (id, user_id, conversation_id, body, status, captured_json, live_json, reply_part_id)
+       values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [
+        id,
+        input.userId,
+        input.conversationId,
+        input.body.slice(0, 4000),
+        input.status,
+        JSON.stringify(input.captured),
+        JSON.stringify(input.live),
+        input.replyPartId ?? null,
+      ],
+    );
+    return { id, inserted: true };
+  } catch (err) {
+    if (input.replyPartId && isUniqueViolation(err)) {
+      const raced = await findOpenDispatchAttempt(input.userId, input.conversationId, input.replyPartId);
+      if (raced) return { id: raced.id, inserted: false };
+    }
+    throw err;
+  }
+}
+
+export async function findOpenDispatchAttempt(
+  userId: string,
+  conversationId: string,
+  replyPartId: string,
+): Promise<{
+  id: string;
+  status: string;
+  transport_message_id: string | null;
+  reconciled_as: string | null;
+  captured_json: string;
+} | null> {
+  const sql = await getSql();
+  const rows = await sql.query<{
+    id: string;
+    status: string;
+    transport_message_id: string | null;
+    reconciled_as: string | null;
+    captured_json: string;
+  }>(
+    `select id, status, transport_message_id, reconciled_as, captured_json
+       from send_attempts
+      where user_id = $1 and conversation_id = $2 and reply_part_id = $3
+      order by created_at desc limit 1`,
+    [userId, conversationId, replyPartId],
   );
-  return id;
+  return rows[0] ?? null;
 }
 
 export async function finishDispatchAttempt(
@@ -974,42 +1155,75 @@ export async function recordScopedFact(input: {
   assertion: "asserted" | "inferred";
   confidence: number;
 }): Promise<void> {
-  const sql = await getSql();
   const predicate = input.predicate.slice(0, 80);
   const value = input.value.slice(0, 400);
-  const existing = await sql.query<{ id: string }>(
-    `select id from memory_facts
-      where user_id = $1 and customer_id = $2 and predicate = $3 and value = $4 and status = 'active'
-      limit 1`,
-    [input.userId, input.customerId, predicate, value],
-  );
-  if (existing[0]) return;
-  try {
-    await sql.query(
-      `insert into memory_facts
-         (id, user_id, customer_id, account_id, subject, predicate, value, source_event_id, speaker, assertion, confidence, status)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active')`,
-      [
-        newOperatorId("fact"),
-        input.userId,
-        input.customerId,
-        input.accountId ?? null,
-        input.subject.slice(0, 80),
-        predicate,
-        value,
-        input.sourceEventId ?? null,
-        input.speaker,
-        input.assertion,
-        Math.max(0, Math.min(1, input.confidence)),
-      ],
+  await withTransaction(async (sql) => {
+    const existing = await sql.query<{ id: string }>(
+      `select id from memory_facts
+        where user_id = $1 and customer_id = $2 and predicate = $3 and value = $4 and status = 'active'
+        limit 1`,
+      [input.userId, input.customerId, predicate, value],
     );
-  } catch (err) {
-    if (isUniqueViolation(err)) return;
-    throw err;
-  }
+    if (existing[0]) return;
+    try {
+      await sql.query(
+        `with superseded as (
+           update memory_facts
+              set status = 'superseded'
+            where user_id = $1 and customer_id = $2 and predicate = $3 and status = 'active' and value <> $4
+           returning id
+         )
+         insert into memory_facts
+           (id, user_id, customer_id, account_id, subject, predicate, value, source_event_id, speaker, assertion, confidence, status)
+         select $5,$1,$2,$6,$7,$3,$4,$8,$9,$10,$11,'active'
+          where not exists (
+            select 1 from memory_facts
+             where user_id = $1 and customer_id = $2 and predicate = $3 and status = 'active'
+          )`,
+        [
+          input.userId,
+          input.customerId,
+          predicate,
+          value,
+          newOperatorId("fact"),
+          input.accountId ?? null,
+          input.subject.slice(0, 80),
+          input.sourceEventId ?? null,
+          input.speaker,
+          input.assertion,
+          Math.max(0, Math.min(1, input.confidence)),
+        ],
+      );
+    } catch (err) {
+      if (isUniqueViolation(err)) return;
+      throw err;
+    }
+  });
+}
+
+export async function retractScopedPredicate(input: {
+  userId: string;
+  customerId: string;
+  predicate: string;
+  value?: string;
+}): Promise<number> {
+  const sql = await getSql();
+  const rows = await sql.query<{ id: string }>(
+    `update memory_facts
+        set status = 'deleted'
+      where user_id = $1
+        and customer_id = $2
+        and predicate = $3
+        and status = 'active'
+        and ($4::text is null or lower(value) = lower($4))
+      returning id`,
+    [input.userId, input.customerId, input.predicate.slice(0, 80), input.value?.slice(0, 400) ?? null],
+  );
+  return rows.length;
 }
 
 export async function forgetScopedFact(userId: string, factId: string): Promise<boolean> {
+
   const sql = await getSql();
   const rows = await sql.query<{ id: string }>(
     `update memory_facts set status = 'deleted'
@@ -1088,12 +1302,13 @@ export async function snapshotQuote(
   });
   if ("error" in built) return built;
   const sql = await getSql();
+  const id = newOperatorId("quo");
   await sql.query(
     `insert into operator_quotes
        (id, user_id, customer_id, binding_id, offer_id, service_key, amount_minor, currency, destination_id, business_revision, status)
      values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'open')`,
     [
-      newOperatorId("quo"),
+      id,
       userId,
       input.customerId,
       input.bindingId,
@@ -1105,7 +1320,7 @@ export async function snapshotQuote(
       built.businessRevision,
     ],
   );
-  return quoteView(built);
+  return quoteView(built, id);
 }
 
 export async function eraseOperatorDerivedData(userId: string): Promise<{ tables: number; rows: number }> {
@@ -1121,4 +1336,182 @@ export async function eraseOperatorDerivedData(userId: string): Promise<{ tables
   });
   return { tables: OPERATOR_ERASE_TABLES.length, rows };
 }
+
+export async function setAdultEligibility(
+  userId: string,
+  conversationId: string,
+  status: "allowed" | "unknown" | "disallowed",
+  evidence: string,
+): Promise<{ ok: true; status: typeof status } | { ok: false; reason: string }> {
+  const note = evidence.trim();
+  if (status !== "unknown" && note.length < 8) {
+    return { ok: false, reason: "evidence_required" };
+  }
+  const sql = await getSql();
+  const threads = await sql.query<{ id: string }>(
+    `update agent_threads
+        set adult_eligibility = $3
+      where user_id = $1
+        and (
+          id = $2
+          or telegram_account_id = $2
+          or fan_id in (select id from agent_fans where user_id = $1 and tg_peer_id = $2)
+        )
+      returning id`,
+    [userId, conversationId, status],
+  );
+  if (!threads[0]) return { ok: false, reason: "conversation_not_found" };
+  await sql.query(
+    `insert into eligibility_records (id, user_id, conversation_id, status, evidence)
+     values ($1,$2,$3,$4,$5)`,
+    [newOperatorId("elig"), userId, threads[0].id, status, note.slice(0, 400)],
+  );
+  return { ok: true, status };
+}
+
+export async function uploadMediaAsset(
+  userId: string,
+  input: { title: string; mime: string; bytes: Buffer },
+): Promise<{ ok: true; id: string; approval: "pending" } | { ok: false; reason: string }> {
+  const { validateUpload } = await import("./media");
+  const gate = validateUpload({ mime: input.mime, byteSize: input.bytes.length, title: input.title });
+  if (!gate.ok) return gate;
+  const bind = await ensureBinding(userId);
+  const id = newOperatorId("asset");
+  const storageKey = `blob:${id}`;
+  const sql = await getSql();
+  await sql.query(
+    `insert into media_blobs (storage_key, user_id, mime, byte_size, body) values ($1,$2,$3,$4,$5)`,
+    [storageKey, userId, gate.mime, input.bytes.length, input.bytes],
+  );
+  await sql.query(
+    `insert into media_assets
+       (id, user_id, binding_id, kind, title, mime, byte_size, storage_key, approval, proves_live_human)
+     values ($1,$2,$3,$4,$5,$6,$7,$8,'pending', false)`,
+    [id, userId, bind.id, gate.kind, gate.title, gate.mime, input.bytes.length, storageKey],
+  );
+  return { ok: true, id, approval: "pending" };
+}
+
+export async function setMediaApproval(
+  userId: string,
+  assetId: string,
+  approval: "approved" | "revoked",
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const sql = await getSql();
+  const rows = await sql.query<{ id: string }>(
+    `update media_assets set approval = $3 where id = $1 and user_id = $2 returning id`,
+    [assetId, userId, approval],
+  );
+  if (!rows[0]) return { ok: false, reason: "missing_asset" };
+  if (approval === "revoked") {
+    await sql.query(
+      `update media_proposals set status = 'revoked'
+        where user_id = $1 and asset_id = $2 and status in ('proposed','approved_not_sent','queued')`,
+      [userId, assetId],
+    );
+  }
+  return { ok: true };
+}
+
+export async function sendMediaProposal(
+  userId: string,
+  proposalId: string,
+): Promise<{ ok: true; status: string; receipt?: string } | { ok: false; reason: string }> {
+  const { canSendAsset, deliveryAfterTransport, honestMediaCopy } = await import("./media");
+  const sql = await getSql();
+  const rows = await sql.query<{
+    id: string;
+    conversation_id: string;
+    asset_id: string;
+    status: string;
+  }>(
+    `select id, conversation_id, asset_id, status from media_proposals where id = $1 and user_id = $2`,
+    [proposalId, userId],
+  );
+  const proposal = rows[0];
+  if (!proposal) return { ok: false, reason: "missing_proposal" };
+  const assets = await sql.query<{
+    id: string;
+    user_id: string;
+    binding_id: string;
+    kind: string;
+    title: string;
+    mime: string;
+    byte_size: number;
+    storage_key: string;
+    approval: string;
+  }>(`select * from media_assets where id = $1 and user_id = $2`, [proposal.asset_id, userId]);
+  const assetRow = assets[0];
+  const asset = assetRow
+    ? {
+        id: assetRow.id,
+        ownerUserId: assetRow.user_id,
+        bindingId: assetRow.binding_id,
+        kind: assetRow.kind as "image",
+        title: assetRow.title,
+        mime: assetRow.mime,
+        byteSize: Number(assetRow.byte_size),
+        storageKey: assetRow.storage_key,
+        approval: assetRow.approval as "pending" | "approved" | "revoked",
+        provesLiveHuman: false as const,
+      }
+    : null;
+  const gate = canSendAsset(asset, userId);
+  if (!gate.ok) return { ok: false, reason: gate.reason };
+  const blob = await sql.query<{ storage_key: string }>(
+    `select storage_key from media_blobs where storage_key = $1 and user_id = $2`,
+    [asset!.storageKey, userId],
+  );
+  if (!blob[0] && !demoFixturesAllowed()) {
+    return { ok: false, reason: "missing_bytes" };
+  }
+  if (!demoFixturesAllowed()) {
+    return { ok: false, reason: "media_transport_not_live" };
+  }
+  const receipt = newOperatorId("tg");
+  const next = deliveryAfterTransport(
+    { id: proposal.id, conversationId: proposal.conversation_id, assetId: proposal.asset_id, status: "sending" },
+    asset,
+    "confirmed",
+  );
+  await sql.query(
+    `update media_proposals set status = $3, send_attempt_id = $4 where id = $1 and user_id = $2`,
+    [proposal.id, userId, next.status, receipt],
+  );
+  void honestMediaCopy(asset!);
+  return { ok: true, status: next.status, receipt };
+}
+
+export async function recordIncomingAttachment(
+  userId: string,
+  input: {
+    conversationId: string;
+    kind?: string;
+    caption?: string | null;
+    providerMediaId: string;
+    bytesAvailable?: boolean;
+    providerAt?: string;
+  },
+): Promise<{ id: string }> {
+  const sql = await getSql();
+  const id = newOperatorId("iatt");
+  await sql.query(
+    `insert into incoming_attachments
+       (id, user_id, conversation_id, kind, caption, provider_media_id, bytes_available, provider_at)
+     values ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      id,
+      userId,
+      input.conversationId,
+      input.kind || "image",
+      input.caption ?? null,
+      input.providerMediaId,
+      input.bytesAvailable !== false,
+      input.providerAt ?? new Date().toISOString(),
+    ],
+  );
+  return { id };
+}
+
 

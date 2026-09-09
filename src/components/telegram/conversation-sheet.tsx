@@ -1,12 +1,20 @@
 import { useEffect, useState } from "react";
 import { ChevronLeft } from "lucide-react";
-import { loadConversationControlsFn, loadOperatorDeskFn, setPartnerOptOutFn, setTakeoverFn } from "@/lib/operator/fns";
+import {
+  loadConversationControlsFn,
+  loadOperatorDeskFn,
+  setAdultEligibilityFn,
+  setPartnerOptOutFn,
+  setTakeoverFn,
+} from "@/lib/operator/fns";
 import { formatMoney } from "@/lib/operator/money";
 import type { TelegramChat } from "@/lib/telegram/types";
 import { isServicePeer } from "@/lib/telegram/preview";
 import { cn } from "@/lib/utils";
 import { TgAvatar } from "./avatar";
 import { tgFocusClass } from "./format";
+
+type Eligibility = "allowed" | "unknown" | "disallowed";
 
 export function ConversationSheet({
   chat,
@@ -25,19 +33,26 @@ export function ConversationSheet({
   const [offerLine, setOfferLine] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [controlsReady, setControlsReady] = useState(false);
+  const [eligibility, setEligibility] = useState<Eligibility>("unknown");
+  const [holdReason, setHoldReason] = useState<string | null>(null);
+  const [evidence, setEvidence] = useState("");
+  const [eligError, setEligError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setControlsReady(false);
+    setEligError(null);
     void loadConversationControlsFn({ data: { conversationId: chat.id } })
       .then((controls) => {
         if (cancelled) return;
         setTakeover(controls.takeover);
         setOptOut(controls.optOut);
+        setEligibility(controls.adultEligibility);
+        setHoldReason(controls.holdReason);
+        setControlsReady(true);
       })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setControlsReady(true);
+      .catch(() => {
+        if (!cancelled) setControlsReady(false);
       });
     void loadOperatorDeskFn()
       .then((desk) => {
@@ -73,6 +88,36 @@ export function ConversationSheet({
       await setPartnerOptOutFn({ data: { conversationId: chat.id, on } });
     } catch {
       setOptOut(!on);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function recordEligibility(status: Eligibility) {
+    setBusy(true);
+    setEligError(null);
+    try {
+      const result = await setAdultEligibilityFn({
+        data: { conversationId: chat.id, status, evidence },
+      });
+      if (!result.ok) {
+        setEligError(
+          result.reason === "evidence_required"
+            ? "Write how you verified this customer before marking them."
+            : "Could not save eligibility.",
+        );
+        return;
+      }
+      setEligibility(result.status);
+      setHoldReason(
+        result.status === "allowed"
+          ? null
+          : result.status === "disallowed"
+            ? "This customer is not eligible for restricted offers."
+            : "Eligibility is not recorded. Standard prices stay held until you mark this customer allowed or disallowed.",
+      );
+    } catch {
+      setEligError("Could not save eligibility.");
     } finally {
       setBusy(false);
     }
@@ -145,6 +190,58 @@ export function ConversationSheet({
               <p className="mt-2 text-sm text-[var(--tg-text-secondary)]">
                 Opt-out is remembered. The assistant will not write to them.
               </p>
+            </section>
+            <section className="mt-3 rounded-xl bg-[var(--tg-item-hover)] p-4">
+              <h3 className="text-sm font-medium">Eligibility</h3>
+              <p className="mt-2 text-sm text-[var(--tg-text-secondary)]">
+                Restricted offers stay held until you record evidence. Opening this chat does not mark them allowed.
+              </p>
+              <p className="mt-2 text-sm" data-testid="eligibility-status">
+                Status: {eligibility}
+              </p>
+              {holdReason ? (
+                <p className="mt-2 text-sm text-[var(--tg-text-secondary)]" data-testid="eligibility-hold">
+                  {holdReason}
+                </p>
+              ) : null}
+              <label className="mt-3 block text-sm">
+                How you verified this customer
+                <textarea
+                  value={evidence}
+                  data-testid="eligibility-evidence"
+                  onChange={(e) => setEvidence(e.target.value)}
+                  rows={3}
+                  className={cn(
+                    "mt-1 w-full rounded-lg bg-[var(--tg-bg)] px-3 py-2 text-base",
+                    tgFocusClass,
+                  )}
+                />
+              </label>
+              {eligError ? (
+                <p className="mt-2 text-sm text-down" role="alert">
+                  {eligError}
+                </p>
+              ) : null}
+              <div className="mt-3 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  disabled={busy || !controlsReady}
+                  data-testid="eligibility-allow"
+                  onClick={() => void recordEligibility("allowed")}
+                  className={cn("h-11 min-h-[44px] text-sm text-[var(--tg-primary)]", tgFocusClass)}
+                >
+                  Mark allowed
+                </button>
+                <button
+                  type="button"
+                  disabled={busy || !controlsReady}
+                  data-testid="eligibility-disallow"
+                  onClick={() => void recordEligibility("disallowed")}
+                  className={cn("h-11 min-h-[44px] text-sm text-[var(--tg-text-secondary)]", tgFocusClass)}
+                >
+                  Mark not eligible
+                </button>
+              </div>
             </section>
           </>
         )}

@@ -136,6 +136,7 @@ export async function agentSendToPeer(opts: {
   takeover?: boolean;
   optOut?: boolean;
   emergencyStop?: boolean;
+  captured?: import("@/lib/operator/state").FinalState;
 }): Promise<AgentSendResult> {
   const body = opts.body.trim();
   if (!body) return { ok: false, reason: "empty" };
@@ -146,7 +147,7 @@ export async function agentSendToPeer(opts: {
 
   const { loadLiveFinalState } = await import("@/lib/operator/persist.server");
   const { revalidateForSend } = await import("@/lib/operator/state");
-  const captured = await loadLiveFinalState(opts.userId, opts.threadId);
+  const captured = opts.captured ?? (await loadLiveFinalState(opts.userId, opts.threadId));
   if (captured.emergencyStop) return { ok: false, reason: "emergency_stop" };
   if (captured.takeover) return { ok: false, reason: "takeover" };
   if (captured.optOut) return { ok: false, reason: "opt_out" };
@@ -195,6 +196,15 @@ export async function agentSendToPeer(opts: {
   const peerId = chat.peerId!;
   const material = await decryptSessionMaterial(live);
   const generation = Number(live.account_generation) || 1;
+  if (
+    captured.sessionGeneration > 0 &&
+    generation !== captured.sessionGeneration
+  ) {
+    return { ok: false, reason: "stale_session_generation" };
+  }
+  if (opts.accountGeneration != null && generation !== opts.accountGeneration) {
+    return { ok: false, reason: "stale_account_generation" };
+  }
 
   const { beginSendIntent, completeSendIntent, failSendIntent, sendOutcomeFromError } =
     await import("./send-intent.server");

@@ -56,7 +56,7 @@ async function quoteSnapshotForPlan(
   customerId: string,
   sku: string | null | undefined,
   published: PublishedProjection | null,
-): Promise<{ sku: string; title: string; amountLabel: string } | null> {
+): Promise<import("@/lib/operator/quotes").QuoteView | null> {
   if (!sku || !published) return null;
   const { snapshotQuote } = await import("@/lib/operator/persist.server");
   const offer = published.offers.find((o) => o.serviceKey === sku || o.id === sku);
@@ -64,8 +64,9 @@ async function quoteSnapshotForPlan(
   const sql = await getSql();
   const dest = await sql.query<{ id: string }>(
     `select id from payment_destinations
-      where user_id = $1 and binding_id = $2 and currency = $3
+      where user_id = $1 and binding_id = $2 and currency = $3 and revoked_at is null
       order by created_at desc limit 1`,
+
     [userId, published.bindingId, offer.amount.currency],
   );
   const snap = await snapshotQuote(userId, {
@@ -135,6 +136,7 @@ async function commitBubbles(
     optOut?: boolean;
     emergencyStop?: boolean;
     origin: GenerationOrigin;
+    captured?: import("@/lib/operator/state").FinalState;
   },
 ): Promise<{ auto: boolean; partial: boolean }> {
   const ids: string[] = [];
@@ -196,6 +198,10 @@ async function commitBubbles(
       takeover: opts.takeover,
       optOut: opts.optOut,
       emergencyStop: opts.emergencyStop,
+      captured: opts.captured,
+      replyPartId: `${replyId}:${i}`,
+      accountGeneration: opts.captured?.accountGeneration,
+      consentEpoch: opts.captured?.consentEpoch,
     });
     if (result.status === "ok") {
       await sql.query(
@@ -235,6 +241,18 @@ async function commitBubbles(
     return { auto: sent > 0, partial: sent > 0 && sent < opts.bubbles.length };
   }
 
+  if (opts.offerId) {
+    await sql.query(
+      `update agent_offers set status = 'sent', amount_minor = coalesce(amount_minor, price_cents)
+        where id = $1 and user_id = $2 and status = 'draft'`,
+      [opts.offerId, opts.userId],
+    );
+    await sql.query(
+      `update operator_quotes set status = 'sent' where id = $1 and user_id = $2 and status = 'open'`,
+      [opts.offerId, opts.userId],
+    );
+  }
+
   await recordActivity(sql, {
     userId: opts.userId,
     personaId: opts.personaId,
@@ -260,7 +278,15 @@ async function completeIdempotency(
   );
 }
 
-type InboundResult = { threadId: string; workflow: WorkflowId; held: boolean; killed: boolean; auto: boolean };
+type InboundResult = {
+  threadId: string;
+  workflow: WorkflowId;
+  held: boolean;
+  killed: boolean;
+  auto: boolean;
+  retryable?: boolean;
+  partial?: boolean;
+};
 
 function heldIngest(threadId: string): InboundResult {
   return { threadId, workflow: "W1_INGEST", held: true, killed: false, auto: false };
@@ -304,7 +330,9 @@ async function claimOrReplayIdempotency(
       const parsed = hit.result as InboundResult;
       if (parsed.threadId) return parsed;
     }
-    if (hit.action === "in_flight") return heldIngest(threadId ?? existing.thread_id ?? "");
+    if (hit.action === "in_flight") {
+      return { ...heldIngest(threadId ?? existing.thread_id ?? ""), retryable: true };
+    }
     if (hit.action === "reclaim") {
       const reclaimed = await sql.query<{ id: string }>(
         `update agent_idempotency
@@ -332,7 +360,15 @@ export async function processInbound(opts: {
   idempotencyKey?: string;
   source?: Source;
   forceHold?: boolean;
-}): Promise<{ threadId: string; workflow: WorkflowId; held: boolean; killed: boolean; auto: boolean }> {
+}): Promise<{
+  threadId: string;
+  workflow: WorkflowId;
+  held: boolean;
+  killed: boolean;
+  auto: boolean;
+  retryable?: boolean;
+  partial?: boolean;
+}> {
   const sql = await getSql();
 
   let threadId = opts.threadId;
@@ -436,6 +472,8 @@ export async function processInbound(opts: {
   const hour = hourInZone(now, persona.timezone);
   const quiet = inWindow(hour, persona.quiet_start, persona.quiet_end);
   const agentName = await ensureAgentName(sql, opts.userId, threadId, thread.agent_name);
+  const { loadLiveFinalState } = await import("@/lib/operator/persist.server");
+  const captured = await loadLiveFinalState(opts.userId, threadId);
 
   await sql.query(
     `insert into agent_messages (id, user_id, thread_id, role, body, status, origin)
@@ -698,9 +736,16 @@ export async function processInbound(opts: {
   const last = await sql.query<{ role: string; body: string; status: string; origin?: string | null }>(
     `select role, body, status, origin from agent_messages
       where thread_id = $1
-      order by created_at desc limit 40`,
+        and coalesce(origin, '') <> 'local_note'
+        and (
+          role in ('fan', 'inbound')
+          or (role = 'persona' and lower(coalesce(status, '')) in ('sent', 'sent_confirmed', 'observed'))
+        )
+      order by created_at desc, id desc
+      limit 40`,
     [threadId],
   );
+
   const confirmed = confirmedTranscript(last).reverse();
 
   try {
@@ -726,24 +771,27 @@ export async function processInbound(opts: {
 
   if (workflow === "W7_GFE") {
     const reserved = await sql.query<{ id: string }>(
-      `insert into conversation_reservations
-        (id, user_id, persona_id, partner_id, kind, status, expires_at)
-       values ($1,$2,$3,$4,'gfe','held', now() + interval '2 hours')
+      `with taken as (
+         update agent_seats
+            set held = held + 1, updated_at = now()
+          where persona_id = $1 and kind = 'gfe' and held < capacity
+          returning persona_id
+       )
+       insert into conversation_reservations
+         (id, user_id, persona_id, partner_id, kind, status, expires_at)
+       select $2, $3, taken.persona_id, $4, 'gfe', 'held', now() + interval '2 hours'
+         from taken
        on conflict do nothing
        returning id`,
-      [newId("rsv"), opts.userId, personaId, fanId],
+      [personaId, newId("rsv"), opts.userId, fanId],
     );
     if (reserved[0]) {
-      await sql.query(
-        `update agent_seats set held = least(capacity, held + 1), updated_at = now()
-          where persona_id = $1 and kind = 'gfe' and held < capacity`,
-        [personaId],
-      );
       await thought(sql, opts.userId, threadId, "plan", "GFE seat reserved for this partner. First contract stays human.");
     } else {
       await thought(sql, opts.userId, threadId, "plan", "GFE already reserved or unavailable for this partner.");
     }
   }
+
 
   let proofReady = false;
   if (workflow === "W13_PROOF") {
@@ -766,10 +814,11 @@ export async function processInbound(opts: {
     proofReady = Boolean(claimed[0]);
   }
 
+  const quoteSnap = await quoteSnapshotForPlan(opts.userId, fanId!, plan.sku, published);
   const written = await writeWithGateway(opts.userId, threadId, {
     plan,
-    personaName: persona.display_name,
-    bible: persona.bible,
+    personaName: published?.displayName || persona.display_name,
+    bible: [published?.about, published?.boundaries, persona.bible].filter(Boolean).join("\n"),
     clock,
     hour,
     diary,
@@ -781,7 +830,11 @@ export async function processInbound(opts: {
     deliveryConfirmed: Number(justDelivered?.n ?? 0) > 0,
     memoryFacts,
     pendingQuestion,
-    quoteSnapshot: await quoteSnapshotForPlan(opts.userId, fanId!, plan.sku, published),
+    quoteSnapshot: quoteSnap,
+    businessName: published?.displayName,
+    businessAbout: published?.about,
+    businessBoundaries: published?.boundaries,
+    paymentCopy: published?.paymentCopy,
   });
   await thought(
     sql,
@@ -815,6 +868,8 @@ export async function processInbound(opts: {
     });
 
   if (written.bubbles.length === 0) {
+    const { isRetryableWriteDrop } = await import("./write.ts");
+    const retryable = written.dropped && isRetryableWriteDrop(written.dropReason);
     await sql.query(
       `update agent_threads set workflow = $1, state = 'held' where id = $2`,
       [workflow, threadId],
@@ -827,19 +882,48 @@ export async function processInbound(opts: {
       kind: "held",
       body: written.dropReason,
     });
-    const result = { threadId, workflow, held: true, killed: false, auto: false };
-    await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
+    const result = {
+      threadId,
+      workflow,
+      held: true,
+      killed: false,
+      auto: false,
+      retryable,
+    };
+    if (retryable && opts.idempotencyKey) {
+      await sql.query(
+        `update agent_idempotency
+            set lease_until = now() - interval '1 second'
+          where user_id = $1 and key = $2 and status is distinct from 'completed'`,
+        [opts.userId, opts.idempotencyKey],
+      );
+    } else if (!retryable) {
+      await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
+    }
     return result;
   }
 
   const sku = findSku(catalogRows, plan.sku);
   let offerId: string | null = null;
   if (sku && (workflow === "W6_CLOSE_NOW" || workflow === "W8_OFFER")) {
-    offerId = newId("off");
+    offerId = quoteSnap?.id ?? newId("off");
     await sql.query(
-      `insert into agent_offers (id, user_id, persona_id, fan_id, thread_id, sku, price_cents, status)
-       values ($1,$2,$3,$4,$5,$6,$7,'draft')`,
-      [offerId, opts.userId, personaId, fanId, threadId, sku.sku, sku.priceCents],
+      `insert into agent_offers
+         (id, user_id, persona_id, fan_id, thread_id, sku, price_cents, status, currency, destination_id, amount_minor, quote_id)
+       values ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10,$11)`,
+      [
+        offerId,
+        opts.userId,
+        personaId,
+        fanId,
+        threadId,
+        sku.sku,
+        sku.priceCents,
+        quoteSnap?.currency ?? sku.currency ?? null,
+        quoteSnap?.destinationId ?? null,
+        sku.priceCents,
+        quoteSnap?.id ?? null,
+      ],
     );
   }
 
@@ -857,11 +941,14 @@ export async function processInbound(opts: {
     optOut: colBool(thread, "opt_out"),
     emergencyStop: colBool(persona, "emergency_stop"),
     origin: generationOriginForWrite(written),
+    captured,
   });
-  const auto = committed.auto;
+  const auto = committed.auto && !committed.partial;
   const state: ThreadState = fulfilling ? "fulfilling" : auto ? "open" : "held";
 
-  if (plan.checkInHours) {
+  if (plan.checkInHours && auto) {
+
+
     const runAt = new Date(now.getTime() + plan.checkInHours * 3600_000).toISOString();
     await sql.query(
       `insert into agent_jobs (id, user_id, thread_id, kind, run_at, payload)
@@ -874,6 +961,7 @@ export async function processInbound(opts: {
     `update agent_threads set workflow = $1, state = $2, last_outbound_at = case when $3 then $4 else last_outbound_at end
       where id = $5`,
     [workflow, state, auto, now.toISOString(), threadId],
+
   );
   await sql.query(`update agent_fans set archetype = $1 where id = $2`, [u.archetype, fanId]);
 
@@ -895,7 +983,7 @@ export async function processInbound(opts: {
     auto ? "W19 DESK. Auto-sent." : "W19 DESK. Thought + diary only. Never to buyer.",
   );
 
-  const result = { threadId, workflow, held: !auto, killed: false, auto };
+  const result = { threadId, workflow, held: !auto, killed: false, auto, partial: committed.partial };
   await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
   return result;
 }
@@ -1027,8 +1115,9 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   if (!persona || !fan) return;
   if (colBool(persona, "emergency_stop")) return;
 
-  const { catalogForPlanning, loadPublishedProjection } = await import("@/lib/operator/persist.server");
+  const { catalogForPlanning, loadPublishedProjection, loadLiveFinalState } = await import("@/lib/operator/persist.server");
   const published = await loadPublishedProjection(userId);
+  const captured = await loadLiveFinalState(userId, threadId);
   const catalogRows = await catalogForPlanning(userId, undefined, published);
   const diary = await sql.query<{ voice: DiaryVoice; body: string }>(
     `select voice, body from agent_diary where fan_id = $1 order by created_at desc limit 12`,
@@ -1037,9 +1126,16 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   const last = await sql.query<{ role: string; body: string; status?: string; origin?: string | null }>(
     `select role, body, status, origin from agent_messages
       where thread_id = $1
-      order by created_at desc limit 20`,
+        and coalesce(origin, '') <> 'local_note'
+        and (
+          role in ('fan', 'inbound')
+          or (role = 'persona' and lower(coalesce(status, '')) in ('sent', 'sent_confirmed', 'observed'))
+        )
+      order by created_at desc, id desc
+      limit 20`,
     [threadId],
   );
+
   const confirmed = confirmedTranscript(last).reverse();
   try {
     const { rememberFan } = await import("./memory.server.ts");
@@ -1097,8 +1193,8 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   const plan = buildPlan("W11_REACTIVATE", u, ctx, autoEnabled);
   const written = await writeWithGateway(userId, threadId, {
     plan,
-    personaName: persona.display_name,
-    bible: persona.bible,
+    personaName: published?.displayName || persona.display_name,
+    bible: [published?.about, published?.boundaries, persona.bible].filter(Boolean).join("\n"),
     clock,
     hour,
     diary,
@@ -1107,6 +1203,10 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     fanName: fan.display_name,
     inbound: "",
     quoteSnapshot: await quoteSnapshotForPlan(userId, thread.fan_id, plan.sku, published),
+    businessName: published?.displayName,
+    businessAbout: published?.about,
+    businessBoundaries: published?.boundaries,
+    paymentCopy: published?.paymentCopy,
   });
   if (written.bubbles.length === 0) return;
   const agentName = await ensureAgentName(sql, userId, threadId, thread.agent_name);
@@ -1141,8 +1241,9 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     optOut: colBool(thread, "opt_out"),
     emergencyStop: colBool(persona, "emergency_stop"),
     origin: generationOriginForWrite(written),
+    captured,
   });
-  if (committed.auto) {
+  if (committed.auto && !committed.partial) {
     await sql.query(
       `update agent_threads set workflow = 'W11_REACTIVATE', state = 'open', last_outbound_at = $1 where id = $2`,
       [now.toISOString(), threadId],

@@ -95,6 +95,7 @@ describe("TG-14 stop/takeover/opt-out/permission during blocked transport", () =
     const result = await pending;
     assert.equal(result.status, "uncertain");
     assert.match(result.uncertainReason ?? "", /possible_transmission:emergency_stop/);
+    assert.equal(result.transportMessageId, "should_not_count");
     assert.equal(world.transport.sent.length, 1);
     assert.equal(world.history.filter((h) => h.kind === "confirmed_outbound").length, 0);
   });
@@ -125,8 +126,8 @@ describe("TG-15 no duplicate send after uncertain", () => {
     const open = attempt("uncertain");
     assert.equal(canRetryAttempt(open).allow, false);
     const failed = reconcileUncertain(open, null);
-    assert.equal(failed.status, "failed");
-    assert.equal(canRetryAttempt(failed).allow, true);
+    assert.equal(failed.status, "uncertain");
+    assert.equal(canRetryAttempt(failed).allow, false);
     const confirmed = reconcileUncertain(open, { transportMessageId: "tg_1" });
     assert.equal(confirmed.status, "confirmed");
     assert.equal(canRetryAttempt(confirmed).allow, false);
@@ -166,9 +167,15 @@ describe("visibility-aware unread", () => {
       chatListOnly: true,
       explicitAck: false,
     }), 3);
+    assert.equal(applyReadAck(3, {
+      conversationVisible: true,
+      documentVisible: true,
+      chatListOnly: false,
+      explicitAck: true,
+    }), 3);
   });
 
-  it("clears unread only on explicit visible conversation ack", () => {
+  it("clears unread only on explicit visible conversation ack with a last-seen id", () => {
     const world = createWorld();
     world.conversations.push({
       id: "c1",
@@ -183,6 +190,13 @@ describe("visibility-aware unread", () => {
       documentVisible: true,
       chatListOnly: false,
       explicitAck: true,
+    }), 4);
+    assert.equal(ackVisible(world, "c1", {
+      conversationVisible: true,
+      documentVisible: true,
+      chatListOnly: false,
+      explicitAck: true,
+      lastSeenMessageId: "msg_last",
     }), 0);
   });
 });
@@ -360,6 +374,13 @@ describe("drafts, history, ingest fairness", () => {
     const world = createWorld();
     saveDraft(world, "c1", "still writing");
     assert.equal(world.drafts.c1, "still writing");
+    const first = saveDraft(world, "c1", "v2", 1);
+    assert.equal(first.ok, true);
+    assert.equal(first.version, 2);
+    const stale = saveDraft(world, "c1", "lost", 1);
+    assert.equal(stale.ok, false);
+    assert.equal(stale.version, 2);
+    assert.equal(world.drafts.c1, "v2");
   });
 
   it("filters local notes before the history limit", () => {
@@ -460,6 +481,8 @@ describe("interpretation is not a keyword purchase", () => {
     });
     assert.equal(yes.answerToPending?.kind, "payment_method");
     assert.equal(yes.answerToPending?.affirmed, true);
+    assert.equal(yes.paymentClaim, false);
+
   });
 
   it("does not infer whale or time-waster from spend or turns", async () => {
@@ -582,7 +605,9 @@ describe("quote snapshots", () => {
     });
     assert.equal("error" in ok, false);
     if (!("error" in ok)) {
-      assert.equal(quoteView(ok).amountLabel, "$12.50");
+      assert.equal(quoteView(ok, "quo_1").amountLabel, "$12.50");
+      assert.equal(quoteView(ok, "quo_1").id, "quo_1");
+      assert.equal(quoteView(ok, "quo_1").currency, "USD");
       assert.equal(ok.amount.currency, "USD");
     }
   });
@@ -632,13 +657,13 @@ describe("tenant memory", () => {
 describe("deletion inventory", () => {
   it("covers every operator derived table and cannot rehydrate from them", async () => {
     const { OPERATOR_ERASE_TABLES, eraseStatements, cannotRehydrateFrom } = await import("./erase.ts");
-    assert.equal(OPERATOR_ERASE_TABLES.length, 17);
+    assert.equal(OPERATOR_ERASE_TABLES.length, 19);
     assert.ok(OPERATOR_ERASE_TABLES.includes("memory_facts"));
     assert.ok(OPERATOR_ERASE_TABLES.includes("operator_quotes"));
     assert.ok(OPERATOR_ERASE_TABLES.includes("payment_credentials"));
     assert.ok(OPERATOR_ERASE_TABLES.includes("business_revisions"));
     const stmts = eraseStatements();
-    assert.equal(stmts.length, 17);
+    assert.equal(stmts.length, 19);
     assert.ok(stmts.every((s) => s.sql.includes("where user_id")));
     assert.equal(cannotRehydrateFrom("memory_facts"), true);
   });
@@ -761,6 +786,31 @@ describe("production fail-closed contracts", () => {
     assert.equal(mismatched.destinationRef, null);
   });
 
+  it("does not expose a destination from another creator or binding", () => {
+    const view = publicPaymentView({
+      instruction: {
+        id: "ins_1",
+        creatorId: "c",
+        bindingId: "b",
+        revisionId: "r",
+        publicCopy: "Send USD to the listed handle.",
+        currency: "USD",
+        approved: true,
+      },
+      destination: {
+        id: "dest_other",
+        creatorId: "other",
+        bindingId: "b",
+        provider: "manual_handle",
+        destinationRef: "@stolen_pay",
+        currency: "USD",
+        hasCredential: true,
+      },
+    });
+    assert.equal(view.approved, false);
+    assert.equal(view.destinationRef, null);
+  });
+
   it("createWorld starts with processing permission off", async () => {
     const world = createWorld();
     assert.equal(world.flags.processingPermission, false);
@@ -817,11 +867,68 @@ describe("production fail-closed contracts", () => {
     assert.equal(resolveCatalogSku("how much for pics", catalog), "photo_notes_pack");
     assert.equal(resolveCatalogSku("how much for photos", catalog), "photo_notes_pack");
     assert.equal(resolveCatalogSku("custom clip please", catalog), "custom_clip");
+    assert.equal(
+      resolveCatalogSku("photos", [{ ...catalog[0], sku: "music_pack", title: "Music pack" }]),
+      null,
+    );
+    const twoPacks = [
+      { ...catalog[0], id: "urban", sku: "urban_pack", title: "Urban photo pack" },
+      { ...catalog[0], id: "nature", sku: "nature_pack", title: "Nature photo pack", priceCents: 2500 },
+    ];
+    assert.equal(resolveCatalogSku("pics", twoPacks), null);
+
   });
 
   it("isolated drafts stay isolated until publish", () => {
     const world = createWorld();
     const draft = submitBrief(world, "Northlight");
     assert.equal(draft.isolated, true);
+  });
+});
+
+describe("open follow-up repairs", () => {
+  it("rejects a captured session generation or telegram account that drifted", () => {
+    const captured = flags({ sessionGeneration: 2, telegramAccountId: "acct_a" });
+    const staleGen = { ...cloneFinalState(captured), sessionGeneration: 3 };
+    const gen = revalidateForSend(captured, staleGen);
+    assert.equal(gen.allow, false);
+    if (!gen.allow) assert.equal(gen.reason, "stale_session_generation");
+    const staleAcct = { ...cloneFinalState(captured), telegramAccountId: "acct_b" };
+    const acct = revalidateForSend(captured, staleAcct);
+    assert.equal(acct.allow, false);
+    if (!acct.allow) assert.equal(acct.reason, "stale_telegram_account");
+  });
+
+  it("coalesces burst bodies and drops duplicate lines", async () => {
+    const { coalesceInboundBodies } = await import("./debounce.ts");
+    assert.equal(coalesceInboundBodies(["hey", " hey ", "how much?"]), "hey\nhow much?");
+    assert.equal(coalesceInboundBodies(["", "  "]), "");
+  });
+
+  it("validates upload types and refuses unapproved send", async () => {
+    const { validateUpload, canSendAsset } = await import("./media.ts");
+    assert.equal(validateUpload({ mime: "application/pdf", byteSize: 12 }).ok, false);
+    assert.equal(validateUpload({ mime: "image/jpeg", byteSize: 12 }).ok, true);
+    const pending = {
+      id: "asset_1",
+      ownerUserId: "u",
+      bindingId: "b",
+      kind: "image" as const,
+      title: "Still",
+      mime: "image/jpeg",
+      byteSize: 12,
+      storageKey: "blob:1",
+      approval: "pending" as const,
+      provesLiveHuman: false as const,
+    };
+    assert.equal(canSendAsset(pending, "u").ok, false);
+    assert.equal(canSendAsset({ ...pending, approval: "approved" }, "other").ok, false);
+    assert.equal(canSendAsset({ ...pending, approval: "approved" }, "u").ok, true);
+  });
+
+  it("extracts published voice from a brief", () => {
+    const draft = draftFromBrief("Northlight notes\nvoice: quiet, lowercase\nNo live sittings.");
+    assert.equal(draft.voice, "quiet, lowercase");
+    assert.match(draft.boundaries, /no live sittings/i);
   });
 });

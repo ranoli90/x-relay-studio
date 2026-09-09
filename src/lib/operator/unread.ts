@@ -5,6 +5,7 @@ export type ReadAckInput = {
   documentVisible: boolean;
   chatListOnly: boolean;
   explicitAck: boolean;
+  lastSeenMessageId?: string | null;
 };
 
 export function shouldMarkRead(input: ReadAckInput): boolean {
@@ -21,6 +22,16 @@ export function unreadAfterInbound(current: number, inboundCount: number): numbe
   return n + add;
 }
 
-export function applyReadAck(unread: number, ack: ReadAckInput): number {
-  return shouldMarkRead(ack) ? 0 : unread;
+/**
+ * Ack the last rendered inbound id. Messages that arrived after that id stay
+ * unread. Visibility without a last-seen id does not clear the badge.
+ */
+export function applyReadAck(
+  unread: number,
+  ack: ReadAckInput,
+  inboundAfterLastSeen = 0,
+): number {
+  if (!shouldMarkRead(ack)) return unread;
+  if (!ack.lastSeenMessageId) return unread;
+  return Math.max(0, Math.floor(inboundAfterLastSeen));
 }

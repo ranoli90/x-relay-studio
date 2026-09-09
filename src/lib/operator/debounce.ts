@@ -37,3 +37,15 @@ export function nextBurstRetryAt(
   }
   return new Date(Math.max(now + 50, at));
 }
+
+/** Combine ordered burst bodies into one generation unit. */
+export function coalesceInboundBodies(bodies: readonly string[]): string {
+  const lines: string[] = [];
+  for (const raw of bodies) {
+    const text = raw.replace(/\s+/g, " ").trim();
+    if (!text) continue;
+    if (lines[lines.length - 1] === text) continue;
+    lines.push(text);
+  }
+  return lines.join("\n");
+}

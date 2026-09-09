@@ -37,6 +37,7 @@ type TelegramState = {
   messages: TelegramMessage[];
   messageCache: Record<string, TelegramMessage[]>;
   drafts: Record<string, string>;
+  draftVersions: Record<string, number>;
   messagesLoading: boolean;
   profileOpen: boolean;
   folder: TelegramFolder;
@@ -127,6 +128,7 @@ export const useTelegram = create<TelegramState>((set, get) => {
       messages: [] as TelegramMessage[],
       messageCache: {} as Record<string, TelegramMessage[]>,
       drafts: {} as Record<string, string>,
+      draftVersions: {} as Record<string, number>,
       view: "list" as const,
       shellTab: "inbox" as const,
       sending: false,
@@ -151,6 +153,7 @@ export const useTelegram = create<TelegramState>((set, get) => {
     messages: [],
     messageCache: {},
     drafts: {},
+    draftVersions: {},
     messagesLoading: false,
     profileOpen: false,
     folder: "all",
@@ -176,21 +179,23 @@ export const useTelegram = create<TelegramState>((set, get) => {
       if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
       try {
         const { ackVisibleFn } = await import("@/lib/operator/fns");
+        const msgs = get().messageCache[chatId] ?? get().messages;
+        const lastSeen = [...msgs].reverse().find((m) => !m.fromSelf)?.id ?? null;
         const result = await ackVisibleFn({
           data: {
             conversationId: chatId,
             conversationVisible: true,
             documentVisible: true,
             chatListOnly: false,
+            lastSeenMessageId: lastSeen ?? undefined,
           },
         });
-        if (result.unread !== 0) return;
         const snapshot = get().snapshot;
         if (!snapshot) return;
         set({
           snapshot: {
             ...snapshot,
-            chats: snapshot.chats.map((c) => (c.id === chatId ? { ...c, unread: 0 } : c)),
+            chats: snapshot.chats.map((c) => (c.id === chatId ? { ...c, unread: result.unread } : c)),
           },
         });
       } catch {
@@ -203,16 +208,25 @@ export const useTelegram = create<TelegramState>((set, get) => {
     setDraft: (chatId, value) => {
       const gen = get().generation;
       const drafts = { ...get().drafts };
+      const draftVersions = { ...get().draftVersions };
       if (value) drafts[chatId] = value;
       else delete drafts[chatId];
-      set({ drafts });
+      set({ drafts, draftVersions });
       if (typeof window === "undefined") return;
       if (draftTimers[chatId]) window.clearTimeout(draftTimers[chatId]);
       draftTimers[chatId] = window.setTimeout(() => {
         delete draftTimers[chatId];
         if (get().generation !== gen) return;
+        const expected = get().draftVersions[chatId] ?? 0;
         void import("@/lib/operator/fns")
-          .then((m) => m.saveDraftFn({ data: { conversationId: chatId, body: value } }))
+          .then((m) => m.saveDraftFn({ data: { conversationId: chatId, body: value, version: expected } }))
+          .then((saved) => {
+            if (!saved) return;
+            if (get().generation !== gen) return;
+            if (!saved.ok) return;
+            if (get().drafts[chatId] !== value) return;
+            set({ draftVersions: { ...get().draftVersions, [chatId]: saved.version } });
+          })
           .catch(() => undefined);
       }, 400);
     },
@@ -261,7 +275,18 @@ export const useTelegram = create<TelegramState>((set, get) => {
           .then((m) => m.loadOperatorDeskFn())
           .then((desk) => {
             if (!shouldApplyTelegram(started, epoch())) return;
-            if (desk.drafts) set({ drafts: { ...get().drafts, ...desk.drafts } });
+            if (desk.drafts) {
+              const local = get().drafts;
+              const merged = { ...(desk.drafts as Record<string, string>) };
+              for (const [k, v] of Object.entries(local)) {
+                if (v) merged[k] = v;
+              }
+              const versions = {
+                ...((desk.draftVersions as Record<string, number> | undefined) ?? {}),
+                ...get().draftVersions,
+              };
+              set({ drafts: merged, draftVersions: versions });
+            }
           })
           .catch(() => undefined);
       } catch (err) {
@@ -437,6 +462,8 @@ export const useTelegram = create<TelegramState>((set, get) => {
       };
       const cached = get().messageCache[chatId] ?? get().messages;
       const drafts = { ...get().drafts };
+      const sentVersion = get().draftVersions[chatId] ?? 0;
+      const sentText = text;
       delete drafts[chatId];
       set({
         sending: true,
@@ -457,8 +484,16 @@ export const useTelegram = create<TelegramState>((set, get) => {
         );
         const snapshot = get().snapshot;
         const thread = (get().messageCache[chatId] ?? []).filter((m) => m.id !== temp.id).concat(message);
+        const currentDraft = get().drafts[chatId];
         const nextDrafts = { ...get().drafts };
-        delete nextDrafts[chatId];
+        if (!currentDraft || currentDraft === sentText) {
+          delete nextDrafts[chatId];
+          void import("@/lib/operator/fns")
+            .then((m) =>
+              m.saveDraftFn({ data: { conversationId: chatId, body: "", version: sentVersion } }),
+            )
+            .catch(() => undefined);
+        }
         set({
           sending: get().selectedChatId === chatId ? false : get().sending,
           sendingChatId: get().sendingChatId === chatId ? null : get().sendingChatId,
@@ -471,7 +506,11 @@ export const useTelegram = create<TelegramState>((set, get) => {
       } catch (err) {
         if (!shouldApplyTelegram(started, epoch())) return false;
         const thread = (get().messageCache[chatId] ?? []).filter((m) => m.id !== temp.id);
-        const restored = { ...get().drafts, [chatId]: text };
+        const currentDraft = get().drafts[chatId];
+        const restored =
+          !currentDraft || currentDraft === sentText
+            ? { ...get().drafts, [chatId]: sentText }
+            : get().drafts;
         set({
           sending: get().selectedChatId === chatId ? false : get().sending,
           sendingChatId: get().sendingChatId === chatId ? null : get().sendingChatId,

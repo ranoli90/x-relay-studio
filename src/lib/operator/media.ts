@@ -42,6 +42,9 @@ export type MediaProposal = {
   status: DeliveryStatus;
 };
 
+const ALLOWED_MIME = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
+
 export function attachmentCaption(att: IncomingAttachment): string | null {
   const c = att.caption?.trim() ?? "";
   return c ? c : null;
@@ -52,6 +55,36 @@ export function canProposeAsset(asset: LibraryAsset | null): { ok: true } | { ok
   if (asset.approval === "revoked") return { ok: false, reason: "revoked" };
   if (asset.approval !== "approved") return { ok: false, reason: "not_approved" };
   return { ok: true };
+}
+
+export function canSendAsset(
+  asset: LibraryAsset | null,
+  ownerUserId: string,
+  bindingId?: string,
+): { ok: true } | { ok: false; reason: string } {
+  const gate = canProposeAsset(asset);
+  if (!gate.ok) return gate;
+  if (asset!.ownerUserId !== ownerUserId) return { ok: false, reason: "wrong_tenant" };
+  if (bindingId && asset!.bindingId && asset!.bindingId !== bindingId) {
+    return { ok: false, reason: "wrong_binding" };
+  }
+  if (!asset!.storageKey.trim()) return { ok: false, reason: "missing_bytes" };
+  return { ok: true };
+}
+
+export function validateUpload(input: {
+  mime: string;
+  byteSize: number;
+  title?: string;
+}): { ok: true; kind: MediaKind; mime: string; title: string } | { ok: false; reason: string } {
+  const mime = input.mime.trim().toLowerCase();
+  if (!ALLOWED_MIME.has(mime)) return { ok: false, reason: "unsupported_type" };
+  if (!Number.isSafeInteger(input.byteSize) || input.byteSize <= 0) {
+    return { ok: false, reason: "empty_file" };
+  }
+  if (input.byteSize > MAX_UPLOAD_BYTES) return { ok: false, reason: "too_large" };
+  const title = (input.title ?? "Still").trim().slice(0, 80) || "Still";
+  return { ok: true, kind: "image", mime, title };
 }
 
 export function deliveryAfterTransport(
