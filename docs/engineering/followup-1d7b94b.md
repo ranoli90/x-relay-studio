@@ -22,11 +22,11 @@ Branch work against the 33 remaining findings in `X_Relay_Followup_Review_1d7b94
 | RF-016 | SOURCE_FIXED: session `account_generation` is authoritative; thread generation is stamped from the session; send rejects stale session generation and telegram account. | UNIT_VERIFIED |
 | RF-017 | SOURCE_FIXED: fan/thread insert uses `ON CONFLICT`, not recovery SELECTs in an aborted transaction. | SOURCE_FIXED |
 | RF-018 | SOURCE_FIXED: claim owner + expiry + fenced finalize. Expired processing rows are reclaimable. | SOURCE_FIXED |
-| RF-019 | SOURCE_FIXED: quiet/max burst windows coalesce sibling bodies into one generation; a foreign in-flight claim yields the burst instead of a second reply. | UNIT_VERIFIED |
-| RF-020 | SOURCE_FIXED: retryable empty/gateway drops skip idempotency complete and return ingress to `retry_wait`. Safety/handoff drops stay held. | UNIT_VERIFIED |
+| RF-019 | SOURCE_FIXED: quiet/max burst windows coalesce sibling bodies into one generation under the oldest message id; a foreign in-flight claim yields the burst. Two-worker race still NOT_RUN. | UNIT_VERIFIED |
+| RF-020 | SOURCE_FIXED: `generation_failed` / empty / timeout drops skip idempotency complete, expire the lease, and return ingress to `retry_wait`. Safety/handoff drops stay held. Live provider loop still NOT_RUN. | UNIT_VERIFIED |
 | RF-021 | SOURCE_FIXED: `last_outbound_at` and check-in jobs only move on a fully sent, non-partial auto reply. | SOURCE_FIXED |
 | RF-022 | SOURCE_FIXED: check-ins only after a fully sent reply. | SOURCE_FIXED |
-| RF-023 | SOURCE_FIXED: composer drafts version-CAS; stale expected version is rejected; send clears the exact version. | UNIT_VERIFIED |
+| RF-023 | SOURCE_FIXED: composer drafts version-CAS; a draft typed during send is kept on success; CAS failure does not adopt a stale version. Two-tab race NOT_RUN. | UNIT_VERIFIED |
 | RF-024 | SOURCE_FIXED: unread ack requires the last rendered inbound id; later inbound stays unread. | UNIT_VERIFIED |
 | RF-025 | SOURCE_FIXED_PARTIAL: upload → pending → approve/revoke → propose; isolated fixtures may send a fake receipt. Live MTProto photo send returns `media_transport_not_live`. | UNIT_VERIFIED |
 | RF-026 | SOURCE_FIXED: empty live defaults, load/error states, delayed load does not overwrite typing. | SOURCE_FIXED |

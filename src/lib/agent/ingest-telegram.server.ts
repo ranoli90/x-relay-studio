@@ -406,6 +406,7 @@ async function processClaimedRow(
   }
 
   const siblingIds = neighbors.filter((n) => n.id !== row.id).map((n) => n.id);
+  const burstKey = neighbors[0]?.id ?? row.id;
   if (siblingIds.length > 0 && row.claim_owner) {
     await sql.query(
       `update telegram_messages
@@ -413,7 +414,7 @@ async function processClaimedRow(
         where user_id = $4 and chat_id = $5
           and id = any($1::text[])
           and ai_status in ('queued', 'retry_wait')`,
-      [siblingIds, row.claim_owner, row.id, row.user_id, row.chat_id],
+      [siblingIds, row.claim_owner, burstKey, row.user_id, row.chat_id],
     );
   }
   const combined = coalesceInboundBodies(
@@ -441,7 +442,7 @@ async function processClaimedRow(
     fanId: fan.id,
     text: redactForModel(combined || row.body),
     source: "telegram",
-    idempotencyKey: `tg:${row.id}`,
+    idempotencyKey: `tg:${burstKey}`,
     forceHold: credits <= 0,
   });
   const groupIds = [row.id, ...siblingIds];
@@ -465,7 +466,7 @@ async function processClaimedRow(
       `update telegram_messages
           set ai_status = $1, coalesced_into = $2, claim_owner = null, claim_expires_at = null
         where id = any($3::text[]) and user_id = $4`,
-      [status, row.id, siblingIds, row.user_id],
+      [status, burstKey, siblingIds, row.user_id],
     );
   }
   return status;

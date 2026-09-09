@@ -330,7 +330,9 @@ async function claimOrReplayIdempotency(
       const parsed = hit.result as InboundResult;
       if (parsed.threadId) return parsed;
     }
-    if (hit.action === "in_flight") return heldIngest(threadId ?? existing.thread_id ?? "");
+    if (hit.action === "in_flight") {
+      return { ...heldIngest(threadId ?? existing.thread_id ?? ""), retryable: true };
+    }
     if (hit.action === "reclaim") {
       const reclaimed = await sql.query<{ id: string }>(
         `update agent_idempotency
@@ -888,7 +890,16 @@ export async function processInbound(opts: {
       auto: false,
       retryable,
     };
-    if (!retryable) await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
+    if (retryable && opts.idempotencyKey) {
+      await sql.query(
+        `update agent_idempotency
+            set lease_until = now() - interval '1 second'
+          where user_id = $1 and key = $2 and status is distinct from 'completed'`,
+        [opts.userId, opts.idempotencyKey],
+      );
+    } else if (!retryable) {
+      await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
+    }
     return result;
   }
 

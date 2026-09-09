@@ -66,8 +66,8 @@ function hold(reason: string): WriteResult {
 
 export function isRetryableWriteDrop(reason: string | null | undefined): boolean {
   if (!reason) return true;
-  if (/handoff|safety|kill|opt_out|no allowed payment|leaked internal/i.test(reason)) return false;
-  return /timeout|429|503|provider|gateway|remote|unavailable|overloaded|fetch|econn|network|dropped/i.test(
+  if (/handoff|safety|kill|opt_out|no allowed payment|leaked internal|refuse/i.test(reason)) return false;
+  return /timeout|429|503|provider|gateway|remote|unavailable|overloaded|fetch|econn|network|dropped|generation_failed|empty|truncated|rate_limited/i.test(
     reason,
   );
 }

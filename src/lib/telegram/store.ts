@@ -223,6 +223,8 @@ export const useTelegram = create<TelegramState>((set, get) => {
           .then((saved) => {
             if (!saved) return;
             if (get().generation !== gen) return;
+            if (!saved.ok) return;
+            if (get().drafts[chatId] !== value) return;
             set({ draftVersions: { ...get().draftVersions, [chatId]: saved.version } });
           })
           .catch(() => undefined);
@@ -482,13 +484,16 @@ export const useTelegram = create<TelegramState>((set, get) => {
         );
         const snapshot = get().snapshot;
         const thread = (get().messageCache[chatId] ?? []).filter((m) => m.id !== temp.id).concat(message);
+        const currentDraft = get().drafts[chatId];
         const nextDrafts = { ...get().drafts };
-        delete nextDrafts[chatId];
-        void import("@/lib/operator/fns")
-          .then((m) =>
-            m.saveDraftFn({ data: { conversationId: chatId, body: "", version: sentVersion } }),
-          )
-          .catch(() => undefined);
+        if (!currentDraft || currentDraft === sentText) {
+          delete nextDrafts[chatId];
+          void import("@/lib/operator/fns")
+            .then((m) =>
+              m.saveDraftFn({ data: { conversationId: chatId, body: "", version: sentVersion } }),
+            )
+            .catch(() => undefined);
+        }
         set({
           sending: get().selectedChatId === chatId ? false : get().sending,
           sendingChatId: get().sendingChatId === chatId ? null : get().sendingChatId,

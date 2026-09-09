@@ -371,6 +371,9 @@ describe("remote skip and caps", () => {
     const { isRetryableWriteDrop } = await import("./write.ts");
     assert.equal(isRetryableWriteDrop("timeout"), true);
     assert.equal(isRetryableWriteDrop("provider 429"), true);
+    assert.equal(isRetryableWriteDrop("generation_failed"), true);
+    assert.equal(isRetryableWriteDrop("provider_unavailable"), true);
+    assert.equal(isRetryableWriteDrop("empty"), true);
     assert.equal(isRetryableWriteDrop(null), true);
     assert.equal(isRetryableWriteDrop("leaked internal field"), false);
     assert.equal(isRetryableWriteDrop("handoff"), false);
