@@ -333,8 +333,10 @@ describe("AC auto-send containment", () => {
 
   it("local writer output is never recorded as a validated model origin", () => {
     assert.equal(generationOriginForWrite({ dropped: false, model: "local/understand" }), "local_template");
+    assert.equal(generationOriginForWrite({ dropped: false, model: "local/service-notice" }), "approved_service_notice");
     assert.equal(generationOriginForWrite({ dropped: true, model: "x-ai/grok-4.5" }), "local_template");
     assert.equal(generationOriginForWrite({ dropped: false, model: "x-ai/grok-4.5" }), "validated_model");
+
   });
 
   it("live pulse stays off in draft even with auto-send and a successful writer", () => {

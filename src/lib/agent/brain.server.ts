@@ -64,8 +64,9 @@ async function quoteSnapshotForPlan(
   const sql = await getSql();
   const dest = await sql.query<{ id: string }>(
     `select id from payment_destinations
-      where user_id = $1 and binding_id = $2 and currency = $3
+      where user_id = $1 and binding_id = $2 and currency = $3 and revoked_at is null
       order by created_at desc limit 1`,
+
     [userId, published.bindingId, offer.amount.currency],
   );
   const snap = await snapshotQuote(userId, {
@@ -698,9 +699,16 @@ export async function processInbound(opts: {
   const last = await sql.query<{ role: string; body: string; status: string; origin?: string | null }>(
     `select role, body, status, origin from agent_messages
       where thread_id = $1
-      order by created_at desc limit 40`,
+        and coalesce(origin, '') <> 'local_note'
+        and (
+          role in ('fan', 'inbound')
+          or (role = 'persona' and lower(coalesce(status, '')) in ('sent', 'sent_confirmed', 'observed'))
+        )
+      order by created_at desc, id desc
+      limit 40`,
     [threadId],
   );
+
   const confirmed = confirmedTranscript(last).reverse();
 
   try {
@@ -726,24 +734,27 @@ export async function processInbound(opts: {
 
   if (workflow === "W7_GFE") {
     const reserved = await sql.query<{ id: string }>(
-      `insert into conversation_reservations
-        (id, user_id, persona_id, partner_id, kind, status, expires_at)
-       values ($1,$2,$3,$4,'gfe','held', now() + interval '2 hours')
+      `with taken as (
+         update agent_seats
+            set held = held + 1, updated_at = now()
+          where persona_id = $1 and kind = 'gfe' and held < capacity
+          returning persona_id
+       )
+       insert into conversation_reservations
+         (id, user_id, persona_id, partner_id, kind, status, expires_at)
+       select $2, $3, taken.persona_id, $4, 'gfe', 'held', now() + interval '2 hours'
+         from taken
        on conflict do nothing
        returning id`,
-      [newId("rsv"), opts.userId, personaId, fanId],
+      [personaId, newId("rsv"), opts.userId, fanId],
     );
     if (reserved[0]) {
-      await sql.query(
-        `update agent_seats set held = least(capacity, held + 1), updated_at = now()
-          where persona_id = $1 and kind = 'gfe' and held < capacity`,
-        [personaId],
-      );
       await thought(sql, opts.userId, threadId, "plan", "GFE seat reserved for this partner. First contract stays human.");
     } else {
       await thought(sql, opts.userId, threadId, "plan", "GFE already reserved or unavailable for this partner.");
     }
   }
+
 
   let proofReady = false;
   if (workflow === "W13_PROOF") {
@@ -858,10 +869,12 @@ export async function processInbound(opts: {
     emergencyStop: colBool(persona, "emergency_stop"),
     origin: generationOriginForWrite(written),
   });
-  const auto = committed.auto;
+  const auto = committed.auto && !committed.partial;
   const state: ThreadState = fulfilling ? "fulfilling" : auto ? "open" : "held";
 
-  if (plan.checkInHours) {
+  if (plan.checkInHours && auto) {
+
+
     const runAt = new Date(now.getTime() + plan.checkInHours * 3600_000).toISOString();
     await sql.query(
       `insert into agent_jobs (id, user_id, thread_id, kind, run_at, payload)
@@ -873,7 +886,8 @@ export async function processInbound(opts: {
   await sql.query(
     `update agent_threads set workflow = $1, state = $2, last_outbound_at = case when $3 then $4 else last_outbound_at end
       where id = $5`,
-    [workflow, state, auto, now.toISOString(), threadId],
+    [workflow, state, committed.auto, now.toISOString(), threadId],
+
   );
   await sql.query(`update agent_fans set archetype = $1 where id = $2`, [u.archetype, fanId]);
 
@@ -1037,9 +1051,16 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   const last = await sql.query<{ role: string; body: string; status?: string; origin?: string | null }>(
     `select role, body, status, origin from agent_messages
       where thread_id = $1
-      order by created_at desc limit 20`,
+        and coalesce(origin, '') <> 'local_note'
+        and (
+          role in ('fan', 'inbound')
+          or (role = 'persona' and lower(coalesce(status, '')) in ('sent', 'sent_confirmed', 'observed'))
+        )
+      order by created_at desc, id desc
+      limit 20`,
     [threadId],
   );
+
   const confirmed = confirmedTranscript(last).reverse();
   try {
     const { rememberFan } = await import("./memory.server.ts");

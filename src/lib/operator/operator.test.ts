@@ -460,6 +460,8 @@ describe("interpretation is not a keyword purchase", () => {
     });
     assert.equal(yes.answerToPending?.kind, "payment_method");
     assert.equal(yes.answerToPending?.affirmed, true);
+    assert.equal(yes.paymentClaim, false);
+
   });
 
   it("does not infer whale or time-waster from spend or turns", async () => {
@@ -817,6 +819,16 @@ describe("production fail-closed contracts", () => {
     assert.equal(resolveCatalogSku("how much for pics", catalog), "photo_notes_pack");
     assert.equal(resolveCatalogSku("how much for photos", catalog), "photo_notes_pack");
     assert.equal(resolveCatalogSku("custom clip please", catalog), "custom_clip");
+    assert.equal(
+      resolveCatalogSku("photos", [{ ...catalog[0], sku: "music_pack", title: "Music pack" }]),
+      null,
+    );
+    const twoPacks = [
+      { ...catalog[0], id: "urban", sku: "urban_pack", title: "Urban photo pack" },
+      { ...catalog[0], id: "nature", sku: "nature_pack", title: "Nature photo pack", priceCents: 2500 },
+    ];
+    assert.equal(resolveCatalogSku("pics", twoPacks), null);
+
   });
 
   it("isolated drafts stay isolated until publish", () => {

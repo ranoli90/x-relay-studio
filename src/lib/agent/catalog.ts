@@ -1,5 +1,5 @@
 import type { CatalogRow } from "./types.ts";
-import { formatMoney, money, parseMoneyFromText, currencyExponent } from "../operator/money.ts";
+import { formatMoney, money, parseCurrency, parseMoneyFromText, currencyExponent } from "../operator/money.ts";
 
 const PRICE = /\$\s*(\d+(?:\.\d{1,2})?)/g;
 
@@ -13,19 +13,34 @@ export function findSku(catalog: CatalogRow[], sku: string | null | undefined): 
   return catalog.find((r) => r.sku === sku) ?? catalog.find((r) => r.id === sku) ?? null;
 }
 
-export function inventedPrice(text: string, catalog: CatalogRow[], exactMinor?: number | null): number | null {
+function quotedCurrency(catalog: CatalogRow[], exactMinor?: number | null, exactCurrency?: string | null): string | null {
+  const explicit = parseCurrency(exactCurrency);
+  if (explicit) return explicit;
+  if (typeof exactMinor === "number") {
+    const row = catalog.find((r) => r.priceCents === exactMinor);
+    return parseCurrency(row?.currency ?? catalog[0]?.currency ?? "USD");
+  }
+  return null;
+}
+
+export function inventedPrice(
+  text: string,
+  catalog: CatalogRow[],
+  exactMinor?: number | null,
+  exactCurrency?: string | null,
+): number | null {
+  const wantCurrency = quotedCurrency(catalog, exactMinor, exactCurrency);
   const hits = parseMoneyFromText(text);
   if (hits.length > 0) {
     for (const hit of hits) {
       const minor = hit.money.minor;
+      const display = hit.money.minor / 10 ** currencyExponent(hit.money.currency);
       if (typeof exactMinor === "number") {
-        if (minor !== exactMinor) return hit.money.minor / 10 ** currencyExponent(hit.money.currency);
+        if (minor !== exactMinor || (wantCurrency && hit.money.currency !== wantCurrency)) return display;
         continue;
       }
       const row = catalog.find((r) => r.priceCents === minor && (r.currency ?? "USD") === hit.money.currency);
-      if (!row) {
-        return hit.money.minor / 10 ** currencyExponent(hit.money.currency);
-      }
+      if (!row) return display;
     }
     return null;
   }
@@ -36,10 +51,10 @@ export function inventedPrice(text: string, catalog: CatalogRow[], exactMinor?: 
     if (!Number.isFinite(dollars)) continue;
     const minor = Math.round(dollars * 100);
     if (typeof exactMinor === "number") {
-      if (minor !== exactMinor) return dollars;
+      if (minor !== exactMinor || (wantCurrency && wantCurrency !== "USD")) return dollars;
       continue;
     }
-    const row = catalog.find((r) => r.priceCents === minor);
+    const row = catalog.find((r) => r.priceCents === minor && (r.currency ?? "USD") === "USD");
     if (!row) return dollars;
   }
   return null;

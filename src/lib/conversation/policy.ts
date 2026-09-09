@@ -93,15 +93,19 @@ export function parseAutomationMode(raw: unknown): AutomationMode {
   return "draft";
 }
 
-/** Local writer output is never a validated model result. */
+/** Local writer output is never a validated model result. Vetted service notices use local/service-notice. */
 export function generationOriginForWrite(written: {
   dropped: boolean;
   model: string;
 }): GenerationOrigin {
   if (written.dropped) return "local_template";
+  if (written.model === "local/service-notice" || written.model.startsWith("local/service-notice")) {
+    return "approved_service_notice";
+  }
   if (written.model.startsWith("local/")) return "local_template";
   return "validated_model";
 }
+
 
 /**
  * Floor "live" pulse. Auto-send plus a recent writer is not enough:

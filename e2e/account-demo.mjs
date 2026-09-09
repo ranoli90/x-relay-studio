@@ -57,21 +57,44 @@ function waitFor(url, timeoutMs) {
   });
 }
 
+function looksLiveDatabaseUrl(url) {
+  return /(neon\.tech|amazonaws\.com|supabase\.co|vercel-storage|[\.-]prod(?:uction)?[\.-]|[\.-]prod(?:uction)?$)/i.test(
+    url,
+  );
+}
+
+function isolatedDemoEnv() {
+  const isolated = String(process.env.XRELAY_DEMO_DATABASE_URL || "").trim();
+  const inherited = String(process.env.DATABASE_URL || "").trim();
+  if (!isolated) {
+    if (inherited && looksLiveDatabaseUrl(inherited) && process.env.XRELAY_ALLOW_LIVE_DATABASE !== "1") {
+      throw new Error(
+        "account-demo refuses inherited DATABASE_URL. Set XRELAY_DEMO_DATABASE_URL to a disposable database.",
+      );
+    }
+  }
+  const env = {
+    ...process.env,
+    VITE_AUTH_ENABLED: process.env.VITE_AUTH_ENABLED || "false",
+    XRELAY_ALLOW_SIMULATOR: "isolated-fixture",
+    PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || "/opt/pw-browsers",
+  };
+  if (isolated) env.DATABASE_URL = isolated;
+  else delete env.DATABASE_URL;
+  return env;
+}
+
 function startPreview() {
   const child = spawn(
     "node",
     ["scripts/with-app-env.mjs", join(ROOT, "node_modules/.bin/vite"), "dev", "--host", "127.0.0.1", "--port", String(PORT)],
     {
       cwd: ROOT,
-      env: {
-        ...process.env,
-        VITE_AUTH_ENABLED: process.env.VITE_AUTH_ENABLED || "false",
-        XRELAY_ALLOW_SIMULATOR: "isolated-fixture",
-        PLAYWRIGHT_BROWSERS_PATH: process.env.PLAYWRIGHT_BROWSERS_PATH || "/opt/pw-browsers",
-      },
+      env: isolatedDemoEnv(),
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
+
   let log = "";
   child.stdout.on("data", (chunk) => {
     log += String(chunk);
@@ -601,6 +624,8 @@ async function walkAccount(page, results) {
 
   await page.locator("[data-testid='nav-business']").click();
   await page.locator("[data-testid='business-brief']").waitFor({ timeout: 15_000 });
+  await page.locator("[data-testid='business-ready']").waitFor({ timeout: 20_000 }).catch(() => undefined);
+
   await Promise.race([
     page.getByText(/No published revision yet/i).waitFor({ timeout: 8_000 }),
     page.getByText(/revision \d+/i).waitFor({ timeout: 8_000 }),
@@ -623,7 +648,12 @@ async function walkAccount(page, results) {
     await page.locator(`[data-testid='offer-title-${i}']`).fill(wanted[i].title);
     await page.locator(`[data-testid='offer-amount-${i}']`).fill(wanted[i].amount);
   }
+  await page.locator("[data-testid='business-destination']").fill("@studio_pay");
+  await page.locator("[data-testid='business-payment-copy']").fill(
+    "Approved USD instructions: send to the listed handle. Workspace credits never settle this.",
+  );
   await page.locator("[data-testid='business-publish']").click();
+
   await page.getByText(/revision 1|revision \d+/i).waitFor({ timeout: 20_000 });
   const publishedCopy = await page.locator("body").innerText();
   if (!/photo notes pack/i.test(publishedCopy) || !/\$12\.50/.test(publishedCopy)) {

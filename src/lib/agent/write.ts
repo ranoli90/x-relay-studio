@@ -1,6 +1,8 @@
 import { activeClaim, clockContradiction } from "./clock.ts";
-import { findSku, formatUsd, inventedPrice, liveSku } from "./catalog.ts";
-import { parseMoneyFromText } from "../operator/money.ts";
+import { findSku, inventedPrice, liveSku } from "./catalog.ts";
+
+import { formatMoney, money, parseMoneyFromText } from "../operator/money.ts";
+
 import { buildFanMemory, factHook } from "./memory.ts";
 import { neverPhotoEighty } from "./pricing.ts";
 import { runSafety, safetyBlocksGenerate } from "./safety.ts";
@@ -10,6 +12,9 @@ import { isGreetingOnly, isIdentityQuestion, isThanksOnly } from "../conversatio
 
 /** Local templates never borrow a remote gateway model id. */
 export const LOCAL_WRITER_MODEL = "local/understand";
+/** Vetted factual notices that may auto-send under approved_service_notice. */
+export const LOCAL_NOTICE_MODEL = "local/service-notice";
+
 
 const LEAK = /\b(strategy=|trust_score|gfe_ready|as an ai|as a language model|openrouter|system prompt)\b/i;
 const BYPASS =
@@ -44,8 +49,10 @@ export type WriteCaps = {
   deliveryConfirmed?: boolean;
   allowedMethods?: readonly string[] | null;
   exactPriceMinor?: number | null;
+  exactPriceCurrency?: string | null;
   requireQuotedPrice?: boolean;
 };
+
 
 type WriterInput = WriteInput & WriteCaps;
 
@@ -104,14 +111,16 @@ export function validateDraft(
   if (!caps.deliveryConfirmed && DELIVERY_CLAIM.test(text)) {
     return "delivery claim without confirmation";
   }
-  const price = inventedPrice(text, catalog, caps.exactPriceMinor);
+  const price = inventedPrice(text, catalog, caps.exactPriceMinor, caps.exactPriceCurrency);
   if (price != null) return `price $${price} is not on the quoted item`;
   if (caps.requireQuotedPrice && typeof caps.exactPriceMinor === "number") {
     const hits = parseMoneyFromText(text);
-    if (!hits.some((h) => h.money.minor === caps.exactPriceMinor)) {
+    const wantCcy = caps.exactPriceCurrency ?? catalog.find((r) => r.priceCents === caps.exactPriceMinor)?.currency ?? "USD";
+    if (!hits.some((h) => h.money.minor === caps.exactPriceMinor && h.money.currency === wantCcy)) {
       return "missing quoted item price";
     }
   }
+
   const clock = clockContradiction(text, hour, claims);
   if (clock) return clock;
   return null;
@@ -133,7 +142,9 @@ export function writeCapsFor(input: WriteInput): WriteCaps {
     deliveryConfirmed: Boolean(writerInput.deliveryConfirmed),
     allowedMethods: allowedMethodsFor(writerInput, sku?.rail),
     exactPriceMinor: sku?.priceCents ?? writerInput.exactPriceMinor ?? null,
+    exactPriceCurrency: sku?.currency ?? writerInput.exactPriceCurrency ?? (sku ? "USD" : null),
     requireQuotedPrice: input.plan.workflow === "W6_CLOSE_NOW" && Boolean(sku && sku.priceCents > 0),
+
   };
 }
 
@@ -194,10 +205,14 @@ function himSlice(input: WriteInput): string {
 }
 
 function railPhrase(methods: string[]): string | null {
-  if (methods.length === 0) return null;
-  if (methods.length === 1) return methods[0];
-  return `${methods.slice(0, -1).join(", ")} or ${methods[methods.length - 1]}`;
+  const cleaned = methods
+    .map((m) => m.trim())
+    .filter((m) => m && m !== "manual_handle" && !/^manual[_-]/i.test(m));
+  if (cleaned.length === 0) return null;
+  if (cleaned.length === 1) return cleaned[0]!;
+  return `${cleaned.slice(0, -1).join(", ")} or ${cleaned[cleaned.length - 1]}`;
 }
+
 
 function needsPaymentMethods(plan: ReplyPlan): boolean {
   if (plan.workflow === "W8_OFFER") return true;
@@ -246,7 +261,8 @@ function inboundSlice(
   const s = clipText(raw, 48);
   if (s.length < 8) return "";
   if (LEAK.test(s) || BYPASS.test(s) || PROOF_PROMISE.test(s) || DELIVERY_CLAIM.test(s)) return "";
-  if (inventedPrice(s, catalog, caps.exactPriceMinor) != null) return "";
+  if (inventedPrice(s, catalog, caps.exactPriceMinor, caps.exactPriceCurrency) != null) return "";
+
   if (unallowedMethod(s, caps.allowedMethods ?? [])) return "";
   if (clockContradiction(s, hour, claims)) return "";
   return s;
@@ -285,9 +301,11 @@ export function writeLocal(input: WriteInput): WriteResult {
     last: input.last,
     lifetimeCents: 0,
   });
-  const price = sku ? formatUsd(sku.priceCents) : null;
+  const price = sku ? formatMoney(money(sku.priceCents, sku.currency ?? "USD")) : null;
+
   const customSku = findSku(input.catalog, "custom_clip");
-  const customLine = customSku && customSku.priceCents > 0 ? `a custom is ${formatUsd(customSku.priceCents)}` : "";
+  const customLine = customSku && customSku.priceCents > 0 ? `a custom is ${formatMoney(money(customSku.priceCents, customSku.currency ?? "USD"))}` : "";
+
   const him = diaryFact(himSlice(input));
   const name = mem.facts.theirName || spokenName(input.fanName);
   const rails = railPhrase(methods);
@@ -315,7 +333,14 @@ export function writeLocal(input: WriteInput): WriteResult {
 
   const drop = validateDraft(text, input.catalog, input.hour, input.clock, caps);
   if (drop) return hold(drop);
-  return { bubbles: splitBubbles(text), dropped: false, dropReason: null, model: LOCAL_WRITER_MODEL };
+  const notice = isThanksOnly(input.inbound) || unpublishedRailAsk(input.inbound, methods);
+  return {
+    bubbles: splitBubbles(text),
+    dropped: false,
+    dropReason: null,
+    model: notice ? LOCAL_NOTICE_MODEL : LOCAL_WRITER_MODEL,
+  };
+
 }
 
 function localLine(
@@ -347,8 +372,9 @@ function localLine(
   }
   if (isThanksOnly(x.inbound)) return "of course";
   if (unpublishedRailAsk(x.inbound, x.allowedMethods)) {
-    return x.rails ? `just ${x.rails} on the desk` : "i only use the handle listed on the desk";
+    return x.rails ? `just ${x.rails}` : "i only use the handle listed with the offer";
   }
+
 
   switch (plan.workflow) {
     case "W4_QUALIFY": {
@@ -388,18 +414,25 @@ function localLine(
           `once i know that i'll tell you the price and a rail`,
         );
       }
+      if (plan.tactic === "list_published" || plan.strategy === "catalog_menu") {
+        return two(`here's what's up right now — I'll quote the exact one you want`, `what are you actually wanting?`);
+      }
       if (plan.tactic === "menu") {
         return two(
           `customs start at $25. also sexting, calls, or a dropbox of premades if you want a folder, not one photo`,
           `what are you actually wanting?`,
         );
       }
+
       if (!x.skuTitle) {
         return two(`what are you wanting exactly${name}?`, `then i can tell you the price`);
       }
-      if (x.skuTitle && x.price && x.rails) {
-        return `yeah${name}, ${x.skuTitle.toLowerCase()} is ${x.price} on ${x.rails}`;
+      if (x.skuTitle && x.price) {
+        return x.rails
+          ? `yeah${name}, ${x.skuTitle.toLowerCase()} is ${x.price} on ${x.rails}`
+          : `yeah${name}, ${x.skuTitle.toLowerCase()} is ${x.price}`;
       }
+
       return two(`what are you wanting exactly${name}?`, `then i can tell you the price`);
     case "W7_GFE":
       return two(

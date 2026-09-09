@@ -8,11 +8,13 @@ import { cloneFinalState, type FinalState } from "./state.ts";
 import { shouldMarkRead, type ReadAckInput } from "./unread.ts";
 import {
   canPublish,
+  draftFromBrief,
   planningCatalog,
   serviceKeyFromTitle,
   type PublishedProjection,
   type StructuredBusiness,
 } from "./business.ts";
+
 import { evaluatePaymentEvidence, publicPaymentView } from "./payments.ts";
 import { money } from "./money.ts";
 import { effectiveAutoReply, type AutoReplyView } from "./effective-state.ts";
@@ -196,14 +198,18 @@ export async function catalogForPlanning(
   const proj = published === undefined ? await loadPublishedProjection(userId) : published;
   const sql = await getSql();
   const dest = proj
-    ? await sql.query<{ provider: string }>(
-        `select provider from payment_destinations
+    ? await sql.query<{ provider: string; destination_ref: string }>(
+        `select provider, destination_ref from payment_destinations
           where user_id = $1 and binding_id = $2
+            and revoked_at is null
+            and (revision_id is null or revision_id = $3)
           order by created_at desc limit 1`,
-        [userId, proj.bindingId],
+        [userId, proj.bindingId, proj.revisionId],
       )
     : [];
-  const rail = dest[0]?.provider ?? proj?.destinationHint ?? "";
+  const handle = dest[0]?.destination_ref?.trim() || proj?.destinationHint?.trim() || "";
+  const rail = handle && handle !== "manual_handle" ? handle : "";
+
   return planningCatalog(proj, rail).map((r) => ({
     id: r.id,
     sku: r.sku,
@@ -555,10 +561,12 @@ export async function loadOperatorDesk(userId: string): Promise<{
     projection
       ? `select id, provider, destination_ref, currency, credential_id from payment_destinations
           where user_id = $1 and binding_id = $2
+            and revoked_at is null
             and ($3::text is null or currency = $3)
           order by created_at desc limit 1`
       : `select id, provider, destination_ref, currency, credential_id from payment_destinations
-          where user_id = $1 order by created_at desc limit 1`,
+          where user_id = $1 and revoked_at is null order by created_at desc limit 1`,
+
     projection
       ? [userId, projection.bindingId, ins[0]?.currency ?? projection.offers[0]?.amount.currency ?? null]
       : [userId],
@@ -685,17 +693,25 @@ export async function publishBusinessFromBrief(
     available: offer.available,
     description: "",
   }));
+  const fromBrief = (() => {
+    try {
+      return input.plainText.trim() ? draftFromBrief(input.plainText) : null;
+    } catch {
+      return null;
+    }
+  })();
   const structured: StructuredBusiness = {
     displayName: input.plainText.trim().split("\n")[0]?.slice(0, 80) || "Business",
     about: input.plainText.trim().split("\n").slice(1).join(" ").slice(0, 500),
-    voice: "",
-    boundaries: "",
+    voice: fromBrief?.voice ?? "",
+    boundaries: fromBrief?.boundaries ?? "",
     paymentCopy: input.paymentCopy.trim(),
     destinationHint: input.destinationRef.trim(),
-    reviewQuestions: [],
+    reviewQuestions: fromBrief?.reviewQuestions ?? [],
     sourceBrief: input.plainText,
     offers: structuredOffers,
   };
+
   const gate = canPublish(structured);
   if (!gate.ok) throw new Error(gate.reason);
 
@@ -753,19 +769,27 @@ export async function publishBusinessFromBrief(
         [newOperatorId("ins"), userId, bind.id, revId, input.paymentCopy.trim(), structuredOffers[0]!.currency],
       );
     }
+    await sql.query(
+      `update payment_destinations
+          set revoked_at = now()
+        where user_id = $1 and binding_id = $2 and revoked_at is null`,
+      [userId, bind.id],
+    );
     if (input.destinationRef.trim()) {
       await sql.query(
-        `insert into payment_destinations (id, user_id, binding_id, provider, destination_ref, currency)
-         values ($1,$2,$3,'manual_handle',$4,$5)`,
+        `insert into payment_destinations (id, user_id, binding_id, provider, destination_ref, currency, revision_id)
+         values ($1,$2,$3,'manual_handle',$4,$5,$6)`,
         [
           newOperatorId("dest"),
           userId,
           bind.id,
           input.destinationRef.trim(),
           structuredOffers[0]!.currency,
+          revId,
         ],
       );
     }
+
     await sql.query(
       `update agent_personas set permission_revision = permission_revision where user_id = $1`,
       [userId],
@@ -792,9 +816,11 @@ export async function recordPaymentEvidence(
   const dest = await sql.query<{ id: string }>(
     `select id from payment_destinations
       where user_id = $1
+        and revoked_at is null
         and ($2::text is null or binding_id = $2)
         and ($3::text is null or currency = $3)
       order by created_at desc limit 1`,
+
     [userId, offer[0]?.binding_id ?? null, offer[0]?.currency ?? null],
   );
   if (!offer[0] || !dest[0]) return { accepted: false, reason: "missing", provenance: "evidence_candidate" };
@@ -984,7 +1010,14 @@ export async function recordScopedFact(input: {
     [input.userId, input.customerId, predicate, value],
   );
   if (existing[0]) return;
+  await sql.query(
+    `update memory_facts
+        set status = 'superseded'
+      where user_id = $1 and customer_id = $2 and predicate = $3 and status = 'active' and value <> $4`,
+    [input.userId, input.customerId, predicate, value],
+  );
   try {
+
     await sql.query(
       `insert into memory_facts
          (id, user_id, customer_id, account_id, subject, predicate, value, source_event_id, speaker, assertion, confidence, status)
@@ -1009,7 +1042,29 @@ export async function recordScopedFact(input: {
   }
 }
 
+export async function retractScopedPredicate(input: {
+  userId: string;
+  customerId: string;
+  predicate: string;
+  value?: string;
+}): Promise<number> {
+  const sql = await getSql();
+  const rows = await sql.query<{ id: string }>(
+    `update memory_facts
+        set status = 'deleted'
+      where user_id = $1
+        and customer_id = $2
+        and predicate = $3
+        and status = 'active'
+        and ($4::text is null or lower(value) = lower($4))
+      returning id`,
+    [input.userId, input.customerId, input.predicate.slice(0, 80), input.value?.slice(0, 400) ?? null],
+  );
+  return rows.length;
+}
+
 export async function forgetScopedFact(userId: string, factId: string): Promise<boolean> {
+
   const sql = await getSql();
   const rows = await sql.query<{ id: string }>(
     `update memory_facts set status = 'deleted'

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  LOCAL_NOTICE_MODEL,
   LOCAL_WRITER_MODEL,
   shouldSkipRemoteWrite,
   settleRemoteWrite,
@@ -8,6 +9,7 @@ import {
   writeCapsFor,
   writeLocal,
 } from "./write.ts";
+
 import { safetyBlocksGenerate } from "./safety.ts";
 import { goldSummary } from "./eval.ts";
 import { DEFAULT_CATALOG } from "./catalog.ts";
@@ -332,8 +334,10 @@ describe("remote skip and caps", () => {
     const text = local.bubbles.join(" ").toLowerCase();
     assert.equal(local.dropped, false);
     assert.equal(/paypal/.test(text), false);
-    assert.match(text, /throne|handle|desk/);
+    assert.match(text, /throne|handle|listed/);
     assert.equal(shouldSkipRemoteWrite(src, local), true);
+    assert.equal(local.model, LOCAL_NOTICE_MODEL);
+
   });
 
   it("clarifies a close with no resolved sku instead of dumping the custom menu", () => {
@@ -352,7 +356,8 @@ describe("remote skip and caps", () => {
     const settled = settleRemoteWrite("yeah paypal works", local, src, caps, "x-ai/grok-4.5");
     assert.equal(settled.dropped, false);
     assert.equal(/paypal/.test(settled.bubbles.join(" ").toLowerCase()), false);
-    assert.equal(settled.model, LOCAL_WRITER_MODEL);
+    assert.equal(settled.model, LOCAL_NOTICE_MODEL);
+
   });
 
   it("falls back to local when a priced close omits the quoted amount", () => {
