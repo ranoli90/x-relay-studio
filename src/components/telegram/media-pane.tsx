@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
-import { loadOperatorDeskFn, proposeMediaFn } from "@/lib/operator/fns";
+import {
+  loadOperatorDeskFn,
+  proposeMediaFn,
+  uploadMediaFn,
+  setMediaApprovalFn,
+  sendMediaFn,
+} from "@/lib/operator/fns";
 import { useTelegram } from "@/lib/telegram/store";
 import { cn } from "@/lib/utils";
 import { tgFocusClass } from "./format";
@@ -18,6 +24,13 @@ export function MediaPane() {
   const [assets, setAssets] = useState<Asset[]>([]);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [note, setNote] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function reload() {
+    const desk = await loadOperatorDeskFn();
+    setAssets(desk.assets);
+    setAttachments(desk.attachments);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +61,60 @@ export function MediaPane() {
             ? "That still is missing."
             : "Not approved.",
     );
+    if (result.ok) {
+      const sent = await sendMediaFn({ data: { proposalId: result.id } });
+      if (sent.ok && sent.status === "confirmed") {
+        setNote("Sent through the desk transport. Stored media is still not proof of a live person.");
+      } else if (!sent.ok && sent.reason === "media_transport_not_live") {
+        setNote("Approved — not sent. Live photo send is not available on this session.");
+      }
+    }
+  }
+
+  async function onFile(file: File | null) {
+    if (!file) return;
+    setBusy(true);
+    setNote(null);
+    try {
+      const buf = await file.arrayBuffer();
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!);
+      const bytesBase64 = btoa(binary);
+      const uploaded = await uploadMediaFn({
+        data: { title: file.name.replace(/\.[a-z0-9]+$/i, "") || "Still", mime: file.type, bytesBase64 },
+      });
+      if (!uploaded.ok) {
+        setNote(
+          uploaded.reason === "too_large"
+            ? "That file is too large."
+            : uploaded.reason === "unsupported_type"
+              ? "Use a JPEG, PNG, WebP, or GIF."
+              : "Could not store that file.",
+        );
+        return;
+      }
+      await reload();
+      setNote("Uploaded as pending. Approve it before proposing.");
+    } catch {
+      setNote("Could not store that file.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setApproval(assetId: string, approval: "approved" | "revoked") {
+    setBusy(true);
+    try {
+      const result = await setMediaApprovalFn({ data: { assetId, approval } });
+      if (!result.ok) setNote("Could not update that still.");
+      else {
+        await reload();
+        setNote(approval === "approved" ? "Approved. Not sent." : "Revoked. It cannot send.");
+      }
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -59,6 +126,17 @@ export function MediaPane() {
         <p className="text-sm leading-relaxed text-[var(--tg-text-secondary)]">
           Private library. Stored or generated media is never treated as a live sitting.
         </p>
+        <label className="mt-4 block text-sm">
+          Upload a still
+          <input
+            type="file"
+            accept="image/jpeg,image/png,image/webp,image/gif"
+            disabled={busy}
+            data-testid="media-upload"
+            onChange={(e) => void onFile(e.target.files?.[0] ?? null)}
+            className={cn("mt-2 block w-full text-sm", tgFocusClass)}
+          />
+        </label>
         {note ? (
           <p className="mt-3 rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-sm" role="status">
             {note}
@@ -91,17 +169,39 @@ export function MediaPane() {
                 <p className="mt-1 text-xs text-[var(--tg-text-secondary)]">
                   {asset.approval} · stored media, not proof of a live person
                 </p>
-                <button
-                  type="button"
-                  disabled={asset.approval !== "approved"}
-                  onClick={() => void propose(asset.id)}
-                  className={cn(
-                    "mt-2 h-11 min-h-[44px] text-sm text-[var(--tg-primary)] disabled:opacity-40",
-                    tgFocusClass,
-                  )}
-                >
-                  Propose to open chat
-                </button>
+                <div className="mt-2 flex flex-wrap gap-3">
+                  {asset.approval === "pending" ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void setApproval(asset.id, "approved")}
+                      className={cn("h-11 min-h-[44px] text-sm text-[var(--tg-primary)]", tgFocusClass)}
+                    >
+                      Approve
+                    </button>
+                  ) : null}
+                  {asset.approval !== "revoked" ? (
+                    <button
+                      type="button"
+                      disabled={busy}
+                      onClick={() => void setApproval(asset.id, "revoked")}
+                      className={cn("h-11 min-h-[44px] text-sm text-[var(--tg-text-secondary)]", tgFocusClass)}
+                    >
+                      Revoke
+                    </button>
+                  ) : null}
+                  <button
+                    type="button"
+                    disabled={asset.approval !== "approved" || busy}
+                    onClick={() => void propose(asset.id)}
+                    className={cn(
+                      "h-11 min-h-[44px] text-sm text-[var(--tg-primary)] disabled:opacity-40",
+                      tgFocusClass,
+                    )}
+                  >
+                    Propose and send
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

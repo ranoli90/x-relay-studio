@@ -127,7 +127,18 @@ export type WriteInput = {
   deliveryConfirmed?: boolean;
   memoryFacts?: string[];
   pendingQuestion?: string | null;
-  quoteSnapshot?: { sku: string; title: string; amountLabel: string } | null;
+  quoteSnapshot?: {
+    id?: string;
+    sku: string;
+    title: string;
+    amountLabel: string;
+    currency?: string;
+    destinationId?: string | null;
+  } | null;
+  businessName?: string;
+  businessAbout?: string;
+  businessBoundaries?: string;
+  paymentCopy?: string;
 };
 
 export type WriteResult = {

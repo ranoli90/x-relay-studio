@@ -128,18 +128,31 @@ export function buildWriterMessages(
       ? `Accepted partner facts (scoped, not payment truth):\n${input.memoryFacts.join("\n")}`
       : "No durable partner facts in this packet.";
   const quoteBlock = input.quoteSnapshot
-    ? `Immutable quote snapshot: ${input.quoteSnapshot.sku} ${input.quoteSnapshot.title} ${input.quoteSnapshot.amountLabel}. Repeat this amount exactly.`
+    ? `Immutable quote snapshot: ${input.quoteSnapshot.sku} ${input.quoteSnapshot.title} ${input.quoteSnapshot.amountLabel}${input.quoteSnapshot.id ? ` id=${input.quoteSnapshot.id}` : ""}. Repeat this amount exactly.`
     : "";
   const pendingBlock = input.pendingQuestion
     ? `Unresolved question you asked: ${input.pendingQuestion}. Resolve a short answer against this, do not re-ask it.`
     : "";
+  const businessName = input.businessName?.trim() || input.personaName;
+  const about = input.businessAbout?.trim() || "";
+  const boundaries = input.businessBoundaries?.trim() || "";
+  const paymentCopy = input.paymentCopy?.trim() || "";
+  const identityBlock = [
+    `Approved business name: ${businessName}`,
+    about ? `Approved description: ${about}` : "",
+    boundaries ? `Boundaries (must follow): ${boundaries}` : "",
+    paymentCopy ? `Approved payment instructions (customer-facing): ${paymentCopy}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
 
-  const system = `You write as ${input.personaName}, a disclosed AI persona with human desk support.
+  const system = `You write as ${businessName}, a disclosed AI persona with human desk support.
 Short Telegram bubbles. Lowercase ok. No emoji.
 Do not volunteer an AI disclaimer every turn. If asked whether you are real/human/AI, answer honestly.
 Never invent a price, job, pet, city, or payment rail. Catalog only:
 ${catalogLines || "(none — do not invent a service or price)"}
 Only these payment rails may be named: ${rails}
+${identityBlock}
 ${quoteBlock}
 ${proofLine}
 ${deliveryLine}

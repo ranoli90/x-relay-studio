@@ -358,14 +358,31 @@ async function processClaimedRow(
 
   if (isNonProcessableInbound(row.body, row.author_name)) return "suppressed";
 
-  const { burstDecision, nextBurstRetryAt } = await import("@/lib/operator/debounce.ts");
-  const neighbors = await sql.query<{ created_at: string | Date }>(
-    `select created_at from telegram_messages
+  const { burstDecision, nextBurstRetryAt, coalesceInboundBodies } = await import("@/lib/operator/debounce.ts");
+  const neighbors = await sql.query<{
+    id: string;
+    body: string;
+    created_at: string | Date;
+    ai_status: string;
+    claim_owner: string | null;
+  }>(
+    `select id, body, created_at, ai_status, claim_owner from telegram_messages
       where user_id = $1 and chat_id = $2 and from_self = false
         and ai_status in ('queued', 'retry_wait', 'processing')
       order by created_at asc`,
     [row.user_id, row.chat_id],
   );
+  const foreign = neighbors.some(
+    (n) => n.id !== row.id && n.ai_status === "processing" && n.claim_owner && n.claim_owner !== row.claim_owner,
+  );
+  if (foreign) {
+    await sql.query(
+      `update telegram_messages set ai_status = 'retry_wait', next_attempt_at = $2
+        where id = $1 and ai_status = 'processing' and claim_owner is not distinct from $3`,
+      [row.id, nextBurstRetryAt(Date.now()).toISOString(), row.claim_owner ?? null],
+    );
+    return "retry_wait";
+  }
   if (neighbors.length > 1) {
     const first = new Date(neighbors[0]!.created_at).getTime();
     const last = new Date(neighbors[neighbors.length - 1]!.created_at).getTime();
@@ -388,6 +405,21 @@ async function processClaimedRow(
     }
   }
 
+  const siblingIds = neighbors.filter((n) => n.id !== row.id).map((n) => n.id);
+  if (siblingIds.length > 0 && row.claim_owner) {
+    await sql.query(
+      `update telegram_messages
+          set ai_status = 'processing', claim_owner = $2, coalesced_into = $3
+        where user_id = $4 and chat_id = $5
+          and id = any($1::text[])
+          and ai_status in ('queued', 'retry_wait')`,
+      [siblingIds, row.claim_owner, row.id, row.user_id, row.chat_id],
+    );
+  }
+  const combined = coalesceInboundBodies(
+    neighbors.length ? neighbors.map((n) => n.body) : [row.body],
+  );
+
   const credits = await availableThreads(row.user_id);
 
   const personaId = await ensureSeed(row.user_id);
@@ -407,14 +439,34 @@ async function processClaimedRow(
     userId: row.user_id,
     threadId: thread.id,
     fanId: fan.id,
-    text: redactForModel(row.body),
+    text: redactForModel(combined || row.body),
     source: "telegram",
     idempotencyKey: `tg:${row.id}`,
     forceHold: credits <= 0,
   });
+  const groupIds = [row.id, ...siblingIds];
+  if (result.retryable) {
+    const wait = new Date(Date.now() + retryBackoffMs(Number(row.ai_attempt_count ?? 1))).toISOString();
+    await sql.query(
+      `update telegram_messages
+          set ai_status = 'retry_wait', next_attempt_at = $2, claim_owner = null, claim_expires_at = null
+        where id = any($1::text[]) and user_id = $3`,
+      [groupIds, wait, row.user_id],
+    );
+    return "retry_wait";
+  }
   const burn = decideIngressCreditBurn(result, credits);
   if (burn.shouldBurn) {
     await burnThreadIfBillable(row.user_id, thread.id, burn.event);
   }
-  return result.auto ? "outbound" : "held";
+  const status = result.auto ? "outbound" : "held";
+  if (siblingIds.length > 0) {
+    await sql.query(
+      `update telegram_messages
+          set ai_status = $1, coalesced_into = $2, claim_owner = null, claim_expires_at = null
+        where id = any($3::text[]) and user_id = $4`,
+      [status, row.id, siblingIds, row.user_id],
+    );
+  }
+  return status;
 }

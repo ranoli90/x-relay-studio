@@ -156,4 +156,31 @@ describe("follow-up target gates", () => {
     assert.equal(/processing_permission\s*=\s*true/.test(setClause) && !/processing_permission/.test(whereClause), false);
     assert.match(personaSql, /coalesce\(emergency_stop, false\) = false/);
   });
+
+  it("quote views require the payable quote id", async () => {
+    const { quoteFromOffer, quoteView } = await import("./quotes.ts");
+    const snap = quoteFromOffer({
+      sku: "photo_notes_pack",
+      title: "Photo notes",
+      amountMinor: 1250,
+      currency: "USD",
+      destinationId: "dest_1",
+      businessRevision: 3,
+      customerId: "c1",
+    });
+    assert.equal("error" in snap, false);
+    if ("error" in snap) return;
+    const view = quoteView(snap, "quo_live");
+    assert.equal(view.id, "quo_live");
+    assert.equal(view.destinationId, "dest_1");
+    assert.equal(view.businessRevision, 3);
+  });
+
+  it("unknown eligibility holds standard auto-send", async () => {
+    const { decideLiveAutoSend } = await import("../conversation/policy.ts");
+    const held = decideLiveAutoSend({ ...auto, adultEligibility: "unknown" });
+    assert.equal(held.send, false);
+    assert.equal(held.reason, "adult_unknown");
+    assert.equal(decideLiveAutoSend({ ...auto, adultEligibility: "allowed" }).send, true);
+  });
 });

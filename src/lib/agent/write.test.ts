@@ -354,6 +354,28 @@ describe("remote skip and caps", () => {
 
   });
 
+  it("uses published payment copy on an unpublished rail ask", () => {
+    const src = input("W5_DAY_ARC", {
+      inbound: "do you take paypal?",
+      paymentCopy: "Send USD to the listed handle @northlight_pay.",
+    });
+    const local = writeLocal(src);
+    const text = local.bubbles.join(" ");
+    assert.equal(local.dropped, false);
+    assert.equal(/paypal/i.test(text), false);
+    assert.match(text, /@northlight_pay/);
+    assert.equal(local.model, LOCAL_NOTICE_MODEL);
+  });
+
+  it("classifies empty and gateway drops as retryable", async () => {
+    const { isRetryableWriteDrop } = await import("./write.ts");
+    assert.equal(isRetryableWriteDrop("timeout"), true);
+    assert.equal(isRetryableWriteDrop("provider 429"), true);
+    assert.equal(isRetryableWriteDrop(null), true);
+    assert.equal(isRetryableWriteDrop("leaked internal field"), false);
+    assert.equal(isRetryableWriteDrop("handoff"), false);
+  });
+
   it("clarifies a close with no resolved sku instead of dumping the custom menu", () => {
     const src = input("W6_CLOSE_NOW", { inbound: "how much for pics", plan: plan("W6_CLOSE_NOW", { sku: null }) });
     const local = writeLocal(src);

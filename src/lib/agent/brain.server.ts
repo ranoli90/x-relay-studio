@@ -56,7 +56,7 @@ async function quoteSnapshotForPlan(
   customerId: string,
   sku: string | null | undefined,
   published: PublishedProjection | null,
-): Promise<{ sku: string; title: string; amountLabel: string } | null> {
+): Promise<import("@/lib/operator/quotes").QuoteView | null> {
   if (!sku || !published) return null;
   const { snapshotQuote } = await import("@/lib/operator/persist.server");
   const offer = published.offers.find((o) => o.serviceKey === sku || o.id === sku);
@@ -136,6 +136,7 @@ async function commitBubbles(
     optOut?: boolean;
     emergencyStop?: boolean;
     origin: GenerationOrigin;
+    captured?: import("@/lib/operator/state").FinalState;
   },
 ): Promise<{ auto: boolean; partial: boolean }> {
   const ids: string[] = [];
@@ -197,6 +198,10 @@ async function commitBubbles(
       takeover: opts.takeover,
       optOut: opts.optOut,
       emergencyStop: opts.emergencyStop,
+      captured: opts.captured,
+      replyPartId: `${replyId}:${i}`,
+      accountGeneration: opts.captured?.accountGeneration,
+      consentEpoch: opts.captured?.consentEpoch,
     });
     if (result.status === "ok") {
       await sql.query(
@@ -236,6 +241,18 @@ async function commitBubbles(
     return { auto: sent > 0, partial: sent > 0 && sent < opts.bubbles.length };
   }
 
+  if (opts.offerId) {
+    await sql.query(
+      `update agent_offers set status = 'sent', amount_minor = coalesce(amount_minor, price_cents)
+        where id = $1 and user_id = $2 and status = 'draft'`,
+      [opts.offerId, opts.userId],
+    );
+    await sql.query(
+      `update operator_quotes set status = 'sent' where id = $1 and user_id = $2 and status = 'open'`,
+      [opts.offerId, opts.userId],
+    );
+  }
+
   await recordActivity(sql, {
     userId: opts.userId,
     personaId: opts.personaId,
@@ -261,7 +278,15 @@ async function completeIdempotency(
   );
 }
 
-type InboundResult = { threadId: string; workflow: WorkflowId; held: boolean; killed: boolean; auto: boolean };
+type InboundResult = {
+  threadId: string;
+  workflow: WorkflowId;
+  held: boolean;
+  killed: boolean;
+  auto: boolean;
+  retryable?: boolean;
+  partial?: boolean;
+};
 
 function heldIngest(threadId: string): InboundResult {
   return { threadId, workflow: "W1_INGEST", held: true, killed: false, auto: false };
@@ -333,7 +358,15 @@ export async function processInbound(opts: {
   idempotencyKey?: string;
   source?: Source;
   forceHold?: boolean;
-}): Promise<{ threadId: string; workflow: WorkflowId; held: boolean; killed: boolean; auto: boolean }> {
+}): Promise<{
+  threadId: string;
+  workflow: WorkflowId;
+  held: boolean;
+  killed: boolean;
+  auto: boolean;
+  retryable?: boolean;
+  partial?: boolean;
+}> {
   const sql = await getSql();
 
   let threadId = opts.threadId;
@@ -437,6 +470,8 @@ export async function processInbound(opts: {
   const hour = hourInZone(now, persona.timezone);
   const quiet = inWindow(hour, persona.quiet_start, persona.quiet_end);
   const agentName = await ensureAgentName(sql, opts.userId, threadId, thread.agent_name);
+  const { loadLiveFinalState } = await import("@/lib/operator/persist.server");
+  const captured = await loadLiveFinalState(opts.userId, threadId);
 
   await sql.query(
     `insert into agent_messages (id, user_id, thread_id, role, body, status, origin)
@@ -777,10 +812,11 @@ export async function processInbound(opts: {
     proofReady = Boolean(claimed[0]);
   }
 
+  const quoteSnap = await quoteSnapshotForPlan(opts.userId, fanId!, plan.sku, published);
   const written = await writeWithGateway(opts.userId, threadId, {
     plan,
-    personaName: persona.display_name,
-    bible: persona.bible,
+    personaName: published?.displayName || persona.display_name,
+    bible: [published?.about, published?.boundaries, persona.bible].filter(Boolean).join("\n"),
     clock,
     hour,
     diary,
@@ -792,7 +828,11 @@ export async function processInbound(opts: {
     deliveryConfirmed: Number(justDelivered?.n ?? 0) > 0,
     memoryFacts,
     pendingQuestion,
-    quoteSnapshot: await quoteSnapshotForPlan(opts.userId, fanId!, plan.sku, published),
+    quoteSnapshot: quoteSnap,
+    businessName: published?.displayName,
+    businessAbout: published?.about,
+    businessBoundaries: published?.boundaries,
+    paymentCopy: published?.paymentCopy,
   });
   await thought(
     sql,
@@ -826,6 +866,8 @@ export async function processInbound(opts: {
     });
 
   if (written.bubbles.length === 0) {
+    const { isRetryableWriteDrop } = await import("./write.ts");
+    const retryable = written.dropped && isRetryableWriteDrop(written.dropReason);
     await sql.query(
       `update agent_threads set workflow = $1, state = 'held' where id = $2`,
       [workflow, threadId],
@@ -838,19 +880,39 @@ export async function processInbound(opts: {
       kind: "held",
       body: written.dropReason,
     });
-    const result = { threadId, workflow, held: true, killed: false, auto: false };
-    await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
+    const result = {
+      threadId,
+      workflow,
+      held: true,
+      killed: false,
+      auto: false,
+      retryable,
+    };
+    if (!retryable) await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
     return result;
   }
 
   const sku = findSku(catalogRows, plan.sku);
   let offerId: string | null = null;
   if (sku && (workflow === "W6_CLOSE_NOW" || workflow === "W8_OFFER")) {
-    offerId = newId("off");
+    offerId = quoteSnap?.id ?? newId("off");
     await sql.query(
-      `insert into agent_offers (id, user_id, persona_id, fan_id, thread_id, sku, price_cents, status)
-       values ($1,$2,$3,$4,$5,$6,$7,'draft')`,
-      [offerId, opts.userId, personaId, fanId, threadId, sku.sku, sku.priceCents],
+      `insert into agent_offers
+         (id, user_id, persona_id, fan_id, thread_id, sku, price_cents, status, currency, destination_id, amount_minor, quote_id)
+       values ($1,$2,$3,$4,$5,$6,$7,'draft',$8,$9,$10,$11)`,
+      [
+        offerId,
+        opts.userId,
+        personaId,
+        fanId,
+        threadId,
+        sku.sku,
+        sku.priceCents,
+        quoteSnap?.currency ?? sku.currency ?? null,
+        quoteSnap?.destinationId ?? null,
+        sku.priceCents,
+        quoteSnap?.id ?? null,
+      ],
     );
   }
 
@@ -868,6 +930,7 @@ export async function processInbound(opts: {
     optOut: colBool(thread, "opt_out"),
     emergencyStop: colBool(persona, "emergency_stop"),
     origin: generationOriginForWrite(written),
+    captured,
   });
   const auto = committed.auto && !committed.partial;
   const state: ThreadState = fulfilling ? "fulfilling" : auto ? "open" : "held";
@@ -886,7 +949,7 @@ export async function processInbound(opts: {
   await sql.query(
     `update agent_threads set workflow = $1, state = $2, last_outbound_at = case when $3 then $4 else last_outbound_at end
       where id = $5`,
-    [workflow, state, committed.auto, now.toISOString(), threadId],
+    [workflow, state, auto, now.toISOString(), threadId],
 
   );
   await sql.query(`update agent_fans set archetype = $1 where id = $2`, [u.archetype, fanId]);
@@ -909,7 +972,7 @@ export async function processInbound(opts: {
     auto ? "W19 DESK. Auto-sent." : "W19 DESK. Thought + diary only. Never to buyer.",
   );
 
-  const result = { threadId, workflow, held: !auto, killed: false, auto };
+  const result = { threadId, workflow, held: !auto, killed: false, auto, partial: committed.partial };
   await completeIdempotency(sql, opts.userId, opts.idempotencyKey, result);
   return result;
 }
@@ -1041,8 +1104,9 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   if (!persona || !fan) return;
   if (colBool(persona, "emergency_stop")) return;
 
-  const { catalogForPlanning, loadPublishedProjection } = await import("@/lib/operator/persist.server");
+  const { catalogForPlanning, loadPublishedProjection, loadLiveFinalState } = await import("@/lib/operator/persist.server");
   const published = await loadPublishedProjection(userId);
+  const captured = await loadLiveFinalState(userId, threadId);
   const catalogRows = await catalogForPlanning(userId, undefined, published);
   const diary = await sql.query<{ voice: DiaryVoice; body: string }>(
     `select voice, body from agent_diary where fan_id = $1 order by created_at desc limit 12`,
@@ -1118,8 +1182,8 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
   const plan = buildPlan("W11_REACTIVATE", u, ctx, autoEnabled);
   const written = await writeWithGateway(userId, threadId, {
     plan,
-    personaName: persona.display_name,
-    bible: persona.bible,
+    personaName: published?.displayName || persona.display_name,
+    bible: [published?.about, published?.boundaries, persona.bible].filter(Boolean).join("\n"),
     clock,
     hour,
     diary,
@@ -1128,6 +1192,10 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     fanName: fan.display_name,
     inbound: "",
     quoteSnapshot: await quoteSnapshotForPlan(userId, thread.fan_id, plan.sku, published),
+    businessName: published?.displayName,
+    businessAbout: published?.about,
+    businessBoundaries: published?.boundaries,
+    paymentCopy: published?.paymentCopy,
   });
   if (written.bubbles.length === 0) return;
   const agentName = await ensureAgentName(sql, userId, threadId, thread.agent_name);
@@ -1162,8 +1230,9 @@ async function runCheckIn(sql: Sql, userId: string, threadId: string) {
     optOut: colBool(thread, "opt_out"),
     emergencyStop: colBool(persona, "emergency_stop"),
     origin: generationOriginForWrite(written),
+    captured,
   });
-  if (committed.auto) {
+  if (committed.auto && !committed.partial) {
     await sql.query(
       `update agent_threads set workflow = 'W11_REACTIVATE', state = 'open', last_outbound_at = $1 where id = $2`,
       [now.toISOString(), threadId],

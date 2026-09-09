@@ -64,6 +64,14 @@ function hold(reason: string): WriteResult {
   return { bubbles: [], dropped: true, dropReason: reason, model: LOCAL_WRITER_MODEL };
 }
 
+export function isRetryableWriteDrop(reason: string | null | undefined): boolean {
+  if (!reason) return true;
+  if (/handoff|safety|kill|opt_out|no allowed payment|leaked internal/i.test(reason)) return false;
+  return /timeout|429|503|provider|gateway|remote|unavailable|overloaded|fetch|econn|network|dropped/i.test(
+    reason,
+  );
+}
+
 function publishedMenuLine(catalog: CatalogRow[]): string {
   const items = catalog.filter((r) => r.priceCents > 0 && r.title.trim());
   if (!items.length) return "";
@@ -339,6 +347,7 @@ export function writeLocal(input: WriteInput): WriteResult {
     customLine,
     inbound: input.inbound,
     catalog: input.catalog,
+    paymentCopy: input.paymentCopy,
   });
 
   const drop = validateDraft(text, input.catalog, input.hour, input.clock, caps);
@@ -362,6 +371,7 @@ function localLine(
     him: string;
     rails: string | null;
     allowedMethods: string[];
+    paymentCopy?: string | null;
     proofAvailable: boolean;
     deliveryConfirmed: boolean;
     last: string;
@@ -383,6 +393,7 @@ function localLine(
   }
   if (isThanksOnly(x.inbound)) return "of course";
   if (unpublishedRailAsk(x.inbound, x.allowedMethods)) {
+    if (x.paymentCopy?.trim()) return x.paymentCopy.trim();
     return x.rails ? `just ${x.rails}` : "i only use the handle listed with the offer";
   }
 

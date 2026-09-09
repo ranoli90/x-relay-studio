@@ -12,6 +12,8 @@ export function BusinessPane() {
   const [offers, setOffers] = useState<OfferDraft[]>([{ title: "", amount: "", currency: "USD", available: true }]);
   const [paymentCopy, setPaymentCopy] = useState("");
   const [destinationRef, setDestinationRef] = useState("");
+  const [voice, setVoice] = useState("");
+  const [boundaries, setBoundaries] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
   const dirtyRef = useRef(false);
@@ -33,6 +35,8 @@ export function BusinessPane() {
         if (desk.projection) {
           setPlain(`${desk.projection.displayName}\n${desk.projection.about}`.trim());
           setPaymentCopy(desk.projection.paymentCopy || "");
+          setVoice(desk.projection.voice || "");
+          setBoundaries(desk.projection.boundaries || "");
           setRevision(desk.projection.revision);
           if (desk.projection.offers.length) {
             setOffers(
@@ -83,9 +87,13 @@ export function BusinessPane() {
           offers: parsed,
           paymentCopy,
           destinationRef,
+          voice,
+          boundaries,
         },
       });
       setRevision(result.revision);
+      setVoice(result.voice || voice);
+      setBoundaries(result.boundaries || boundaries);
       setPublished(
         `${result.displayName} · revision ${result.revision} · ${result.offers
           .map((o) => `${o.title} ${formatMoney(o.amount)}`)
@@ -136,6 +144,38 @@ export function BusinessPane() {
             data-testid="business-brief"
             className={cn(
               "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base text-[var(--tg-text)]",
+              tgFocusClass,
+            )}
+          />
+        </label>
+        <label className="mt-4 block text-sm">
+          Voice
+          <textarea
+            value={voice}
+            data-testid="business-voice"
+            onChange={(e) => {
+              dirtyRef.current = true;
+              setVoice(e.target.value);
+            }}
+            rows={2}
+            className={cn(
+              "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base",
+              tgFocusClass,
+            )}
+          />
+        </label>
+        <label className="mt-3 block text-sm">
+          Boundaries
+          <textarea
+            value={boundaries}
+            data-testid="business-boundaries"
+            onChange={(e) => {
+              dirtyRef.current = true;
+              setBoundaries(e.target.value);
+            }}
+            rows={2}
+            className={cn(
+              "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base",
               tgFocusClass,
             )}
           />

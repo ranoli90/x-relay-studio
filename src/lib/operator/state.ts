@@ -15,6 +15,8 @@ export type SendStatus = (typeof SEND_STATUSES)[number];
 
 export type FinalState = {
   accountGeneration: number;
+  sessionGeneration: number;
+  telegramAccountId: string | null;
   consentEpoch: number;
   permissionRevision: number;
   businessRevision: number | null;
@@ -48,8 +50,18 @@ export function revalidateForSend(captured: FinalState, live: FinalState): Reval
   if (!live.conversationPermitted) return { allow: false, reason: "not_permitted" };
   if (!live.accountLive) return { allow: false, reason: "not_live" };
   if (!live.assetApprovalOk) return { allow: false, reason: "asset_not_approved" };
+  if (live.sessionGeneration !== captured.sessionGeneration) {
+    return { allow: false, reason: "stale_session_generation" };
+  }
   if (live.accountGeneration !== captured.accountGeneration) {
     return { allow: false, reason: "stale_account_generation" };
+  }
+  if (
+    live.telegramAccountId &&
+    captured.telegramAccountId &&
+    live.telegramAccountId !== captured.telegramAccountId
+  ) {
+    return { allow: false, reason: "stale_telegram_account" };
   }
   if (live.consentEpoch !== captured.consentEpoch) {
     return { allow: false, reason: "stale_consent" };
@@ -83,6 +95,7 @@ export type SendAttempt = {
   transportMessageId: string | null;
   uncertainReason: string | null;
   reconciledAs: "confirmed" | "failed" | "canceled" | null;
+  replyPartId?: string | null;
 };
 
 export type RetryDecision =
@@ -147,6 +160,10 @@ export function applyTransportOutcome(
   };
 }
 
+/**
+ * Positive provider evidence confirms. A miss in this history window stays
+ * uncertain — it is not proof of non-delivery.
+ */
 export function reconcileUncertain(
   attempt: SendAttempt,
   found: { transportMessageId: string } | null,
@@ -162,8 +179,9 @@ export function reconcileUncertain(
   }
   return {
     ...attempt,
-    status: "failed",
-    reconciledAs: "failed",
+    status: "uncertain",
+    reconciledAs: null,
+    uncertainReason: attempt.uncertainReason ?? "unconfirmed_history_miss",
   };
 }
 
@@ -185,5 +203,7 @@ export function publicSendLabel(status: SendStatus): string {
       return "Not confirmed";
     case "canceled":
       return "Canceled";
+    default:
+      return "Unknown";
   }
 }

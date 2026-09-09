@@ -5,7 +5,7 @@ export type DispatchOutcome =
   | { kind: "blocked"; reason: string }
   | { kind: "canceled_stale"; reason: string }
   | { kind: "failed_definitive"; reason: string; retryable: boolean }
-  | { kind: "uncertain"; reason: string }
+  | { kind: "uncertain"; reason: string; transportMessageId?: string }
   | { kind: "not_live"; reason: string }
   | { kind: "local"; reason: string };
 
@@ -40,7 +40,7 @@ export function classifyTransportResult(value: unknown, err?: unknown): Dispatch
   if (rec.ok === false) {
     const reason = String(rec.reason ?? rec.error ?? "dispatch failed").slice(0, 240);
     if (isNotLiveText(reason)) return { kind: "not_live", reason };
-    if (/uncertain/i.test(reason)) return { kind: "uncertain", reason };
+    if (/uncertain/i.test(reason)) return { kind: "uncertain", reason, transportMessageId: id ?? undefined };
     return { kind: "failed_definitive", reason, retryable: false };
   }
   if (/fail|error/i.test(status) && !/ok|sent/i.test(status)) {
@@ -54,9 +54,9 @@ export function classifyTransportResult(value: unknown, err?: unknown): Dispatch
     };
   }
   if (rec.ok === true || /ok|sent/i.test(status)) {
-    return { kind: "uncertain", reason: "ok_without_ack_id" };
+    return { kind: "uncertain", reason: "ok_without_ack_id", transportMessageId: id ?? undefined };
   }
-  return { kind: "uncertain", reason: status || "unknown_shape" };
+  return { kind: "uncertain", reason: status || "unknown_shape", transportMessageId: id ?? undefined };
 }
 
 export function isSentConfirmed(outcome: DispatchOutcome): outcome is Extract<DispatchOutcome, { kind: "sent_confirmed" }> {
