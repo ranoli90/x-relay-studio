@@ -1,5 +1,6 @@
 import { activeClaim, clockContradiction } from "./clock.ts";
 import { findSku, formatUsd, inventedPrice, liveSku } from "./catalog.ts";
+import { parseMoneyFromText } from "../operator/money.ts";
 import { buildFanMemory, factHook } from "./memory.ts";
 import { neverPhotoEighty } from "./pricing.ts";
 import { runSafety, safetyBlocksGenerate } from "./safety.ts";
@@ -43,6 +44,7 @@ export type WriteCaps = {
   deliveryConfirmed?: boolean;
   allowedMethods?: readonly string[] | null;
   exactPriceMinor?: number | null;
+  requireQuotedPrice?: boolean;
 };
 
 type WriterInput = WriteInput & WriteCaps;
@@ -104,6 +106,12 @@ export function validateDraft(
   }
   const price = inventedPrice(text, catalog, caps.exactPriceMinor);
   if (price != null) return `price $${price} is not on the quoted item`;
+  if (caps.requireQuotedPrice && typeof caps.exactPriceMinor === "number") {
+    const hits = parseMoneyFromText(text);
+    if (!hits.some((h) => h.money.minor === caps.exactPriceMinor)) {
+      return "missing quoted item price";
+    }
+  }
   const clock = clockContradiction(text, hour, claims);
   if (clock) return clock;
   return null;
@@ -125,15 +133,50 @@ export function writeCapsFor(input: WriteInput): WriteCaps {
     deliveryConfirmed: Boolean(writerInput.deliveryConfirmed),
     allowedMethods: allowedMethodsFor(writerInput, sku?.rail),
     exactPriceMinor: sku?.priceCents ?? writerInput.exactPriceMinor ?? null,
+    requireQuotedPrice: input.plan.workflow === "W6_CLOSE_NOW" && Boolean(sku && sku.priceCents > 0),
   };
 }
 
 export function shouldSkipRemoteWrite(input: WriteInput, local: WriteResult): boolean {
   if (isHandoffPlan(input.plan)) return true;
   if (input.plan.workflow === "W2_SAFETY") return true;
-  if (!local.dropped) return false;
+  if (!local.dropped) {
+    if (isThanksOnly(input.inbound)) return true;
+    if (unpublishedRailAsk(input.inbound, writeCapsFor(input).allowedMethods ?? [])) return true;
+    return false;
+  }
   const reason = local.dropReason ?? "";
   return /handoff|safety|kill|opt_out|no allowed payment methods/i.test(reason);
+}
+
+/** Prefer a validated remote draft; fall back to a good local line instead of silence. */
+export function settleRemoteWrite(
+  remoteText: string,
+  local: WriteResult,
+  input: WriteInput,
+  caps: WriteCaps,
+  model: string,
+): WriteResult {
+  const drop = validateDraft(remoteText, input.catalog, input.hour, input.clock, caps);
+  if (!drop) {
+    return { bubbles: splitBubbles(remoteText), dropped: false, dropReason: null, model };
+  }
+  if (!local.dropped && local.bubbles.length > 0) return local;
+  return { bubbles: [], dropped: true, dropReason: `validator_rejected: ${drop}`, model };
+}
+
+function unpublishedRailAsk(raw: string, allowed: readonly string[]): boolean {
+  const s = raw.toLowerCase();
+  const asking =
+    /\?/.test(raw) ||
+    /\bdo you (take|accept|use)\b/.test(s) ||
+    /\b(take|accept) (paypal|venmo|cash\s*app|zelle)\b/.test(s);
+  if (!asking) return false;
+  const allow = new Set(allowed.map(normMethod).filter(Boolean));
+  for (const m of KNOWN_METHODS) {
+    if (m.re.test(s) && !allow.has(m.key)) return true;
+  }
+  return false;
 }
 
 function himSlice(input: WriteInput): string {
@@ -260,6 +303,7 @@ export function writeLocal(input: WriteInput): WriteResult {
     price,
     him,
     rails,
+    allowedMethods: methods,
     proofAvailable: Boolean(caps.proofAvailable),
     deliveryConfirmed: Boolean(caps.deliveryConfirmed),
     last,
@@ -282,6 +326,7 @@ function localLine(
     price: string | null;
     him: string;
     rails: string | null;
+    allowedMethods: string[];
     proofAvailable: boolean;
     deliveryConfirmed: boolean;
     last: string;
@@ -299,6 +344,10 @@ function localLine(
       "i'm an ai persona with a human on the desk if something needs a person",
       "what did you actually want to talk about?",
     );
+  }
+  if (isThanksOnly(x.inbound)) return "of course";
+  if (unpublishedRailAsk(x.inbound, x.allowedMethods)) {
+    return x.rails ? `just ${x.rails} on the desk` : "i only use the handle listed on the desk";
   }
 
   switch (plan.workflow) {
@@ -318,7 +367,6 @@ function localLine(
       if (isGreetingOnly(x.inbound) || !x.inbound.trim()) {
         return "hey, how's it going?";
       }
-      if (isThanksOnly(x.inbound)) return "of course";
       if (x.last) {
         const asked = /[?]/.test(x.last) || /^(how|what|why|who|where|when|did|does|is|are)\b/.test(x.last);
         if (/\b(pic|photo)\b/.test(x.last)) return two(`yeah${name}, i'll be looking for that`, fact ? `how's ${fact}` : null);
@@ -334,17 +382,20 @@ function localLine(
           `${x.customLine} if you want to start small. ${x.rails ? `that's on ${x.rails}` : "tell me what you want first"}`,
         );
       }
-      if (plan.sku === "custom_clip" || plan.sku === "custom_mid" || plan.tactic === "discover_custom") {
+      if (plan.tactic === "discover_custom" || plan.sku === "custom_clip" || plan.sku === "custom_mid") {
         return two(
           `yeah i can do a custom. what do you want me to do in it, and how long?`,
           `once i know that i'll tell you the price and a rail`,
         );
       }
-      if (plan.tactic === "menu" || !x.skuTitle) {
+      if (plan.tactic === "menu") {
         return two(
           `customs start at $25. also sexting, calls, or a dropbox of premades if you want a folder, not one photo`,
           `what are you actually wanting?`,
         );
+      }
+      if (!x.skuTitle) {
+        return two(`what are you wanting exactly${name}?`, `then i can tell you the price`);
       }
       if (x.skuTitle && x.price && x.rails) {
         return `yeah${name}, ${x.skuTitle.toLowerCase()} is ${x.price} on ${x.rails}`;

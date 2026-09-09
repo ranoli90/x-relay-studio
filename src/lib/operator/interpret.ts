@@ -77,12 +77,17 @@ export function catalogAliases(row: CatalogRow): string[] {
     out.add("facetime");
     out.add("cam call");
   }
-  if (/\bpack\b/.test(title) || sku.includes("pack")) {
+  if (/\bpack\b/.test(title) || sku.includes("pack") || /\bphoto/.test(title) || /\bpics?\b/.test(title)) {
     out.add("pack");
     out.add("photo pack");
     out.add("landscape pack");
     out.add("landscape photo pack");
     out.add("photo notes pack");
+    out.add("pics");
+    out.add("pic");
+    out.add("pictures");
+    out.add("photos");
+    out.add("photo");
   }
   if (/\bsext/.test(title) || sku.includes("sext")) out.add("sexting");
   if (/\bdropbox|premade/.test(title) || sku.includes("dropbox") || sku.includes("premade")) {

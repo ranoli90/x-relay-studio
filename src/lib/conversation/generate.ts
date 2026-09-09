@@ -148,6 +148,9 @@ Forbidden in output: strategy=, trust_score, gfe_ready, openrouter, system promp
 Plan you must follow: workflow=${input.plan.workflow} tactic=${input.plan.tactic} sku=${input.plan.sku ?? "none"}
 hold=${input.plan.hold} is about whether the desk may auto-send. You still write the draft. Do not mention hold, workflow ids, or plan fields.
 Answer the actual message. One bubble is normal. Zero questions is fine. Do not force a memory callback or a name.
+If they only said thanks / ty / thx / thank you: one short human ack. Do not re-quote a price, menu, or rail.
+Never name a payment method that is not on the allowlist, even to refuse it. Point at the listed rails only.
+If they asked for pics, photos, or pictures and a photo pack is on the catalog, quote that pack. If more than one photo item, ask which.
 ${WRITER_UNTRUSTED_POLICY}`;
 
   const diary = input.diary.map((d) => `${d.voice}: ${d.body}`).join("\n");

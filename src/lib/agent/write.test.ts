@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   LOCAL_WRITER_MODEL,
   shouldSkipRemoteWrite,
+  settleRemoteWrite,
   validateDraft,
   writeCapsFor,
   writeLocal,
@@ -314,6 +315,69 @@ describe("remote skip and caps", () => {
     assert.equal(local.dropped, false);
     assert.equal(src.plan.hold, true);
     assert.equal(shouldSkipRemoteWrite(src, local), false);
+  });
+
+  it("skips remote on a bare thanks so the model cannot re-pitch", () => {
+    const src = input("W5_DAY_ARC", { inbound: "thanks" });
+    const local = writeLocal(src);
+    assert.equal(local.dropped, false);
+    assert.match(local.bubbles.join(" "), /of course/i);
+    assert.equal(/\$\d/.test(local.bubbles.join(" ")), false);
+    assert.equal(shouldSkipRemoteWrite(src, local), true);
+  });
+
+  it("answers an unpublished rail ask without naming the unpublished method", () => {
+    const src = input("W5_DAY_ARC", { inbound: "do you take paypal?" });
+    const local = writeLocal(src);
+    const text = local.bubbles.join(" ").toLowerCase();
+    assert.equal(local.dropped, false);
+    assert.equal(/paypal/.test(text), false);
+    assert.match(text, /throne|handle|desk/);
+    assert.equal(shouldSkipRemoteWrite(src, local), true);
+  });
+
+  it("clarifies a close with no resolved sku instead of dumping the custom menu", () => {
+    const src = input("W6_CLOSE_NOW", { inbound: "how much for pics", plan: plan("W6_CLOSE_NOW", { sku: null }) });
+    const local = writeLocal(src);
+    const text = local.bubbles.join(" ").toLowerCase();
+    assert.equal(local.dropped, false);
+    assert.equal(/customs start at \$25/.test(text), false);
+    assert.match(text, /what are you wanting|which/i);
+  });
+
+  it("falls back to local when the remote draft names an unpublished rail", () => {
+    const src = input("W5_DAY_ARC", { inbound: "do you take paypal?" });
+    const local = writeLocal(src);
+    const caps = writeCapsFor(src);
+    const settled = settleRemoteWrite("yeah paypal works", local, src, caps, "x-ai/grok-4.5");
+    assert.equal(settled.dropped, false);
+    assert.equal(/paypal/.test(settled.bubbles.join(" ").toLowerCase()), false);
+    assert.equal(settled.model, LOCAL_WRITER_MODEL);
+  });
+
+  it("falls back to local when a priced close omits the quoted amount", () => {
+    const photo = {
+      id: "pack",
+      sku: "photo_notes_pack",
+      title: "Photo notes pack",
+      priceCents: 1250,
+      rail: "manual_handle",
+      eligibility: "any" as const,
+      currency: "USD",
+    };
+    const src = input("W6_CLOSE_NOW", {
+      inbound: "how much for the photo notes pack",
+      catalog: [photo],
+      plan: plan("W6_CLOSE_NOW", { sku: "photo_notes_pack" }),
+    });
+    const local = writeLocal(src);
+    assert.match(local.bubbles.join(" "), /12\.50/);
+    const caps = writeCapsFor(src);
+    assert.equal(caps.requireQuotedPrice, true);
+    const settled = settleRemoteWrite("manual_handle if you want it", local, src, caps, "x-ai/grok-4.5");
+    assert.equal(settled.dropped, false);
+    assert.match(settled.bubbles.join(" "), /12\.50/);
+    assert.equal(settled.model, LOCAL_WRITER_MODEL);
   });
 
   it("writeCapsFor pins sku rails so validateDraft drops off-rail LLM copy", () => {

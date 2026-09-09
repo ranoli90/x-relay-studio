@@ -792,6 +792,33 @@ describe("production fail-closed contracts", () => {
     assert.equal(resolveCatalogSku("фотонабор", catalog), null);
   });
 
+  it("maps pics / photos to a published photo pack, not a custom clip", async () => {
+    const { resolveCatalogSku } = await import("./interpret.ts");
+    const catalog = [
+      {
+        id: "pack",
+        sku: "photo_notes_pack",
+        title: "Photo notes pack",
+        priceCents: 1250,
+        rail: "manual_handle",
+        eligibility: "any",
+        currency: "USD",
+      },
+      {
+        id: "custom",
+        sku: "custom_clip",
+        title: "Custom clip",
+        priceCents: 2500,
+        rail: "manual_handle",
+        eligibility: "any",
+        currency: "USD",
+      },
+    ];
+    assert.equal(resolveCatalogSku("how much for pics", catalog), "photo_notes_pack");
+    assert.equal(resolveCatalogSku("how much for photos", catalog), "photo_notes_pack");
+    assert.equal(resolveCatalogSku("custom clip please", catalog), "custom_clip");
+  });
+
   it("isolated drafts stay isolated until publish", () => {
     const world = createWorld();
     const draft = submitBrief(world, "Northlight");

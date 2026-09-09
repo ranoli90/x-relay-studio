@@ -7,10 +7,9 @@ import { newId } from "./ids.ts";
 import type { WriteInput, WriteResult } from "./types.ts";
 import {
   writeLocal,
-  validateDraft,
-  splitBubbles,
   writeCapsFor,
   shouldSkipRemoteWrite,
+  settleRemoteWrite,
   LOCAL_WRITER_MODEL,
 } from "./write.ts";
 import {
@@ -60,7 +59,7 @@ const TABLE: Record<AgentTask, Route> = {
     primary: "x-ai/grok-4.5",
     fallback: ["x-ai/grok-4", "x-ai/grok-4-fast", "minimax/minimax-m3", "deepseek/deepseek-chat"],
     sort: "throughput",
-    timeoutMs: 12000,
+    timeoutMs: 25000,
     maxTokens: 280,
   },
   hard_write: {
@@ -68,7 +67,7 @@ const TABLE: Record<AgentTask, Route> = {
     primary: "x-ai/grok-4.5",
     fallback: ["x-ai/grok-4.6", "x-ai/grok-4"],
     sort: "throughput",
-    timeoutMs: 16000,
+    timeoutMs: 30000,
     maxTokens: 400,
   },
   diary: {
@@ -297,7 +296,7 @@ export async function runTask(opts: {
         model: "grok-4.5",
         messages: opts.messages,
         maxTokens: route.maxTokens,
-        timeoutMs: Math.min(xaiRemaining, 12_000),
+        timeoutMs: Math.min(xaiRemaining, 28_000),
         json: opts.json,
       });
       const bad = unusableFinish(result.finishReason, result.text);
@@ -374,17 +373,15 @@ export async function writeWithGateway(userId: string, threadId: string, input: 
     ],
   });
   if (!llm) {
+    if (!local.dropped && local.bubbles.length > 0) return local;
     return { bubbles: [], dropped: true, dropReason: "generation_failed", model: LOCAL_WRITER_MODEL };
   }
   const badFinish = unusableFinish(llm.finishReason, llm.text);
   if (badFinish) {
+    if (!local.dropped && local.bubbles.length > 0) return local;
     return { bubbles: [], dropped: true, dropReason: badFinish, model: llm.model };
   }
-  const drop = validateDraft(llm.text, input.catalog, input.hour, input.clock, caps);
-  if (drop) {
-    return { bubbles: [], dropped: true, dropReason: `validator_rejected: ${drop}`, model: llm.model };
-  }
-  return { bubbles: splitBubbles(llm.text), dropped: false, dropReason: null, model: llm.model };
+  return settleRemoteWrite(llm.text, local, input, caps, llm.model);
 }
 
 export { extractJson, TABLE as ROUTE_TABLE, buildWriterMessages, WRITER_UNTRUSTED_POLICY };

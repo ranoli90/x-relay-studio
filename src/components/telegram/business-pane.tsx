@@ -108,6 +108,7 @@ export function BusinessPane() {
             value={plain}
             onChange={(e) => setPlain(e.target.value)}
             rows={4}
+            data-testid="business-brief"
             className={cn(
               "mt-1 w-full rounded-xl bg-[var(--tg-item-hover)] px-3 py-2 text-base text-[var(--tg-text)]",
               tgFocusClass,
@@ -120,6 +121,7 @@ export function BusinessPane() {
               Offer
               <input
                 value={offer.title}
+                data-testid={`offer-title-${i}`}
                 onChange={(e) =>
                   setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, title: e.target.value } : r)))
                 }
@@ -135,6 +137,7 @@ export function BusinessPane() {
                 <input
                   inputMode="decimal"
                   value={offer.amount}
+                  data-testid={`offer-amount-${i}`}
                   onChange={(e) =>
                     setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, amount: e.target.value } : r)))
                   }
