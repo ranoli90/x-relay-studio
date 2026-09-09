@@ -152,25 +152,24 @@ function clauseAt(text: string, index: number): string {
 
 function collectProductRefs(text: string, catalog: CatalogRow[]): ProductRef[] {
   const body = normalizeAnalysisText(text);
-  const refs: ProductRef[] = [];
-  const seen = new Set<string>();
+  const best = new Map<string, ProductRef & { score: number }>();
   for (const row of catalog) {
     const aliases = [...catalogAliases(row)].sort((a, b) => b.length - a.length);
     for (const alias of aliases) {
       const re = new RegExp(aliasPattern(alias).source, "giu");
       let m: RegExpExecArray | null;
       while ((m = re.exec(body))) {
-        if (seen.has(row.sku)) break;
         const clause = clauseAt(body, m.index);
         const negated = isNegated(clause) || /\b(don't want|do not want|no more|not the)\b/i.test(clause);
         const quoted = isQuoted(clause) || (THIRD_PARTY.test(clause) && !/\bi (want|need|ll take)\b/i.test(clause));
-        refs.push({ raw: m[0], sku: row.sku, negated, quoted });
-        seen.add(row.sku);
-        break;
+        const prev = best.get(row.sku);
+        if (!prev || alias.length > prev.score) {
+          best.set(row.sku, { raw: m[0], sku: row.sku, negated, quoted, score: alias.length });
+        }
       }
     }
   }
-  return refs;
+  return [...best.values()].map(({ raw, sku, negated, quoted }) => ({ raw, sku, negated, quoted }));
 }
 
 export function interpretMessage(

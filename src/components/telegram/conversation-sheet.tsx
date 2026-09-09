@@ -34,10 +34,10 @@ export function ConversationSheet({
         if (cancelled) return;
         setTakeover(controls.takeover);
         setOptOut(controls.optOut);
+        setControlsReady(true);
       })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setControlsReady(true);
+      .catch(() => {
+        if (!cancelled) setControlsReady(false);
       });
     void loadOperatorDeskFn()
       .then((desk) => {

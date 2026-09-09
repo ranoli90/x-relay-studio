@@ -809,7 +809,8 @@ export async function recordPaymentEvidence(
     amount_minor: number;
     currency: string;
     binding_id: string | null;
-  }>(`select amount_minor, currency, binding_id from business_offers where id = $1 and user_id = $2`, [
+    revision_id: string | null;
+  }>(`select amount_minor, currency, binding_id, revision_id from business_offers where id = $1 and user_id = $2`, [
     input.offerId,
     userId,
   ]);
@@ -819,9 +820,11 @@ export async function recordPaymentEvidence(
         and revoked_at is null
         and ($2::text is null or binding_id = $2)
         and ($3::text is null or currency = $3)
+        and ($4::text is null or revision_id is null or revision_id = $4)
+        and ($5::text is null or id = $5)
       order by created_at desc limit 1`,
 
-    [userId, offer[0]?.binding_id ?? null, offer[0]?.currency ?? null],
+    [userId, offer[0]?.binding_id ?? null, offer[0]?.currency ?? null, offer[0]?.revision_id ?? null, input.destinationId],
   );
   if (!offer[0] || !dest[0]) return { accepted: false, reason: "missing", provenance: "evidence_candidate" };
   const decision = evaluatePaymentEvidence({
@@ -1000,46 +1003,50 @@ export async function recordScopedFact(input: {
   assertion: "asserted" | "inferred";
   confidence: number;
 }): Promise<void> {
-  const sql = await getSql();
   const predicate = input.predicate.slice(0, 80);
   const value = input.value.slice(0, 400);
-  const existing = await sql.query<{ id: string }>(
-    `select id from memory_facts
-      where user_id = $1 and customer_id = $2 and predicate = $3 and value = $4 and status = 'active'
-      limit 1`,
-    [input.userId, input.customerId, predicate, value],
-  );
-  if (existing[0]) return;
-  await sql.query(
-    `update memory_facts
-        set status = 'superseded'
-      where user_id = $1 and customer_id = $2 and predicate = $3 and status = 'active' and value <> $4`,
-    [input.userId, input.customerId, predicate, value],
-  );
-  try {
-
-    await sql.query(
-      `insert into memory_facts
-         (id, user_id, customer_id, account_id, subject, predicate, value, source_event_id, speaker, assertion, confidence, status)
-       values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'active')`,
-      [
-        newOperatorId("fact"),
-        input.userId,
-        input.customerId,
-        input.accountId ?? null,
-        input.subject.slice(0, 80),
-        predicate,
-        value,
-        input.sourceEventId ?? null,
-        input.speaker,
-        input.assertion,
-        Math.max(0, Math.min(1, input.confidence)),
-      ],
+  await withTransaction(async (sql) => {
+    const existing = await sql.query<{ id: string }>(
+      `select id from memory_facts
+        where user_id = $1 and customer_id = $2 and predicate = $3 and value = $4 and status = 'active'
+        limit 1`,
+      [input.userId, input.customerId, predicate, value],
     );
-  } catch (err) {
-    if (isUniqueViolation(err)) return;
-    throw err;
-  }
+    if (existing[0]) return;
+    try {
+      await sql.query(
+        `with superseded as (
+           update memory_facts
+              set status = 'superseded'
+            where user_id = $1 and customer_id = $2 and predicate = $3 and status = 'active' and value <> $4
+           returning id
+         )
+         insert into memory_facts
+           (id, user_id, customer_id, account_id, subject, predicate, value, source_event_id, speaker, assertion, confidence, status)
+         select $5,$1,$2,$6,$7,$3,$4,$8,$9,$10,$11,'active'
+          where not exists (
+            select 1 from memory_facts
+             where user_id = $1 and customer_id = $2 and predicate = $3 and status = 'active'
+          )`,
+        [
+          input.userId,
+          input.customerId,
+          predicate,
+          value,
+          newOperatorId("fact"),
+          input.accountId ?? null,
+          input.subject.slice(0, 80),
+          input.sourceEventId ?? null,
+          input.speaker,
+          input.assertion,
+          Math.max(0, Math.min(1, input.confidence)),
+        ],
+      );
+    } catch (err) {
+      if (isUniqueViolation(err)) return;
+      throw err;
+    }
+  });
 }
 
 export async function retractScopedPredicate(input: {

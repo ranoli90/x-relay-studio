@@ -58,9 +58,17 @@ function waitFor(url, timeoutMs) {
 }
 
 function looksLiveDatabaseUrl(url) {
-  return /(neon\.tech|amazonaws\.com|supabase\.co|vercel-storage|[\.-]prod(?:uction)?[\.-]|[\.-]prod(?:uction)?$)/i.test(
-    url,
-  );
+  const raw = String(url || "").trim();
+  if (!raw) return false;
+  if (/(neon\.tech|amazonaws\.com|supabase\.co|vercel-storage)/i.test(raw)) return true;
+  let host = "";
+  try {
+    host = new URL(raw.replace(/^postgres(?:ql)?:/i, "http:")).hostname;
+  } catch {
+    const m = raw.match(/@([^/?]+)/);
+    host = m ? m[1].split(":")[0] : raw;
+  }
+  return /(?:^|[.-])prod(?:uction)?(?:[.-]|$)/i.test(host) || /(?:^|[.-])live(?:[.-]|$)/i.test(host);
 }
 
 function isolatedDemoEnv() {
@@ -783,13 +791,14 @@ async function main() {
     throw new Error("Need OPENROUTER_API_KEY or XAI_API_KEY for the real writer.");
   }
   const preview = startPreview();
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox", "--disable-dev-shm-usage"],
-    ...(existsSync(CHROME) ? { executablePath: CHROME } : {}),
-  });
+  let browser;
   const results = [];
   try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-dev-shm-usage"],
+      ...(existsSync(CHROME) ? { executablePath: CHROME } : {}),
+    });
     try {
       await waitFor(`${BASE}/`, 60_000);
     } catch (err) {
@@ -865,7 +874,7 @@ async function main() {
       process.exitCode = 1;
     }
   } finally {
-    await browser.close().catch(() => undefined);
+    if (browser) await browser.close().catch(() => undefined);
     preview.kill("SIGTERM");
   }
 }

@@ -129,25 +129,27 @@ export const setTakeoverFn = createServerFn({ method: "POST" })
     return { conversationId: String(d.conversationId), on: Boolean(d.on) };
   })
   .handler(async ({ context, data }) => {
-    const { getSql } = await import("@/lib/db");
-    const sql = await getSql();
-    const rows = await sql.query<{ id: string }>(
-      `update agent_threads
-          set takeover = $3
-        where user_id = $1
-          and (
-            id = $2
-            or telegram_account_id = $2
-            or fan_id in (select id from agent_fans where user_id = $1 and tg_peer_id = $2)
-          )
-       returning id`,
-      [context.userId, data.conversationId, data.on],
-    );
-    if (!rows[0]) throw new Error("conversation not found");
-    await sql.query(
-      `update telegram_chats set muted = $3 where user_id = $1 and id = $2`,
-      [context.userId, data.conversationId, data.on],
-    );
+    const { withTransaction } = await import("@/lib/db");
+    await withTransaction(async (sql) => {
+      const updated = await sql.query<{ id: string }>(
+        `update agent_threads
+            set takeover = $3
+          where user_id = $1
+            and (
+              id = $2
+              or telegram_account_id = $2
+              or fan_id in (select id from agent_fans where user_id = $1 and tg_peer_id = $2)
+            )
+         returning id`,
+        [context.userId, data.conversationId, data.on],
+      );
+      if (!updated[0]) throw new Error("conversation not found");
+      await sql.query(
+        `update telegram_chats set muted = $3 where user_id = $1 and id = $2`,
+        [context.userId, data.conversationId, data.on],
+      );
+      return updated;
+    });
     return { on: data.on };
   });
 

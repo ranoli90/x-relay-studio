@@ -141,6 +141,7 @@ export function applyTransportOutcome(
   return {
     ...attempt,
     status: "uncertain",
+    transportMessageId: outcome.transportMessageId ?? attempt.transportMessageId,
     uncertainReason: outcome.reason ?? "uncertain",
     reconciledAs: null,
   };

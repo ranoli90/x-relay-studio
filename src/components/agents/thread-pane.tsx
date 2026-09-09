@@ -297,11 +297,13 @@ function Bubble({
             data-testid="draft-body"
           />
         ) : (
-          message.body.split("\n").map((line, i) => (
-            <p key={i} className={i ? "mt-1" : undefined} data-testid={i === 0 ? "bubble-text" : undefined}>
-              {line}
-            </p>
-          ))
+          <div data-testid="bubble-text">
+            {message.body.split("\n").map((line, i) => (
+              <p key={i} className={i ? "mt-1" : undefined}>
+                {line}
+              </p>
+            ))}
+          </div>
         )}
         <p
           className={cn(

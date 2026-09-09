@@ -296,7 +296,7 @@ export async function runTask(opts: {
         model: "grok-4.5",
         messages: opts.messages,
         maxTokens: route.maxTokens,
-        timeoutMs: Math.min(xaiRemaining, 28_000),
+        timeoutMs: xaiRemaining,
         json: opts.json,
       });
       const bad = unusableFinish(result.finishReason, result.text);

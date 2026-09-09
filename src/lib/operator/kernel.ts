@@ -41,7 +41,7 @@ import {
 export type TransportKind =
   | { kind: "sent_confirmed"; transportMessageId: string }
   | { kind: "failed_definitive"; reason: string }
-  | { kind: "uncertain"; reason: string }
+  | { kind: "uncertain"; reason: string; transportMessageId?: string }
   | { kind: "blocked"; reason: string }
   | { kind: "canceled_stale"; reason: string }
   | { kind: "not_live"; reason: string };
@@ -323,6 +323,7 @@ export async function dispatchAttempt(
       const uncertain = applyTransportOutcome(attempt, {
         kind: "uncertain",
         reason: `possible_transmission:${check.reason}`,
+        transportMessageId: "transportMessageId" in outcome ? outcome.transportMessageId : undefined,
       });
       Object.assign(attempt, uncertain);
       return attempt;

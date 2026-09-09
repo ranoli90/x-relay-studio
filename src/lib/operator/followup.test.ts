@@ -99,6 +99,7 @@ describe("follow-up target gates", () => {
     ];
     assert.equal(resolveCatalogSku("pics", twoPacks), null);
     assert.equal(interpretMessage("how much for pics", { ...base, catalog: twoPacks }).result.wantsSku, null);
+    assert.equal(interpretMessage("how much for pics", { ...base, catalog: twoPacks }).productRefs.length, 2);
     assert.equal(resolveCatalogSku("photos", [{ ...cat[0]!, sku: "music_pack", title: "Music pack" }]), null);
 
   });
@@ -137,6 +138,7 @@ describe("follow-up target gates", () => {
     assert.equal(decideLiveAutoSend({ ...auto, generationOrigin: localOrigin }).reason, "origin_local_template");
     const notice = generationOriginForWrite({ dropped: false, model: "local/service-notice" });
     assert.equal(decideLiveAutoSend({ ...auto, generationOrigin: notice, workflow: "W5_DAY_ARC" }).send, true);
+    assert.equal(generationOriginForWrite({ dropped: false, model: "local/service-notice-extra" }), "local_template");
     assert.equal(autonomyFor("W6_CLOSE_NOW", true), "auto");
   });
 

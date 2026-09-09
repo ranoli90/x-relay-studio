@@ -64,6 +64,15 @@ function hold(reason: string): WriteResult {
   return { bubbles: [], dropped: true, dropReason: reason, model: LOCAL_WRITER_MODEL };
 }
 
+function publishedMenuLine(catalog: CatalogRow[]): string {
+  const items = catalog.filter((r) => r.priceCents > 0 && r.title.trim());
+  if (!items.length) return "";
+  return items
+    .slice(0, 8)
+    .map((r) => `${r.title.toLowerCase()} is ${formatMoney(money(r.priceCents, r.currency ?? "USD"))}`)
+    .join(", ");
+}
+
 function catalogRails(catalog: CatalogRow[], skuRail?: string | null): string[] {
   return [
     ...new Set(
@@ -329,6 +338,7 @@ export function writeLocal(input: WriteInput): WriteResult {
     burned: Boolean(mem.facts.burned),
     customLine,
     inbound: input.inbound,
+    catalog: input.catalog,
   });
 
   const drop = validateDraft(text, input.catalog, input.hour, input.clock, caps);
@@ -359,6 +369,7 @@ function localLine(
     burned: boolean;
     customLine: string;
     inbound: string;
+    catalog: CatalogRow[];
   },
 ): string {
   const name = vocative(x.name);
@@ -415,13 +426,16 @@ function localLine(
         );
       }
       if (plan.tactic === "list_published" || plan.strategy === "catalog_menu") {
-        return two(`here's what's up right now — I'll quote the exact one you want`, `what are you actually wanting?`);
+        const listed = publishedMenuLine(x.catalog);
+        return listed
+          ? two(listed, "which one do you want?")
+          : two(`i'll quote the exact one you want`, `what are you actually wanting?`);
       }
       if (plan.tactic === "menu") {
-        return two(
-          `customs start at $25. also sexting, calls, or a dropbox of premades if you want a folder, not one photo`,
-          `what are you actually wanting?`,
-        );
+        const listed = publishedMenuLine(x.catalog);
+        return listed
+          ? two(listed, "what are you actually wanting?")
+          : two(`tell me which thing you want`, `then i can quote it`);
       }
 
       if (!x.skuTitle) {

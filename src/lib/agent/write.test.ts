@@ -73,6 +73,20 @@ describe("D04 local writer claims", () => {
     assert.match(text, /screenshot isn't the receipt|listed rail/i);
   });
 
+  it("catalog menu fallback quotes published items and prices", () => {
+    const out = writeLocal(
+      input("W6_CLOSE_NOW", {
+        inbound: "what do you offer?",
+        plan: plan("W6_CLOSE_NOW", { strategy: "catalog_menu", tactic: "list_published" }),
+      }),
+    );
+    const text = out.bubbles.join(" ").toLowerCase();
+    assert.equal(out.dropped, false);
+    assert.match(text, /custom is \$25/);
+    assert.match(text, /sexting is \$60/);
+    assert.equal(/paypal/.test(text), false);
+  });
+
   it("names only the offer sku rail on a priced close", () => {
     const out = writeLocal(input("W6_CLOSE_NOW", { plan: plan("W6_CLOSE_NOW", { sku: "sexting_session" }) }));
     const text = out.bubbles.join(" ").toLowerCase();

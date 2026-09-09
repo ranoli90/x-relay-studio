@@ -95,6 +95,7 @@ describe("TG-14 stop/takeover/opt-out/permission during blocked transport", () =
     const result = await pending;
     assert.equal(result.status, "uncertain");
     assert.match(result.uncertainReason ?? "", /possible_transmission:emergency_stop/);
+    assert.equal(result.transportMessageId, "should_not_count");
     assert.equal(world.transport.sent.length, 1);
     assert.equal(world.history.filter((h) => h.kind === "confirmed_outbound").length, 0);
   });
@@ -761,6 +762,31 @@ describe("production fail-closed contracts", () => {
     });
     assert.equal(mismatched.approved, false);
     assert.equal(mismatched.destinationRef, null);
+  });
+
+  it("does not expose a destination from another creator or binding", () => {
+    const view = publicPaymentView({
+      instruction: {
+        id: "ins_1",
+        creatorId: "c",
+        bindingId: "b",
+        revisionId: "r",
+        publicCopy: "Send USD to the listed handle.",
+        currency: "USD",
+        approved: true,
+      },
+      destination: {
+        id: "dest_other",
+        creatorId: "other",
+        bindingId: "b",
+        provider: "manual_handle",
+        destinationRef: "@stolen_pay",
+        currency: "USD",
+        hasCredential: true,
+      },
+    });
+    assert.equal(view.approved, false);
+    assert.equal(view.destinationRef, null);
   });
 
   it("createWorld starts with processing permission off", async () => {

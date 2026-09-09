@@ -99,9 +99,7 @@ export function generationOriginForWrite(written: {
   model: string;
 }): GenerationOrigin {
   if (written.dropped) return "local_template";
-  if (written.model === "local/service-notice" || written.model.startsWith("local/service-notice")) {
-    return "approved_service_notice";
-  }
+  if (written.model === "local/service-notice") return "approved_service_notice";
   if (written.model.startsWith("local/")) return "local_template";
   return "validated_model";
 }

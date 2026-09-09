@@ -14,9 +14,9 @@ Branch work against the 33 remaining findings in `X_Relay_Followup_Review_1d7b94
 | RF-008 | SOURCE_FIXED: clause-scoped product refs. | UNIT_VERIFIED |
 | RF-009 | SOURCE_FIXED: photo aliases only on photo items; generic ties return null. | UNIT_VERIFIED |
 | RF-010 | SOURCE_FIXED: yes to method is not a payment claim; yes to offer keeps SKU; no thanks is W5. | UNIT_VERIFIED |
-| RF-011 | SOURCE_FIXED: menu plans `catalog_menu`. | UNIT_VERIFIED |
-| RF-012 | SOURCE_FIXED: local understand templates stay `local_template`; vetted notices use `local/service-notice` / `approved_service_notice`. | UNIT_VERIFIED |
-| RF-013 | IMPROVED: new asserted facts supersede other active values; denials retract. Legacy notes still exist. | SOURCE_FIXED_PARTIAL |
+| RF-011 | SOURCE_FIXED: menu plans `catalog_menu`. Local fallback lists published titles and prices. | UNIT_VERIFIED |
+| RF-012 | SOURCE_FIXED: local understand templates stay `local_template`; only exact `local/service-notice` is an approved notice. Prefix matches like `local/service-notice-extra` stay local. | UNIT_VERIFIED |
+| RF-013 | SOURCE_FIXED: new asserted facts supersede other active values in one statement; unique index keeps one active predicate. Denials retract. | UNIT_VERIFIED |
 | RF-014 | SOURCE_FIXED: history SQL filters confirmed rows before the limit. | SOURCE_FIXED |
 | RF-015 | OPEN: generation snapshot still recaptured at dispatch. | SOURCE_REMAINING |
 | RF-016 | OPEN: thread generation vs session generation. | SOURCE_REMAINING |
@@ -32,10 +32,10 @@ Branch work against the 33 remaining findings in `X_Relay_Followup_Review_1d7b94
 | RF-026 | SOURCE_FIXED: empty live defaults, load/error states, delayed load does not overwrite typing. | SOURCE_FIXED |
 | RF-027 | OPEN: eligibility collection UI. | SOURCE_REMAINING |
 | RF-028 | IMPROVED: demo isolation; not a full authenticated mobile E2E. | SOURCE_FIXED_PARTIAL |
-| RF-029 | SOURCE_FIXED: demo drops inherited `DATABASE_URL` unless `XRELAY_DEMO_DATABASE_URL` is set; production-looking URLs exit. | SOURCE_FIXED |
+| RF-029 | SOURCE_FIXED: demo drops inherited `DATABASE_URL` unless `XRELAY_DEMO_DATABASE_URL` is set; production-looking URLs, including `prod-` hosts, exit. | UNIT_VERIFIED |
 | RF-030 | IMPROVED: this file keeps original RF ids. Repo XR ledger not rewritten. | SOURCE_FIXED_PARTIAL |
 | RF-031 | SOURCE_FIXED: seat increment and reservation insert are one CTE. | SOURCE_FIXED |
-| RF-032 | OPEN: production duplicate preflight. | NOT_RUN |
-| RF-033 | OPEN: unified uncertain-send recovery. | SOURCE_REMAINING |
+| RF-032 | SOURCE_FIXED: 0035/0038 dedupe before unique indexes; one active fact per predicate. Live production duplicate preflight still NOT_RUN. | SOURCE_FIXED |
+| RF-033 | IMPROVED: uncertain sends keep the provider message id so later reconcile can find the transmission. Full recovery path remains open. | SOURCE_FIXED_PARTIAL |
 
 Commands: `node --experimental-strip-types --test src/lib/operator/followup.test.ts` plus operator/agent/conversation/telegram suites. Typecheck `tsc --noEmit`. Authenticated browser, live Telegram, and PostgreSQL races remain NOT_RUN.
