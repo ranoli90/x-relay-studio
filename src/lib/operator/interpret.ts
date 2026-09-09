@@ -89,12 +89,15 @@ export function catalogAliases(row: CatalogRow): string[] {
     out.add("photo");
     if (isPack) {
       out.add("photo pack");
-      out.add("landscape pack");
-      out.add("landscape photo pack");
-      out.add("photo notes pack");
       out.add("pack");
+      if (/\bnotes\b/.test(title) || sku.includes("notes")) out.add("photo notes pack");
+      if (/\blandscape\b/.test(title) || sku.includes("landscape")) {
+        out.add("landscape pack");
+        out.add("landscape photo pack");
+      }
     }
   }
+
   if (/\bsext/.test(title) || sku.includes("sext")) out.add("sexting");
   if (/\bdropbox|premade/.test(title) || sku.includes("dropbox") || sku.includes("premade")) {
     out.add("dropbox");
@@ -191,12 +194,10 @@ export function interpretMessage(
   const productRefs = collectProductRefs(text, catalog);
   const negatedSkus = productRefs.filter((p) => p.negated && !p.quoted).map((p) => p.sku).filter((s): s is string => Boolean(s));
   const quoted = productRefs.some((p) => p.quoted) || isQuoted(text);
-  const primarySku = productRefs.find((p) => !p.negated && !p.quoted)?.sku ?? null;
-  const ranked = rankCatalogHits(text, catalog);
-  const genericTie =
-    ranked.length > 1 &&
-    ranked[0]!.score === ranked[1]!.score &&
-    !productRefs.some((p) => p.sku && !p.negated && !p.quoted);
+  const positive = productRefs.filter((p) => p.sku && !p.negated && !p.quoted);
+  const primarySku = positive.length === 1 ? positive[0]!.sku : resolveCatalogSku(text, catalog);
+  const genericTie = positive.length > 1 && resolveCatalogSku(text, catalog) == null;
+
 
 
   const intents: Intent[] = [];

@@ -98,7 +98,9 @@ describe("follow-up target gates", () => {
       { ...cat[0]!, id: "nature", sku: "nature_pack", title: "Nature photo pack", priceCents: 2500 },
     ];
     assert.equal(resolveCatalogSku("pics", twoPacks), null);
+    assert.equal(interpretMessage("how much for pics", { ...base, catalog: twoPacks }).result.wantsSku, null);
     assert.equal(resolveCatalogSku("photos", [{ ...cat[0]!, sku: "music_pack", title: "Music pack" }]), null);
+
   });
 
   it("resolves pending yes/no without inventing a payment claim", () => {

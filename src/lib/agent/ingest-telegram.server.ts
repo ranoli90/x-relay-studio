@@ -30,7 +30,9 @@ type DrainRow = {
   persona_emergency_stop: boolean | null;
   automation_mode: string | null;
   processing_permission?: boolean | null;
+  claim_owner?: string | null;
 };
+
 
 type Sql = Awaited<ReturnType<typeof getSql>>;
 
@@ -378,9 +380,10 @@ async function processClaimedRow(
     ) {
       await sql.query(
         `update telegram_messages set ai_status = 'retry_wait', next_attempt_at = $2
-          where id = $1 and ai_status = 'processing'`,
-        [row.id, nextBurstRetryAt(now, { firstInboundAt: first }).toISOString()],
+          where id = $1 and ai_status = 'processing' and claim_owner is not distinct from $3`,
+        [row.id, nextBurstRetryAt(now, { firstInboundAt: first }).toISOString(), row.claim_owner ?? null],
       );
+
       return "retry_wait";
     }
   }

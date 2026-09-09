@@ -177,11 +177,13 @@ export function BusinessPane() {
                 Currency
                 <input
                   value={offer.currency}
-                  onChange={(e) =>
+                  onChange={(e) => {
+                    dirtyRef.current = true;
                     setOffers((rows) =>
                       rows.map((r, j) => (j === i ? { ...r, currency: e.target.value.toUpperCase() } : r)),
-                    )
-                  }
+                    );
+                  }}
+
                   className={cn("mt-1 h-11 w-full rounded-lg bg-[var(--tg-bg)] px-3 text-base", tgFocusClass)}
                 />
               </label>
@@ -190,9 +192,11 @@ export function BusinessPane() {
               <input
                 type="checkbox"
                 checked={offer.available}
-                onChange={(e) =>
-                  setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, available: e.target.checked } : r)))
-                }
+                onChange={(e) => {
+                  dirtyRef.current = true;
+                  setOffers((rows) => rows.map((r, j) => (j === i ? { ...r, available: e.target.checked } : r)));
+                }}
+
               />
               Available
             </label>
@@ -201,9 +205,11 @@ export function BusinessPane() {
         <button
           type="button"
           className={cn("mt-3 min-h-[44px] text-sm text-[var(--tg-primary)]", tgFocusClass)}
-          onClick={() =>
-            setOffers((rows) => [...rows, { title: "", amount: "", currency: "USD", available: true }])
-          }
+          onClick={() => {
+            dirtyRef.current = true;
+            setOffers((rows) => [...rows, { title: "", amount: "", currency: "USD", available: true }]);
+          }}
+
         >
           Add offer
         </button>

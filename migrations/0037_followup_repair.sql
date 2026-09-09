@@ -9,6 +9,13 @@ create index if not exists telegram_messages_claim_idx
   on telegram_messages (ai_status, claim_expires_at)
   where ai_status = 'processing';
 
+-- In-flight processing rows with no lease would otherwise never be reclaimed.
+update telegram_messages
+   set claim_expires_at = now()
+ where ai_status = 'processing'
+   and claim_expires_at is null;
+
+
 alter table payment_destinations
   add column if not exists revision_id text,
   add column if not exists revoked_at timestamptz;
